@@ -1,10 +1,11 @@
-// A single card mesh laid into the table. Click to play.
+// A single card mesh, rendered with the per-type shader. Click to play.
 
 import { Text } from "@react-three/drei";
-import { ThreeEvent } from "@react-three/fiber";
-import { useMemo } from "react";
-import { Color } from "three";
-import { CardEffect, CardType, getCardDef } from "../../sim/cards";
+import { ThreeEvent, useFrame } from "@react-three/fiber";
+import { useMemo, useRef, useState } from "react";
+import { GLSL3, ShaderMaterial } from "three";
+import { CardEffect, getCardDef } from "../../sim/cards";
+import { CARD_FRAG, CARD_VERT } from "./shaders/card";
 
 export function Card3d({
   cardId,
@@ -22,59 +23,103 @@ export function Card3d({
   faceUp?: boolean;
 }) {
   const def = getCardDef(cardId);
+  const matRef = useRef<ShaderMaterial>(null);
+  const [hover, setHover] = useState(false);
 
-  const color = useMemo(() => {
-    if (!def) return new Color("#444");
-    switch (def.cardType) {
-      case CardType.Attack: return new Color(playable ? "#ff5b5b" : "#5a2a2a");
-      case CardType.Skill: return new Color(playable ? "#5b9eff" : "#2a3a5a");
-      case CardType.Power: return new Color(playable ? "#c97bff" : "#4a2a5a");
-      case CardType.Status: return new Color("#666");
-    }
-  }, [def, playable]);
+  const uniforms = useMemo(
+    () => ({
+      u_time: { value: 0 },
+      u_type: { value: def?.cardType ?? 3 },
+      u_playable: { value: playable ? 1 : 0 },
+      u_disabled: { value: !playable || def?.cost === 999 ? 1 : 0 },
+      u_hover: { value: 0 },
+    }),
+    [],
+  );
+
+  useFrame((_, dt) => {
+    if (!matRef.current) return;
+    const u = matRef.current.uniforms;
+    u.u_time.value += dt;
+    u.u_type.value = def?.cardType ?? 3;
+    u.u_playable.value = playable ? 1 : 0;
+    u.u_disabled.value = !playable || def?.cost === 999 ? 1 : 0;
+    // Smooth hover lerp.
+    const target = hover ? 1 : 0;
+    u.u_hover.value += (target - u.u_hover.value) * Math.min(1, dt * 8);
+  });
 
   const handleClick = (e: ThreeEvent<MouseEvent>) => {
     e.stopPropagation();
     if (playable) onClick();
   };
 
+  // Hover lift.
+  const yLift = hover && playable ? 0.45 : 0;
+
   return (
-    <group position={position} rotation={rotation} onClick={handleClick}>
-      <mesh castShadow>
-        <boxGeometry args={[1.4, 0.04, 2.0]} />
-        <meshStandardMaterial color={color} metalness={0.1} roughness={0.5} />
+    <group
+      position={[position[0], position[1] + yLift, position[2]]}
+      rotation={rotation}
+      onClick={handleClick}
+      onPointerOver={(e) => { e.stopPropagation(); setHover(true); document.body.style.cursor = playable ? "pointer" : "default"; }}
+      onPointerOut={(e) => { e.stopPropagation(); setHover(false); document.body.style.cursor = "default"; }}
+    >
+      {/* Card body — a plane laid flat on the table. */}
+      <mesh rotation={[-Math.PI / 2, 0, 0]}>
+        <planeGeometry args={[1.4, 2.0]} />
+        <shaderMaterial
+          ref={matRef}
+          glslVersion={GLSL3}
+          vertexShader={CARD_VERT}
+          fragmentShader={CARD_FRAG}
+          uniforms={uniforms}
+          toneMapped={false}
+        />
       </mesh>
-      {/* Card face */}
+
+      {/* Foil edge — a thin underlayer that shows through transparency on the rim. */}
+      <mesh position={[0, -0.005, 0]} rotation={[-Math.PI / 2, 0, 0]}>
+        <planeGeometry args={[1.42, 2.02]} />
+        <meshBasicMaterial color="#0c0d12" />
+      </mesh>
+
       {faceUp && def && (
         <>
           <Text
-            position={[0, 0.025, -0.7]}
+            position={[0, 0.01, -0.78]}
             rotation={[-Math.PI / 2, 0, 0]}
-            fontSize={0.18}
+            fontSize={0.17}
             color="white"
+            outlineWidth={0.012}
+            outlineColor="black"
             anchorX="center"
             anchorY="middle"
           >
             {def.name}
           </Text>
           <Text
-            position={[-0.55, 0.025, -0.85]}
+            position={[-0.55, 0.01, -0.85]}
             rotation={[-Math.PI / 2, 0, 0]}
-            fontSize={0.22}
-            color="#ffe066"
+            fontSize={0.26}
+            color="#ffe580"
+            outlineWidth={0.018}
+            outlineColor="black"
             anchorX="center"
             anchorY="middle"
           >
             {def.cost === 999 ? "X" : def.cost.toFixed(1)}
           </Text>
           <Text
-            position={[0, 0.025, 0.4]}
+            position={[0, 0.01, 0.55]}
             rotation={[-Math.PI / 2, 0, 0]}
             fontSize={0.13}
-            color="#ddd"
+            color="#fff"
+            outlineWidth={0.008}
+            outlineColor="#000"
             anchorX="center"
             anchorY="middle"
-            maxWidth={1.3}
+            maxWidth={1.25}
           >
             {effectLabel(def.effect)}
           </Text>

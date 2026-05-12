@@ -41,11 +41,7 @@ export function PlayerStation({
       <Text position={[-1.0, -0.4, 0]} fontSize={0.18} color="#ffaa66" anchorX="left">
         Thorns {Math.round(player.thorns)}
       </Text>
-      {isSelf && (
-        <Text position={[0.6, -0.4, 0]} fontSize={0.18} color="#ffd066" anchorX="left">
-          Cost {player.cost.toFixed(1)} (+{player.costRate.toFixed(1)}/s)
-        </Text>
-      )}
+      {/* cost is rendered as a 3D shader orb (CostMeter) for the local player */}
       {status && (
         <Text position={[0, -0.7, 0]} fontSize={0.13} color="#cccc88" anchorX="center" maxWidth={6}>
           {status}
