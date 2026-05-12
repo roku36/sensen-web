@@ -26,8 +26,8 @@ interface HandProps {
 const DEG = Math.PI / 180;
 
 // Tuned for camera at [0, 8, 9] looking at origin.
-const FAN_RADIUS = 2.4;       // arc radius from wrist pivot to card center
-const FAN_SPREAD_DEG = 10;    // angular gap between adjacent cards
+const FAN_RADIUS = 5.0;       // arc radius from wrist pivot to card center
+const FAN_SPREAD_DEG = 8;    // angular gap between adjacent cards
 const FAN_LEAN_DEG = 12;      // backward tilt of the whole hand toward the camera
 const CARD_SCALE = 0.72;
 
@@ -38,7 +38,7 @@ export function Hand({ player, side, interactive = side === "self" }: HandProps)
   const sign = side === "self" ? 1 : -1; // self toward +Z; opponent toward -Z
 
   // "Wrist" pivot — below the player edge of the table.
-  const pivotY = -1.5;
+  const pivotY = -2.5;
   const pivotZ = 5.2 * sign;
 
   // Backward lean of the hand as a whole (so faces point at the camera).
@@ -58,7 +58,7 @@ export function Hand({ player, side, interactive = side === "self" }: HandProps)
 
         // Orient so the card's "up" points away from the pivot — i.e. roll
         // around its own normal by `a`.
-        const rotZ = a;
+        const rotZ = -a;
 
         const def = getCardDef(cardId);
         const effectiveCost =

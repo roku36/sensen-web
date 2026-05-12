@@ -3,7 +3,16 @@ import { Background } from "./Background";
 import { CostMeter } from "./CostMeter";
 import { Hand } from "./Hand";
 import { PlayerStation } from "./PlayerStation";
+import { CardFlights } from "../effects/CardFlight";
+import { FxObserver } from "../effects/Observer";
+import { HitWaves } from "../effects/HitWave";
+import { PowerAuras } from "../effects/PowerAuras";
 import { useStore } from "../store";
+
+// Anchor positions used by the FX layer to know where each player "lives".
+const SELF_CHEST: [number, number, number] = [0, 1.8, 2.5];
+const OP_CHEST: [number, number, number] = [0, 2.4, -5.5];
+const SELF_HAND_PIVOT: [number, number, number] = [0, 2.5, 5.0]; // top of fan
 
 export function Scene() {
   const game = useStore((s) => s.game);
@@ -13,8 +22,15 @@ export function Scene() {
   const me = game.players[localPlayer];
   const op = game.players[remotePlayer];
 
+  // Hit-wave positions per side (0/1) — depend on which side is "me".
+  const hitPositions = {
+    [localPlayer]: SELF_CHEST,
+    [remotePlayer]: OP_CHEST,
+  } as Record<0 | 1, [number, number, number]>;
+
   return (
     <>
+      <FxObserver />
       <Background intensity={0.7} />
 
       <ambientLight intensity={0.55} />
@@ -27,20 +43,38 @@ export function Scene() {
         <meshStandardMaterial color="#0d0d18" metalness={0.3} roughness={0.6} transparent opacity={0.85} />
       </mesh>
 
-      <PlayerStation player={op} position={[0, 2.6, -5.5]} isSelf={false} />
-      <PlayerStation player={me} position={[0, 1.6, 2.5]} isSelf={true} />
+      <PlayerStation player={op} position={[0, 2.6, -5.5]} isSelf={false} side={remotePlayer} />
+      <PlayerStation player={me} position={[0, 1.6, 2.5]} isSelf={true} side={localPlayer} />
 
-      {/* Cost orbs for both players. Self on the right, opponent on the left
-          (mirrored) so the user can read both at a glance. */}
       <CostMeter cost={me.cost} rate={me.costRate} position={[5.6, 1.6, 2.0]} />
       <CostMeter cost={op.cost} rate={op.costRate} position={[-5.6, 2.6, -3.5]} />
 
-      {/* Both hands. Opponent's is face-down (back-face shader); future camera
-          lock will let only the back faces be visible. */}
       <Hand player={me} side="self" />
       <Hand player={op} side="opponent" />
 
-      <OrbitControls enableDamping enablePan={false} target={[0, 1.2, 0]} maxPolarAngle={Math.PI * 0.49} minDistance={7} maxDistance={16} />
+      {/* Persistent-power particle auras */}
+      <PowerAuras player={me} origin={[SELF_CHEST[0], SELF_CHEST[1] - 0.6, SELF_CHEST[2]]} seed={localPlayer * 1000} />
+      <PowerAuras player={op} origin={[OP_CHEST[0], OP_CHEST[1] - 0.6, OP_CHEST[2]]} seed={remotePlayer * 1000} />
+
+      {/* Hit shockwaves */}
+      <HitWaves positions={hitPositions} selfSide={localPlayer} />
+
+      {/* Card flight animations on play */}
+      <CardFlights
+        selfSide={localPlayer}
+        selfHandPivot={SELF_HAND_PIVOT}
+        opponentChest={OP_CHEST}
+        selfChest={SELF_CHEST}
+      />
+
+      <OrbitControls
+        enableDamping
+        enablePan={false}
+        target={[0, 1.2, 0]}
+        maxPolarAngle={Math.PI * 0.49}
+        minDistance={7}
+        maxDistance={16}
+      />
     </>
   );
 }

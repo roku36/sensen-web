@@ -4,46 +4,44 @@
 import { Text } from "@react-three/drei";
 import { useMemo } from "react";
 import { PlayerState } from "../../sim/state";
+import { HpBar3d } from "./HpBar3d";
 
 export function PlayerStation({
   player,
   position,
   isSelf,
+  side,
 }: {
   player: PlayerState;
   position: [number, number, number];
   isSelf: boolean;
+  side: 0 | 1;
 }) {
-  const hpPct = player.hp / player.hpMax;
-  const tint = isSelf ? "#33cc66" : "#cc3344";
-
   const status = useMemo(() => buildStatus(player), [player]);
 
   return (
     <group position={position}>
-      <Text position={[0, 0.5, 0]} fontSize={0.3} color="white" anchorX="center">
+      <Text position={[0, 0.55, 0]} fontSize={0.3} color="white" outlineWidth={0.012} outlineColor="black" anchorX="center">
         {isSelf ? "YOU" : "OPPONENT"}
       </Text>
-      <mesh position={[0, 0, 0]}>
-        <boxGeometry args={[5, 0.3, 0.05]} />
-        <meshStandardMaterial color="#1a1a22" />
-      </mesh>
-      <mesh position={[-(5 * (1 - hpPct)) / 2, 0, 0.03]}>
-        <boxGeometry args={[5 * hpPct, 0.28, 0.06]} />
-        <meshStandardMaterial color={tint} emissive={tint} emissiveIntensity={0.3} />
-      </mesh>
-      <Text position={[0, 0, 0.05]} fontSize={0.18} color="white" anchorX="center" anchorY="middle">
-        {Math.round(player.hp)} / {player.hpMax}
-      </Text>
-      <Text position={[-2.6, -0.4, 0]} fontSize={0.18} color="#7ab6ff" anchorX="left">
+
+      <HpBar3d
+        hp={player.hp}
+        hpMax={player.hpMax}
+        side={side}
+        isSelf={isSelf}
+        position={[0, 0, 0]}
+      />
+
+      <Text position={[-2.6, -0.4, 0]} fontSize={0.18} color="#7ab6ff" anchorX="left" outlineWidth={0.008} outlineColor="black">
         Block {Math.round(player.block)}
       </Text>
-      <Text position={[-1.0, -0.4, 0]} fontSize={0.18} color="#ffaa66" anchorX="left">
+      <Text position={[-1.0, -0.4, 0]} fontSize={0.18} color="#ffaa66" anchorX="left" outlineWidth={0.008} outlineColor="black">
         Thorns {Math.round(player.thorns)}
       </Text>
       {/* cost is rendered as a 3D shader orb (CostMeter) for the local player */}
       {status && (
-        <Text position={[0, -0.7, 0]} fontSize={0.13} color="#cccc88" anchorX="center" maxWidth={6}>
+        <Text position={[0, -0.75, 0]} fontSize={0.13} color="#cccc88" anchorX="center" outlineWidth={0.006} outlineColor="black" maxWidth={6}>
           {status}
         </Text>
       )}
