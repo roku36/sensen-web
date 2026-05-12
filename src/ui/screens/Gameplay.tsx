@@ -17,7 +17,7 @@ export function Gameplay() {
 
   return (
     <>
-      <Canvas shadows camera={{ position: [0, 8, 9], fov: 50 }}>
+      <Canvas shadows camera={{ position: [0, 3.2, 9.5], fov: 55 }}>
         <Scene />
       </Canvas>
 

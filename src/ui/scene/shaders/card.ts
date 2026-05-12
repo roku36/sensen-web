@@ -27,6 +27,7 @@ export const CARD_FRAG = /* glsl */ `
   uniform float u_playable;   // 0/1
   uniform float u_disabled;   // 0/1
   uniform float u_hover;      // 0..1
+  uniform float u_faceUp;     // 1=front face (type pattern), 0=back face (deck art)
 
   float hash(vec2 p) {
     p = fract(p * vec2(127.1, 311.7));
@@ -105,6 +106,25 @@ export const CARD_FRAG = /* glsl */ `
     return fbm(uv * 18.0) * 0.6;
   }
 
+  // Back-face pattern: dark velvet with a centered glyph and a slow sheen.
+  vec3 backFace(vec2 uv) {
+    vec2 c = uv - 0.5;
+    float r = length(c);
+    float ang = atan(c.y, c.x);
+    // Concentric thin rings around the centered glyph.
+    float rings = 0.5 + 0.5 * sin(r * 50.0 - u_time * 0.4);
+    float ringMask = smoothstep(0.45, 0.15, r) * smoothstep(0.05, 0.06, r);
+    // Six-fold star at the center: petal made from |sin(ang*3)|.
+    float petals = pow(0.5 + 0.5 * sin(ang * 3.0), 6.0) * smoothstep(0.18, 0.0, r);
+    // Subtle radial sheen that drifts slowly.
+    float sheen = pow(max(0.0, sin(ang + u_time * 0.15)), 8.0);
+    vec3 col = vec3(0.04, 0.045, 0.07);
+    col += vec3(0.18, 0.10, 0.30) * ringMask * rings * 0.4;
+    col += vec3(0.95, 0.75, 0.30) * petals;
+    col += vec3(0.4, 0.3, 0.6) * sheen * 0.05;
+    return col;
+  }
+
   void main() {
     vec2 uv = vUv;
     vec2 c = uv - 0.5;
@@ -113,11 +133,20 @@ export const CARD_FRAG = /* glsl */ `
     vec2 d = min(uv, 1.0 - uv);
     float edge = min(d.x, d.y);
 
-    // Body.
-    vec3 base = typeBase();
-    vec3 accent = typeAccent();
-    float pat = typePattern(uv, u_type);
-    vec3 col = mix(base * 0.6, base + accent * 0.6, pat);
+    // Body — branch on face direction.
+    vec3 base, accent;
+    float pat;
+    vec3 col;
+    if (u_faceUp < 0.5) {
+      col = backFace(uv);
+      base = vec3(0.15, 0.10, 0.25);
+      accent = vec3(0.6, 0.4, 0.9);
+    } else {
+      base = typeBase();
+      accent = typeAccent();
+      pat = typePattern(uv, u_type);
+      col = mix(base * 0.6, base + accent * 0.6, pat);
+    }
 
     // Subtle dark vignette in the body so text is readable.
     col *= 1.0 - 0.35 * dot(c * 1.6, c * 1.6);
