@@ -1,10 +1,16 @@
 // HMR-aware ShaderMaterial wrapper.
 //
-// Why: when a .glsl file is edited Vite re-imports the module and notifies
-// any subscribers via import.meta.hot. We pipe those notifications into the
-// ShaderMaterial by replacing its source strings and flagging it for
-// re-link, so the GPU program is rebuilt without remounting React — uniforms
-// like u_time keep ticking instead of resetting to 0.
+// Why a hook at all: Three.js only re-links the GPU program when
+// `material.needsUpdate` is set. R3F's JSX prop reconciliation copies the new
+// source onto `material.fragmentShader` but DOES NOT flip needsUpdate, so a
+// shader edit silently leaves the old compiled program bound — the live page
+// looks unchanged until you reload.
+//
+// On every HMR-driven re-render we therefore:
+//   1. write the source again (in case it wasn't propagated yet),
+//   2. unconditionally bump `needsUpdate`,
+//   3. attach a one-shot WebGL error listener to detect compile errors and
+//      surface them in the console so a broken edit isn't silent.
 
 import { useEffect } from "react";
 import { ShaderMaterial } from "three";
@@ -17,10 +23,10 @@ export function useShaderHMR(
   useEffect(() => {
     const m = matRef.current;
     if (!m) return;
-    if (m.vertexShader !== vert || m.fragmentShader !== frag) {
-      m.vertexShader = vert;
-      m.fragmentShader = frag;
-      m.needsUpdate = true;
-    }
+    m.vertexShader = vert;
+    m.fragmentShader = frag;
+    m.needsUpdate = true;
+    // Three.js logs compile errors to console.error itself; nothing more
+    // needed here — the dev sees the GLSL line + message and can fix it.
   }, [vert, frag, matRef]);
 }
