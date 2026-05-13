@@ -6,9 +6,7 @@ import { useFrame } from "@react-three/fiber";
 import { useMemo, useRef } from "react";
 import { GLSL3, ShaderMaterial } from "three";
 import { useFx } from "../effects/store";
-import HPBAR_VERT from "./shaders/uv-pass.vert";
-import HPBAR_FRAG from "./shaders/hpbar.frag";
-import { useShaderHMR } from "./shaders/hmr";
+import { useShader, useShaderHotReload } from "./shaders/hmr";
 
 const FLASH_DECAY = 4.0; // per second
 
@@ -43,7 +41,8 @@ export function HpBar3d({
     [],
   );
 
-  useShaderHMR(matRef, HPBAR_VERT, HPBAR_FRAG);
+  const { vert, frag } = useShader("hpbar");
+  useShaderHotReload(matRef, "hpbar");
 
   useFrame((_, dt) => {
     if (!matRef.current) return;
@@ -71,8 +70,8 @@ export function HpBar3d({
         <shaderMaterial
           ref={matRef}
           glslVersion={GLSL3}
-          vertexShader={HPBAR_VERT}
-          fragmentShader={HPBAR_FRAG}
+          vertexShader={vert}
+          fragmentShader={frag}
           uniforms={uniforms}
           toneMapped={false}
         />

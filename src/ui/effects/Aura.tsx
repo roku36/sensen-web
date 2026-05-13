@@ -13,9 +13,7 @@ import {
   ShaderMaterial,
   Vector3,
 } from "three";
-import AURA_VERT from "../scene/shaders/aura.vert";
-import AURA_FRAG from "../scene/shaders/aura.frag";
-import { useShaderHMR } from "../scene/shaders/hmr";
+import { useShader, useShaderHotReload } from "../scene/shaders/hmr";
 
 export function Aura({
   origin,
@@ -61,7 +59,8 @@ export function Aura({
     [],
   );
 
-  useShaderHMR(matRef, AURA_VERT, AURA_FRAG);
+  const { vert, frag } = useShader("aura");
+  useShaderHotReload(matRef, "aura");
 
   useFrame((_, dt) => {
     if (!matRef.current) return;
@@ -76,8 +75,8 @@ export function Aura({
       <shaderMaterial
         ref={matRef}
         glslVersion={GLSL3}
-        vertexShader={AURA_VERT}
-        fragmentShader={AURA_FRAG}
+        vertexShader={vert}
+        fragmentShader={frag}
         uniforms={uniforms}
         transparent
         depthWrite={false}

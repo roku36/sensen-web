@@ -5,9 +5,7 @@ import { Text } from "@react-three/drei";
 import { useFrame } from "@react-three/fiber";
 import { useMemo, useRef } from "react";
 import { Color, GLSL3, ShaderMaterial } from "three";
-import COST_VERT from "./shaders/uv-pass.vert";
-import COST_FRAG from "./shaders/cost.frag";
-import { useShaderHMR } from "./shaders/hmr";
+import { useShader, useShaderHotReload } from "./shaders/hmr";
 
 const DISPLAY_MAX = 6.0; // cost value at which the orb appears "full"
 
@@ -35,7 +33,14 @@ export function CostMeter({
     [],
   );
 
-  useShaderHMR(matRef, COST_VERT, COST_FRAG);
+  const { vert, frag } = useShader("cost");
+  useShaderHotReload(matRef, "cost");
+
+  // Debug hook for HMR diagnostics — exposes u_time so we can verify the
+  // shader clock keeps running across hot-updates.
+  if (typeof window !== "undefined") {
+    (window as any).__sensenDbg = { getCostUTime: () => matRef.current?.uniforms?.u_time?.value ?? null };
+  }
 
   useFrame((_, dt) => {
     if (!matRef.current) return;
@@ -57,8 +62,8 @@ export function CostMeter({
         <shaderMaterial
           ref={matRef}
           glslVersion={GLSL3}
-          vertexShader={COST_VERT}
-          fragmentShader={COST_FRAG}
+          vertexShader={vert}
+          fragmentShader={frag}
           uniforms={uniforms}
           transparent
           depthWrite={false}

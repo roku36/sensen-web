@@ -4,9 +4,7 @@
 import { useFrame, useThree } from "@react-three/fiber";
 import { useMemo, useRef } from "react";
 import { GLSL3, PerspectiveCamera, ShaderMaterial, Vector2, Vector3 } from "three";
-import BACKGROUND_VERT from "./shaders/background.vert";
-import BACKGROUND_FRAG from "./shaders/background.frag";
-import { useShaderHMR } from "./shaders/hmr";
+import { useShader, useShaderHotReload } from "./shaders/hmr";
 
 const _forward = new Vector3();
 const _right = new Vector3();
@@ -30,7 +28,8 @@ export function Background({ intensity = 0.85 }: { intensity?: number }) {
     [],
   );
 
-  useShaderHMR(matRef, BACKGROUND_VERT, BACKGROUND_FRAG);
+  const { vert, frag } = useShader("background");
+  useShaderHotReload(matRef, "background");
 
   useFrame(({ camera }, dt) => {
     if (!matRef.current) return;
@@ -57,8 +56,8 @@ export function Background({ intensity = 0.85 }: { intensity?: number }) {
       <shaderMaterial
         ref={matRef}
         glslVersion={GLSL3}
-        vertexShader={BACKGROUND_VERT}
-        fragmentShader={BACKGROUND_FRAG}
+        vertexShader={vert}
+        fragmentShader={frag}
         uniforms={uniforms}
         depthTest={false}
         depthWrite={false}

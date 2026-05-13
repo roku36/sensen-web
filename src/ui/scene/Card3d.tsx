@@ -9,9 +9,7 @@ import { ThreeEvent, useFrame } from "@react-three/fiber";
 import { useMemo, useRef, useState } from "react";
 import { GLSL3, ShaderMaterial } from "three";
 import { CardEffect, getCardDef } from "../../sim/cards";
-import CARD_VERT from "./shaders/uv-pass.vert";
-import CARD_FRAG from "./shaders/card.frag";
-import { useShaderHMR } from "./shaders/hmr";
+import { useShader, useShaderHotReload } from "./shaders/hmr";
 
 export interface Card3dProps {
   cardId: number;
@@ -54,8 +52,9 @@ export function Card3d({
   const frontUniforms = useMemo(() => makeUniforms(1), []);
   const backUniforms = useMemo(() => makeUniforms(0), []);
 
-  useShaderHMR(matRef, CARD_VERT, CARD_FRAG);
-  useShaderHMR(backRef, CARD_VERT, CARD_FRAG);
+  const { vert, frag } = useShader("card");
+  useShaderHotReload(matRef, "card");
+  useShaderHotReload(backRef, "card");
 
   useFrame((_, dt) => {
     for (const m of [matRef.current, backRef.current]) {
@@ -93,8 +92,8 @@ export function Card3d({
         <shaderMaterial
           ref={matRef}
           glslVersion={GLSL3}
-          vertexShader={CARD_VERT}
-          fragmentShader={CARD_FRAG}
+          vertexShader={vert}
+          fragmentShader={frag}
           uniforms={frontUniforms}
           toneMapped={false}
         />
@@ -105,8 +104,8 @@ export function Card3d({
         <shaderMaterial
           ref={backRef}
           glslVersion={GLSL3}
-          vertexShader={CARD_VERT}
-          fragmentShader={CARD_FRAG}
+          vertexShader={vert}
+          fragmentShader={frag}
           uniforms={backUniforms}
           toneMapped={false}
         />
