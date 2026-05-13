@@ -20,7 +20,14 @@ export const BACKGROUND_FRAG = /* glsl */ `
 
   uniform float u_time;
   uniform vec2  u_resolution;
-  uniform float u_intensity; // 0..1, dims the whole image so cards stay readable
+  uniform float u_intensity;     // 0..1, dims the whole image so cards stay readable
+  uniform float u_fovY;          // R3F camera vertical FOV in radians
+  // R3F camera basis vectors (world-space). The shader uses these instead of
+  // its own internal forward/right/up so the background reacts to camera
+  // rotation just like a real skybox.
+  uniform vec3  u_camForward;
+  uniform vec3  u_camRight;
+  uniform vec3  u_camUp;
 
   vec3 getPathPosition(float z) {
     return vec3(12.0 * cos(z * vec2(0.1, 0.12)), z);
@@ -34,12 +41,19 @@ export const BACKGROUND_FRAG = /* glsl */ `
     float t = u_time * 1.6;
     float animTime = t + 5.0 + 5.0 * sin(t * 0.3);
 
+    // Origin still moves down the tunnel, but the *direction* we look is the
+    // real camera direction. Result: the player drifts along the tunnel
+    // automatically, and rotating the camera reveals a different slice.
     vec3 rayOrigin = getPathPosition(animTime);
-    vec3 lookTarget = getPathPosition(animTime + 4.0);
-    vec3 forward = normalize(lookTarget - rayOrigin);
-    vec3 right = normalize(vec3(-forward.z, 0.0, forward.x));
-    vec3 up = cross(forward, right);
-    vec3 rayDir = normalize(uv.x * right + uv.y * up + forward);
+
+    // Build a camera-space ray with R3F's basis vectors. uv is in [-aspect, aspect] × [-1, 1]
+    // before tan(fovY/2) scaling.
+    float halfFov = tan(u_fovY * 0.5);
+    vec3 rayDir = normalize(
+        u_camRight   * uv.x * halfFov
+      + u_camUp      * uv.y * halfFov
+      + u_camForward
+    );
 
     float stepDist = 1.0;
     float totalDist = 0.0;
