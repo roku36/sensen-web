@@ -4,7 +4,9 @@
 import { useFrame } from "@react-three/fiber";
 import { useMemo, useRef } from "react";
 import { Color, GLSL3, Group, ShaderMaterial } from "three";
-import { HIT_FRAG, HIT_VERT } from "../scene/shaders/hit";
+import HIT_VERT from "../scene/shaders/uv-pass.vert";
+import HIT_FRAG from "../scene/shaders/hit.frag";
+import { useShaderHMR } from "../scene/shaders/hmr";
 import { useFx } from "./store";
 
 const LIFETIME = 0.6; // seconds
@@ -67,6 +69,8 @@ function SingleWave({
     }),
     [],
   );
+
+  useShaderHMR(matRef, HIT_VERT, HIT_FRAG);
 
   useFrame(({ camera }) => {
     if (!matRef.current || !ref.current) return;

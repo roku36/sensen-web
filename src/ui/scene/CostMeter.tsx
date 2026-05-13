@@ -5,7 +5,9 @@ import { Text } from "@react-three/drei";
 import { useFrame } from "@react-three/fiber";
 import { useMemo, useRef } from "react";
 import { Color, GLSL3, ShaderMaterial } from "three";
-import { COST_FRAG, COST_VERT } from "./shaders/cost";
+import COST_VERT from "./shaders/uv-pass.vert";
+import COST_FRAG from "./shaders/cost.frag";
+import { useShaderHMR } from "./shaders/hmr";
 
 const DISPLAY_MAX = 6.0; // cost value at which the orb appears "full"
 
@@ -32,6 +34,8 @@ export function CostMeter({
     }),
     [],
   );
+
+  useShaderHMR(matRef, COST_VERT, COST_FRAG);
 
   useFrame((_, dt) => {
     if (!matRef.current) return;

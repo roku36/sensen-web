@@ -9,7 +9,9 @@ import { ThreeEvent, useFrame } from "@react-three/fiber";
 import { useMemo, useRef, useState } from "react";
 import { GLSL3, ShaderMaterial } from "three";
 import { CardEffect, getCardDef } from "../../sim/cards";
-import { CARD_FRAG, CARD_VERT } from "./shaders/card";
+import CARD_VERT from "./shaders/uv-pass.vert";
+import CARD_FRAG from "./shaders/card.frag";
+import { useShaderHMR } from "./shaders/hmr";
 
 export interface Card3dProps {
   cardId: number;
@@ -51,6 +53,9 @@ export function Card3d({
 
   const frontUniforms = useMemo(() => makeUniforms(1), []);
   const backUniforms = useMemo(() => makeUniforms(0), []);
+
+  useShaderHMR(matRef, CARD_VERT, CARD_FRAG);
+  useShaderHMR(backRef, CARD_VERT, CARD_FRAG);
 
   useFrame((_, dt) => {
     for (const m of [matRef.current, backRef.current]) {

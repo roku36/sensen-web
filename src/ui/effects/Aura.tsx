@@ -13,7 +13,9 @@ import {
   ShaderMaterial,
   Vector3,
 } from "three";
-import { AURA_FRAG, AURA_VERT } from "../scene/shaders/aura";
+import AURA_VERT from "../scene/shaders/aura.vert";
+import AURA_FRAG from "../scene/shaders/aura.frag";
+import { useShaderHMR } from "../scene/shaders/hmr";
 
 export function Aura({
   origin,
@@ -58,6 +60,8 @@ export function Aura({
     }),
     [],
   );
+
+  useShaderHMR(matRef, AURA_VERT, AURA_FRAG);
 
   useFrame((_, dt) => {
     if (!matRef.current) return;
