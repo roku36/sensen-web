@@ -18,6 +18,11 @@ if (typeof window !== "undefined") {
     getLog: () => useStore.getState().log,
     getDesync: () => useStore.getState().desyncFrame,
     pushInput: (flags: number) => getSession()?.pushLocalInput(flags),
+    // Debug: force opponent HP to 0 so the result panel shows immediately.
+    forceVictory: () => {
+      const g = useStore.getState().game;
+      if (g) g.players[1].hp = 0;
+    },
     checksumAt: (frame: number) => {
       const s = getSession();
       if (!s || !("checksumAt" in s)) return null;

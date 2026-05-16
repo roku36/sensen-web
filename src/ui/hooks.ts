@@ -26,7 +26,17 @@ export function useKeyboardInput() {
   }, []);
 }
 
+// Tear down any session that was still attached. Safe to call repeatedly.
+function stopActiveSession() {
+  const s = activeSession;
+  if (s) { try { (s as any).stop?.(); } catch { /* ignore */ } }
+  setSession(null);
+  // Clear ephemeral per-match state so the next match starts clean.
+  useStore.setState({ game: null, gameFrame: 0, log: [], desyncFrame: null });
+}
+
 export function startOffline(deck: CardId[]) {
+  stopActiveSession();
   const s = new OfflineSession({
     deck,
     onState: (g) => useStore.getState().setGame(g),
@@ -38,6 +48,8 @@ export function startOffline(deck: CardId[]) {
 }
 
 export async function startOnline(signalUrl: string, deck: CardId[]) {
+  stopActiveSession();
+  useStore.getState().setLastSignalUrl(signalUrl);
   const log = (line: string) => useStore.getState().pushLog(line);
   const s = new Session({
     signalUrl,
@@ -53,6 +65,24 @@ export async function startOnline(signalUrl: string, deck: CardId[]) {
   setSession(s);
   useStore.getState().setScreen("lobby");
   await s.start();
+}
+
+// Rematch helpers — used by the post-match panel. Both reuse the deck the
+// match was started with (createTestDeck() for now; deck builder later).
+import { createTestDeck } from "../sim/cards";
+
+export function rematchOffline() {
+  startOffline(createTestDeck());
+}
+
+export function rematchOnline() {
+  const url = useStore.getState().lastSignalUrl;
+  void startOnline(url, createTestDeck());
+}
+
+export function backToTitle() {
+  stopActiveSession();
+  useStore.getState().setScreen("title");
 }
 
 export function useFrameTick(rerender: () => void) {

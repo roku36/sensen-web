@@ -35,6 +35,10 @@ interface UiStore {
 
   desyncFrame: number | null;
   setDesync: (frame: number) => void;
+
+  // Remembered for "rematch" buttons after a result banner.
+  lastSignalUrl: string;
+  setLastSignalUrl: (u: string) => void;
 }
 
 export const useStore = create<UiStore>((set) => ({
@@ -61,4 +65,12 @@ export const useStore = create<UiStore>((set) => ({
 
   desyncFrame: null,
   setDesync: (frame) => set({ desyncFrame: frame }),
+
+  lastSignalUrl:
+    (typeof window !== "undefined" && localStorage.getItem("sensen.signalUrl")) ||
+    "ws://localhost:3536/sensen?next=2",
+  setLastSignalUrl: (u) => {
+    if (typeof window !== "undefined") localStorage.setItem("sensen.signalUrl", u);
+    set({ lastSignalUrl: u });
+  },
 }));

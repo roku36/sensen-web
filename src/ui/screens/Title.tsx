@@ -4,7 +4,8 @@ import { startOffline, startOnline } from "../hooks";
 import { useStore } from "../store";
 
 export function Title() {
-  const [signalUrl, setSignalUrl] = useState("ws://localhost:3536/sensen?next=2");
+  const remembered = useStore((s) => s.lastSignalUrl);
+  const [signalUrl, setSignalUrl] = useState(remembered);
   const viewMode = useStore((s) => s.viewMode);
   const setViewMode = useStore((s) => s.setViewMode);
   return (

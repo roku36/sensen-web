@@ -11,6 +11,7 @@ import { DRAW_COST } from "../../sim/rules";
 import { PlayerState } from "../../sim/state";
 import { getSession, useKeyboardInput } from "../hooks";
 import { useStore } from "../store";
+import { ResultPanel } from "./ResultPanel";
 
 export function SimpleGameplay() {
   useKeyboardInput();
@@ -32,18 +33,13 @@ export function SimpleGameplay() {
       </div>
 
       <PlayerPanel player={op} title="相手" mirrored />
-      <Center game={game} />
       <PlayerPanel player={me} title="自分" />
       <SelfHand player={me} />
+      {game.result !== 0 && (
+        <ResultPanel result={game.result as 1 | 2 | 3} localPlayer={localPlayer} />
+      )}
     </div>
   );
-}
-
-function Center({ game }: { game: any }) {
-  const result = game.result as 0 | 1 | 2 | 3;
-  if (result === 0) return null;
-  const text = result === 1 ? "P0 勝利" : result === 2 ? "P1 勝利" : "引き分け";
-  return <div style={banner}>{text}</div>;
 }
 
 function PlayerPanel({ player, title, mirrored = false }: { player: PlayerState; title: string; mirrored?: boolean }) {
@@ -284,7 +280,6 @@ const typeBadge: React.CSSProperties = {
 const cardHeader: React.CSSProperties = { fontWeight: 600, fontSize: 13, marginTop: 32, textShadow: "0 1px 2px black" };
 const cardEffect: React.CSSProperties = { fontSize: 11, opacity: 0.92, lineHeight: 1.3, marginTop: 4 };
 const cardKeyHint: React.CSSProperties = { position: "absolute", bottom: 6, right: 8, fontSize: 11, opacity: 0.6, fontFamily: "ui-monospace, monospace" };
-const banner: React.CSSProperties = { position: "absolute", top: "40%", left: 0, right: 0, textAlign: "center", padding: 16, fontSize: 32, background: "rgba(0,0,0,0.7)" };
 const tooltipBox: React.CSSProperties = {
   position: "absolute", bottom: "100%", left: "50%", transform: "translateX(-50%)",
   marginBottom: 8, padding: "10px 12px", background: "rgba(20, 20, 28, 0.97)",
