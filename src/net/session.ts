@@ -149,11 +149,14 @@ export class Session {
     this.rafId = requestAnimationFrame(this.loop);
   };
 
-  stop() {
+  // Returns once the underlying WebSocket has really finished closing, so a
+  // rematch can safely open a fresh connection without racing the server's
+  // peer-cleanup.
+  async stop(): Promise<void> {
     if (this.stopped) return;
     this.stopped = true;
     cancelAnimationFrame(this.rafId);
-    this.mb.close();
+    await this.mb.close();
   }
 
   state(): GameState | undefined { return this.engine?.current(); }

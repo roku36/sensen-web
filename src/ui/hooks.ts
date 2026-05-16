@@ -26,29 +26,47 @@ export function useKeyboardInput() {
   }, []);
 }
 
-// Tear down any session that was still attached. Safe to call repeatedly.
-function stopActiveSession() {
+// Track which mode the active session is in so rematch buttons match context.
+let activeMode: "offline" | "online" | null = null;
+export const getActiveMode = () => activeMode;
+
+// Tear down any session that was still attached. Awaits real socket close so
+// a follow-up startOnline doesn't race the matchbox server's peer cleanup
+// (which would either ghost-pair us with our own dying connection or strand
+// the two peers in different rooms).
+async function stopActiveSession(): Promise<void> {
   const s = activeSession;
-  if (s) { try { (s as any).stop?.(); } catch { /* ignore */ } }
+  if (s) {
+    try {
+      const r = (s as any).stop?.();
+      if (r && typeof r.then === "function") await r;
+    } catch { /* ignore */ }
+  }
   setSession(null);
+  activeMode = null;
   // Clear ephemeral per-match state so the next match starts clean.
   useStore.setState({ game: null, gameFrame: 0, log: [], desyncFrame: null });
 }
 
-export function startOffline(deck: CardId[]) {
-  stopActiveSession();
+export async function startOffline(deck: CardId[]) {
+  await stopActiveSession();
   const s = new OfflineSession({
     deck,
     onState: (g) => useStore.getState().setGame(g),
   });
   setSession(s);
+  activeMode = "offline";
   useStore.getState().setLocalPlayer(0);
   s.start();
   useStore.getState().setScreen("gameplay");
 }
 
 export async function startOnline(signalUrl: string, deck: CardId[]) {
-  stopActiveSession();
+  await stopActiveSession();
+  // Tiny grace period: the WebSocket close above is "done" from the client's
+  // POV but the matchbox server may still be processing our PeerLeft. 250ms
+  // empirically clears the ghost.
+  await new Promise((r) => setTimeout(r, 250));
   useStore.getState().setLastSignalUrl(signalUrl);
   const log = (line: string) => useStore.getState().pushLog(line);
   const s = new Session({
@@ -63,6 +81,7 @@ export async function startOnline(signalUrl: string, deck: CardId[]) {
     onDesync: (f) => useStore.getState().setDesync(f),
   });
   setSession(s);
+  activeMode = "online";
   useStore.getState().setScreen("lobby");
   await s.start();
 }
@@ -71,17 +90,13 @@ export async function startOnline(signalUrl: string, deck: CardId[]) {
 // match was started with (createTestDeck() for now; deck builder later).
 import { createTestDeck } from "../sim/cards";
 
-export function rematchOffline() {
-  startOffline(createTestDeck());
-}
-
+export function rematchOffline() { void startOffline(createTestDeck()); }
 export function rematchOnline() {
   const url = useStore.getState().lastSignalUrl;
   void startOnline(url, createTestDeck());
 }
-
-export function backToTitle() {
-  stopActiveSession();
+export async function backToTitle() {
+  await stopActiveSession();
   useStore.getState().setScreen("title");
 }
 

@@ -93,9 +93,12 @@ export class MatchboxClient {
     }
     if ("NewPeer" in msg) {
       const peer = msg.NewPeer;
-      // Lower-id peer initiates the offer (deterministic ordering).
-      const initiator = this.localId < peer;
-      this.createPeer(peer, initiator);
+      // matchbox only sends NewPeer to the EXISTING peer — joiners discover
+      // the other side via an incoming Signal{Offer}. So if we receive
+      // NewPeer, we are unambiguously the WebRTC initiator. (Earlier we
+      // used a lex-compare to pick initiator, which broke ~50% of pairings
+      // when the joiner happened to lex-sort lower than the existing peer.)
+      this.createPeer(peer, true);
       this.emit({ kind: "peer-joined", peer });
       return;
     }
@@ -178,9 +181,24 @@ export class MatchboxClient {
     this.ws.send(JSON.stringify({ Signal: { receiver, data } }));
   }
 
-  close() {
-    for (const conn of this.peers.values()) conn.pc.close();
+  // Async close: waits until the WebSocket has actually finished closing
+  // before resolving. Without this, opening a new connection right after
+  // close() races with the matchbox server's cleanup and the new peer can
+  // end up paired with our own ghost or in a stale room.
+  close(): Promise<void> {
+    for (const conn of this.peers.values()) {
+      try { conn.channel?.close?.(); } catch { /* ignore */ }
+      try { conn.pc.close(); } catch { /* ignore */ }
+    }
     this.peers.clear();
-    this.ws?.close();
+    const ws = this.ws;
+    if (!ws || ws.readyState === ws.CLOSED) return Promise.resolve();
+    return new Promise((resolve) => {
+      const done = () => { ws.removeEventListener("close", done); resolve(); };
+      ws.addEventListener("close", done);
+      try { ws.close(1000, "rematch"); } catch { resolve(); }
+      // Hard timeout — never block forever on a wedged socket.
+      setTimeout(done, 1500);
+    });
   }
 }
