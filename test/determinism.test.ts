@@ -80,26 +80,45 @@ describe("reducer determinism", () => {
     expect(c2).not.toBe(c1);
   });
 
-  it("playing strike multiple times tracks damage exactly", () => {
+  it("playing strike tracks damage exactly", () => {
     // Construct a deck of just Strike so we know what to expect.
     const deck = [CardId.Strike, CardId.Strike, CardId.Strike, CardId.Strike, CardId.Strike];
     const s = initGame({
       matchSeed: 1n,
-      hpMax: 1000,
+      hpMax: 80,
       costRate: 1,
       deckP0: deck,
       deckP1: deck,
     });
     const startHp = s.players[1].hp;
-    // Wait for cost (~1/s) to accumulate to 1.0, then play card index 0.
-    // Strike is in hand if init dealt it. With deck of Strikes, hand is all Strikes.
-    for (let f = 0; f < 70; f++) step(s, 0, 0); // ~1.16s of cost
+    for (let f = 0; f < 70; f++) step(s, 0, 0); // ~1.16s @ 1/s = ~1.16 cost
     expect(s.players[0].cost).toBeGreaterThanOrEqual(1.0);
     step(s, cardFlag(0)!, 0);
-    // Strike deals 60 base damage, no strength, no weak/vuln; defender has no
-    // block (decay would drop it to 0 anyway).
+    // Strike deals 6 base damage now (Slay-scale), no strength/weak/vuln.
     const dealt = startHp - s.players[1].hp;
-    expect(dealt).toBeGreaterThanOrEqual(59); // allow tiny float rounding
-    expect(dealt).toBeLessThanOrEqual(61);
+    expect(dealt).toBeGreaterThanOrEqual(5.5);
+    expect(dealt).toBeLessThanOrEqual(6.5);
+  });
+
+  it("combo discount halves cost on a same-card replay within 2s", () => {
+    const deck = [CardId.Strike, CardId.Strike, CardId.Strike, CardId.Strike];
+    const s = initGame({ matchSeed: 1n, hpMax: 80, costRate: 1, deckP0: deck, deckP1: deck });
+    // Advance until we have plenty of cost (1.5 = 1.0 + 0.5 discounted second)
+    for (let f = 0; f < 100; f++) step(s, 0, 0);
+    const c0 = s.players[0].cost;
+    step(s, cardFlag(0)!, 0); // first Strike: full cost (1.0)
+    const c1 = s.players[0].cost;
+    step(s, cardFlag(0)!, 0); // second Strike same frame: combo discount → 0.5
+    const c2 = s.players[0].cost;
+    const firstSpent = c0 - c1;
+    const secondSpent = c1 - c2;
+    expect(firstSpent).toBeCloseTo(1.0, 1);
+    expect(secondSpent).toBeCloseTo(0.5, 1);
+  });
+
+  it("energy is hard-capped at costMax", () => {
+    const s = initGame({ matchSeed: 1n, hpMax: 80, costRate: 5, costMax: 3, deckP0: [CardId.Strike], deckP1: [CardId.Strike] });
+    for (let f = 0; f < 600; f++) step(s, 0, 0); // 10s @ 5/s would normally hit 50
+    expect(s.players[0].cost).toBeLessThanOrEqual(3.01);
   });
 });

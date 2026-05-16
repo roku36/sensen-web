@@ -11,7 +11,11 @@ export interface PlayerState {
   thorns: number;
   // Resources
   cost: number;
+  costMax: number;
   costRate: number;
+  // Combo: id of last card played + when (sim seconds since match start)
+  lastPlayedCard: number;
+  lastPlayedAt: number;
   // Status (ducked)
   strength: number;
   vulnerableSecs: number;
@@ -54,6 +58,7 @@ export interface GameState {
 const DEFAULT_PLAYER = (
   handle: number,
   costRate: number,
+  costMax: number,
   hpMax: number,
   rngState: bigint,
   initialDeck: CardId[],
@@ -64,7 +69,10 @@ const DEFAULT_PLAYER = (
   block: 0,
   thorns: 0,
   cost: 0,
+  costMax,
   costRate,
+  lastPlayedCard: 0,
+  lastPlayedAt: -1000,
   strength: 0,
   vulnerableSecs: 0,
   weakSecs: 0,
@@ -92,11 +100,12 @@ const DEFAULT_PLAYER = (
 export function makePlayer(
   handle: number,
   costRate: number,
+  costMax: number,
   hpMax: number,
   rngState: bigint,
   deck: CardId[],
 ): PlayerState {
-  return DEFAULT_PLAYER(handle, costRate, hpMax, rngState, deck);
+  return DEFAULT_PLAYER(handle, costRate, costMax, hpMax, rngState, deck);
 }
 
 // Deep-clone snapshot. JSON ops bail on bigint, so we manually walk.

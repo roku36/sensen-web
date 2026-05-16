@@ -33,7 +33,7 @@ export class OfflineSession {
     this.state = initGame({
       matchSeed,
       hpMax: opts.hpMax ?? INITIAL_HP,
-      costRate: opts.costRate ?? 1.0,
+      costRate: opts.costRate ?? 0.6,
       deckP0: opts.deck,
       deckP1: opts.deck,
     });

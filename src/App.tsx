@@ -2,6 +2,7 @@ import { useEffect, useState } from "react";
 import { getSession } from "./ui/hooks";
 import { Gameplay } from "./ui/screens/Gameplay";
 import { Lobby } from "./ui/screens/Lobby";
+import { SimpleGameplay } from "./ui/screens/SimpleGameplay";
 import { Title } from "./ui/screens/Title";
 import { useStore } from "./ui/store";
 
@@ -28,6 +29,7 @@ if (typeof window !== "undefined") {
 
 export default function App() {
   const screen = useStore((s) => s.screen);
+  const viewMode = useStore((s) => s.viewMode);
 
   // Force a re-render at ~30Hz so HUD/3D values track the simulation snapshot.
   // (The simulation itself runs at 60Hz inside the session.)
@@ -41,7 +43,7 @@ export default function App() {
     <div style={{ width: "100%", height: "100%", position: "relative" }}>
       {screen === "title" && <Title />}
       {screen === "lobby" && <Lobby />}
-      {screen === "gameplay" && <Gameplay />}
+      {screen === "gameplay" && (viewMode === "simple" ? <SimpleGameplay /> : <Gameplay />)}
     </div>
   );
 }

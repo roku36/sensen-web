@@ -81,7 +81,7 @@ export class Session {
     this.engine = new RollbackEngine({
       matchSeed,
       hpMax: this.opts.hpMax ?? INITIAL_HP,
-      costRate: this.opts.costRate ?? 1.0,
+      costRate: this.opts.costRate ?? 0.6,
       deckP0: this.opts.deck,
       deckP1: this.opts.deck,
       localPlayer,

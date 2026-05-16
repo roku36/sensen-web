@@ -12,17 +12,22 @@ import {
 } from "./cards";
 import { cardFlag, INPUT_DRAW } from "./input";
 import {
-  BLOCK_DECAY_RATE,
-  DT,
-  MAX_HAND_SIZE,
+  BLOCK_DECAY_K,
+  COMBO_DISCOUNT,
+  COMBO_WINDOW,
+  DRAW_COST,
   DRAW_COUNT,
+  DT,
+  MAX_COST,
+  MAX_HAND_SIZE,
+  PLAYED_TO_DISCARD,
 } from "./rules";
 import { rangeU64 } from "./rng";
 import type { GameState, PlayerState } from "./state";
 
 const enum DamageKind { Attack = 0, Power = 1, Thorns = 2 }
 
-interface DamageMsg { target: 0 | 1; amount: number; source: 0 | 1 | null; kind: DamageKind }
+interface DamageMsg { target: 0 | 1; amount: number; source: 0 | 1 | null; kind: DamageKind; pierce?: number }
 interface HealMsg { target: 0 | 1; amount: number }
 interface DrawMsg { target: 0 | 1; count: number }
 interface BlockMsg { target: 0 | 1; amount: number }
@@ -105,9 +110,11 @@ function tickPowers(s: GameState, dt: number, bus: Bus) {
 }
 
 function tickBlockDecay(p: PlayerState, dt: number) {
-  if (!p.barricade && p.block > 0) {
-    p.block = Math.max(0, p.block - BLOCK_DECAY_RATE * dt);
-  }
+  if (p.barricade || p.block <= 0) return;
+  // Exponential half-life decay. block(t+dt) = block(t) * exp(-k*dt).
+  // Below 0.05 we snap to 0 so the bar reads cleanly empty.
+  p.block = p.block * Math.exp(-BLOCK_DECAY_K * dt);
+  if (p.block < 0.05) p.block = 0;
 }
 
 function tickAcceleration(p: PlayerState, dt: number) {
@@ -122,7 +129,7 @@ function tickAcceleration(p: PlayerState, dt: number) {
 }
 
 const accumulateCost = (p: PlayerState, dt: number) => {
-  p.cost += p.costRate * dt;
+  p.cost = Math.min(p.costMax, p.cost + p.costRate * dt);
 };
 
 // ── Input handling ──
@@ -130,17 +137,17 @@ const accumulateCost = (p: PlayerState, dt: number) => {
 function applyInput(s: GameState, idx: 0 | 1, flags: number, bus: Bus) {
   if (flags === 0) return;
   const p = s.players[idx];
+  const now = s.frame * DT;
 
-  // Draw: cost = current hand size (0 cards = free).
+  // Draw: flat 1-cost.
   if ((flags & INPUT_DRAW) !== 0) {
-    const drawCost = p.hand.length;
-    if (p.cost >= drawCost) {
-      p.cost -= drawCost;
+    if (p.cost >= DRAW_COST) {
+      p.cost -= DRAW_COST;
       bus.draw.push({ target: idx, count: DRAW_COUNT });
     }
   }
 
-  // First card-flag wins (matches Rust break;).
+  // First card-flag wins.
   for (let i = 0; i < MAX_HAND_SIZE; i++) {
     const flag = cardFlag(i);
     if (flag === null) continue;
@@ -149,10 +156,24 @@ function applyInput(s: GameState, idx: 0 | 1, flags: number, bus: Bus) {
     if (cardId === undefined) break;
     const def = getCardDef(cardId);
     if (!def) break;
-    const effectiveCost = p.corruption && def.cardType === CardType.Skill ? 0 : def.cost;
-    if (p.cost < effectiveCost) break;
-    p.cost -= effectiveCost;
-    playCard(s, idx, i, bus);
+
+    // Charge attacks: require full energy AND drain it all.
+    if (def.chargeAttack) {
+      if (p.cost < p.costMax - 0.01) break;
+      p.cost = 0;
+      playCard(s, idx, i, bus, now);
+      break;
+    }
+
+    // Combo: same card within COMBO_WINDOW seconds → discount.
+    let cost = def.cost;
+    if (p.corruption && def.cardType === CardType.Skill) cost = 0;
+    else if (p.lastPlayedCard === cardId && (now - p.lastPlayedAt) < COMBO_WINDOW) {
+      cost = cost * (1 - COMBO_DISCOUNT);
+    }
+    if (p.cost < cost) break;
+    p.cost -= cost;
+    playCard(s, idx, i, bus, now);
     break;
   }
 }
@@ -226,7 +247,7 @@ function drawCards(s: GameState, idx: 0 | 1, count: number, bus: Bus) {
   }
 }
 
-function playCard(s: GameState, idx: 0 | 1, handIndex: number, bus: Bus) {
+function playCard(s: GameState, idx: 0 | 1, handIndex: number, bus: Bus, now: number) {
   const p = s.players[idx];
   if (handIndex >= p.hand.length) return;
   const cardId = p.hand[handIndex];
@@ -235,22 +256,30 @@ function playCard(s: GameState, idx: 0 | 1, handIndex: number, bus: Bus) {
   const def = getCardDef(cardId);
   if (!def) return;
 
-  let returnToDeck = true;
-  let counts_as_exhaust = false;
-  if (def.cardType === CardType.Power) returnToDeck = false;
-  if (def.effect.kind === "Exhaust") { returnToDeck = false; counts_as_exhaust = true; }
-  if (def.cardType === CardType.Skill && p.corruption) { returnToDeck = false; counts_as_exhaust = true; }
+  // Track for combo on next play.
+  p.lastPlayedCard = cardId;
+  p.lastPlayedAt = now;
 
-  if (returnToDeck) p.deck.push(cardId);
+  // Disposition: powers stay attached (vanish from circulation), exhausting
+  // cards are removed permanently from this match, otherwise → discard pile
+  // (Slay-style cycling). Corruption forces every skill to exhaust.
+  let goToDiscard = PLAYED_TO_DISCARD;
+  let countsAsExhaust = false;
+  if (def.cardType === CardType.Power) { goToDiscard = false; }
+  if (def.exhausts || def.effect.kind === "Exhaust") { goToDiscard = false; countsAsExhaust = true; }
+  if (def.cardType === CardType.Skill && p.corruption) { goToDiscard = false; countsAsExhaust = true; }
+
+  if (goToDiscard) p.discard.push(cardId);
 
   bus.cardPlayed.push({ player: idx, cardId });
-  if (counts_as_exhaust) bus.exhausted.push({ player: idx, cardId });
+  if (countsAsExhaust) bus.exhausted.push({ player: idx, cardId });
 }
 
 // ── Card effect resolution ──
 
 function attackDamage(base: number, attacker: PlayerState, defender: PlayerState | null): number {
-  let dmg = base + attacker.strength * 10;
+  // Slay-style: +1 Strength = +1 damage per attack-hit (flat additive).
+  let dmg = base + attacker.strength;
   if (attacker.weakSecs > 0) dmg *= 0.75;
   if (defender && defender.vulnerableSecs > 0) dmg *= 1.5;
   return Math.max(0, dmg);
@@ -266,12 +295,12 @@ function applyEffect(
   const o = s.players[opp(idx)];
   switch (effect.kind) {
     case "Damage":
-      bus.damage.push({ target: opp(idx), amount: attackDamage(effect.amount, p, o), source: idx, kind: DamageKind.Attack });
+      bus.damage.push({ target: opp(idx), amount: attackDamage(effect.amount, p, o), source: idx, kind: DamageKind.Attack, pierce: effect.pierceBlock ?? 0 });
       break;
     case "MultiHit": {
       const each = attackDamage(effect.damage, p, o);
       for (let i = 0; i < effect.hits; i++) {
-        bus.damage.push({ target: opp(idx), amount: each, source: idx, kind: DamageKind.Attack });
+        bus.damage.push({ target: opp(idx), amount: each, source: idx, kind: DamageKind.Attack, pierce: effect.pierceBlock ?? 0 });
       }
       break;
     }
@@ -435,10 +464,15 @@ function processDamage(s: GameState, bus: Bus) {
   while (bus.damage.length > 0) {
     const m = bus.damage.shift()!;
     const target = s.players[m.target];
-    let remaining = Math.max(0, m.amount);
-    const absorbed = Math.min(remaining, target.block);
+    const total = Math.max(0, m.amount);
+    // pierce: fraction that skips block entirely (FiendFire 50%, Reaper 100%).
+    const pierce = Math.max(0, Math.min(1, m.pierce ?? 0));
+    const directHp = total * pierce;
+    let blockable = total * (1 - pierce);
+    const absorbed = Math.min(blockable, target.block);
     target.block -= absorbed;
-    remaining -= absorbed;
+    blockable -= absorbed;
+    const remaining = blockable + directHp;
     if (remaining > 0) target.hp = Math.max(0, target.hp - remaining);
 
     if (m.kind === DamageKind.Attack && m.source !== null && m.source !== m.target && target.thorns > 0 && m.amount > 0) {

@@ -36,7 +36,8 @@ const opt = <T>(v: T | null, write: (v: T) => void) => { byte(v ? 1 : 0); if (v)
 function hashPlayer(p: PlayerState) {
   u32(p.handle);
   f(p.hp); f(p.hpMax); f(p.block); f(p.thorns);
-  f(p.cost); f(p.costRate);
+  f(p.cost); f(p.costMax); f(p.costRate);
+  f(p.lastPlayedAt); u32(p.lastPlayedCard);
   f(p.strength); f(p.vulnerableSecs); f(p.weakSecs);
   f(p.accelBonusRate); f(p.accelRemaining);
   opt(p.rage, (r) => { f(r.blockPerAttack); f(r.remaining); });

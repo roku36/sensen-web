@@ -1,14 +1,28 @@
 import { useState } from "react";
 import { createTestDeck } from "../../sim/cards";
 import { startOffline, startOnline } from "../hooks";
+import { useStore } from "../store";
 
 export function Title() {
   const [signalUrl, setSignalUrl] = useState("ws://localhost:3536/sensen?next=2");
+  const viewMode = useStore((s) => s.viewMode);
+  const setViewMode = useStore((s) => s.setViewMode);
   return (
     <div style={overlay}>
       <div style={panel}>
         <h1 style={{ fontSize: 56, margin: 0, letterSpacing: 8 }}>SENSEN</h1>
-        <p style={{ opacity: 0.6, margin: "0 0 32px" }}>web port — react three fiber + p2p rollback</p>
+        <p style={{ opacity: 0.6, margin: "0 0 24px" }}>web port — react three fiber + p2p rollback</p>
+
+        {/* View toggle: rich 3D vs simple HUD */}
+        <div style={toggleRow}>
+          <button style={toggleBtn(viewMode === "rich3d")} onClick={() => setViewMode("rich3d")}>3D Rich</button>
+          <button style={toggleBtn(viewMode === "simple")} onClick={() => setViewMode("simple")}>2D Simple</button>
+        </div>
+        <p style={hint}>
+          {viewMode === "rich3d"
+            ? "Full Three.js scene with shaders & particles."
+            : "HUD-only — readable numbers for balancing."}
+        </p>
 
         <button style={btn} onClick={() => startOffline(createTestDeck())}>
           Practice (offline)
@@ -27,6 +41,14 @@ export function Title() {
     </div>
   );
 }
+
+const toggleRow: React.CSSProperties = { display: "flex", gap: 0, marginBottom: 6, justifyContent: "center" };
+const toggleBtn = (active: boolean): React.CSSProperties => ({
+  background: active ? "#5a3a8a" : "#2a2a35",
+  color: "white", border: 0, padding: "6px 16px", cursor: "pointer", fontSize: 13,
+  borderRadius: 0,
+});
+const hint: React.CSSProperties = { fontSize: 11, opacity: 0.55, margin: "0 0 18px" };
 
 const overlay: React.CSSProperties = { position: "absolute", inset: 0, display: "grid", placeItems: "center", pointerEvents: "auto" };
 const panel: React.CSSProperties = { background: "rgba(0,0,0,0.6)", padding: 36, borderRadius: 16, minWidth: 380, textAlign: "center" };

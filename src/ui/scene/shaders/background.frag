@@ -25,7 +25,7 @@ void main() {
   vec2 fragCoord = gl_FragCoord.xy;
   vec2 uv = (fragCoord - u_resolution.xy * 0.5) / u_resolution.y;
 
-  float t = u_time * 1.6;
+  float t = u_time * 0.02;
   float animTime = t + 5.0 + 5.0 * sin(t * 0.3);
 
   vec3 rayOrigin = getPathPosition(animTime);
