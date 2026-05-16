@@ -8,8 +8,9 @@
 //        produce a draw in practice but the panel handles it cleanly).
 
 import { useEffect, useRef, useState } from "react";
+import { downloadReplay } from "../../replay/format";
 import { bumpStreak, loadStreak, resetProfile } from "../../sim/deck-storage";
-import { backToTitle, getActiveMode, rematchOffline, rematchOnline } from "../hooks";
+import { backToTitle, buildCurrentReplay, getActiveMode, rematchOffline, rematchOnline } from "../hooks";
 import { PostVictoryDraft } from "./PostVictoryDraft";
 
 export function ResultPanel({
@@ -67,6 +68,19 @@ export function ResultPanel({
             <button style={ghostBtn} onClick={() => void backToTitle()}>連勝をやめてタイトルへ</button>
           </div>
         )}
+
+        <div style={{ marginTop: 6, textAlign: "center" }}>
+          <button
+            style={ghostBtn}
+            onClick={() => {
+              const r = buildCurrentReplay();
+              if (r) downloadReplay(r);
+              else alert("リプレイデータがありません");
+            }}
+          >
+            リプレイをダウンロード
+          </button>
+        </div>
       </div>
     </div>
   );

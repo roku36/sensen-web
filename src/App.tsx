@@ -1,8 +1,9 @@
 import { useEffect } from "react";
-import { getSession } from "./ui/hooks";
+import { buildCurrentReplay, getSession } from "./ui/hooks";
 import { DeckBuilder } from "./ui/screens/DeckBuilder";
 import { Gameplay } from "./ui/screens/Gameplay";
 import { Lobby } from "./ui/screens/Lobby";
+import { ReplayViewer } from "./ui/screens/ReplayViewer";
 import { SimpleGameplay } from "./ui/screens/SimpleGameplay";
 import { Title } from "./ui/screens/Title";
 import { useStore } from "./ui/store";
@@ -30,6 +31,7 @@ if (typeof window !== "undefined") {
       const c = (s as any).checksumAt(frame);
       return c == null ? null : c.toString(16);
     },
+    buildReplay: () => buildCurrentReplay(),
   };
 }
 
@@ -46,6 +48,17 @@ export default function App() {
       {screen === "deck" && <DeckBuilder />}
       {screen === "lobby" && <Lobby />}
       {screen === "gameplay" && (viewMode === "simple" ? <SimpleGameplay /> : <Gameplay />)}
+      {screen === "replay" && (() => {
+        const replay = useStore.getState().loadedReplay;
+        if (!replay) { useStore.getState().setScreen("title"); return null; }
+        // Reuse SimpleGameplay HUD for rendering; ReplayViewer overlays controls.
+        return (
+          <>
+            <SimpleGameplay />
+            <ReplayViewer replay={replay} onExit={() => { useStore.getState().setLoadedReplay(null); useStore.getState().setScreen("title"); }} />
+          </>
+        );
+      })()}
     </div>
   );
 }

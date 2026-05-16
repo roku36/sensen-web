@@ -2,9 +2,10 @@
 // snapshot updated each frame; the rollback engine remains the source of truth.
 
 import { create } from "zustand";
+import { Replay } from "../replay/format";
 import { GameState } from "../sim/state";
 
-export type Screen = "title" | "lobby" | "gameplay" | "deck";
+export type Screen = "title" | "lobby" | "gameplay" | "deck" | "replay";
 export type ViewMode = "rich3d" | "simple";
 
 const persistedViewMode = (): ViewMode => {
@@ -39,6 +40,9 @@ interface UiStore {
   // Remembered for "rematch" buttons after a result banner.
   lastSignalUrl: string;
   setLastSignalUrl: (u: string) => void;
+
+  loadedReplay: Replay | null;
+  setLoadedReplay: (r: Replay | null) => void;
 }
 
 export const useStore = create<UiStore>((set) => ({
@@ -73,4 +77,7 @@ export const useStore = create<UiStore>((set) => ({
     if (typeof window !== "undefined") localStorage.setItem("sensen.signalUrl", u);
     set({ lastSignalUrl: u });
   },
+
+  loadedReplay: null,
+  setLoadedReplay: (r) => set({ loadedReplay: r }),
 }));

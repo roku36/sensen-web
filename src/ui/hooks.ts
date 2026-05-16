@@ -105,6 +105,13 @@ export async function backToTitle() {
   useStore.getState().setScreen("title");
 }
 
+// Used by the result panel's "download replay" button.
+export function buildCurrentReplay() {
+  const s = activeSession;
+  if (!s || !("buildReplay" in s)) return null;
+  return (s as any).buildReplay() ?? null;
+}
+
 export function useFrameTick(rerender: () => void) {
   const ref = useRef<number>(0);
   useEffect(() => {

@@ -2,6 +2,7 @@ import { useState } from "react";
 import { loadDeck, loadStreak, streakBucket } from "../../sim/deck-storage";
 import { startOffline, startOnline } from "../hooks";
 import { useStore } from "../store";
+import { pickReplayFile } from "./ReplayViewer";
 
 export function Title() {
   const remembered = useStore((s) => s.lastSignalUrl);
@@ -51,6 +52,13 @@ export function Title() {
         <div style={{ height: 14 }} />
         <button style={deckBtn} onClick={() => setScreen("deck")}>
           デッキ編集 ({deckSize}枚)
+        </button>
+        <div style={{ height: 8 }} />
+        <button style={deckBtn} onClick={async () => {
+          const r = await pickReplayFile();
+          if (r) { useStore.getState().setLoadedReplay(r); setScreen("replay"); }
+        }}>
+          リプレイを開く…
         </button>
       </div>
     </div>

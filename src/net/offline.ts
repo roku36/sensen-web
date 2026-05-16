@@ -10,6 +10,7 @@ import { step } from "../sim/reducer";
 import { fnv1a64 } from "../sim/rng";
 import { DEFAULT_COST_RATE, INITIAL_HP } from "../sim/rules";
 import { GameState } from "../sim/state";
+import { Replay } from "../replay/format";
 
 export interface OfflineOptions {
   deck: CardId[];
@@ -26,17 +27,35 @@ export class OfflineSession {
   private stopped = false;
   private pendingLocal = 0;
   readonly opts: OfflineOptions;
+  // Recording: keep all non-zero inputs so we can rebuild a Replay on exit.
+  private matchSeed: bigint;
+  private recorded: { f: number; s: 0 | 1; flags: number }[] = [];
 
   constructor(opts: OfflineOptions) {
     this.opts = opts;
-    const matchSeed = fnv1a64(new TextEncoder().encode("offline-" + Math.random()));
+    this.matchSeed = fnv1a64(new TextEncoder().encode("offline-" + Math.random()));
     this.state = initGame({
-      matchSeed,
+      matchSeed: this.matchSeed,
       hpMax: opts.hpMax ?? INITIAL_HP,
       costRate: opts.costRate ?? DEFAULT_COST_RATE,
       deckP0: opts.deck,
       deckP1: opts.deck,
     });
+  }
+
+  buildReplay(): Replay {
+    return {
+      version: 1,
+      matchSeed: this.matchSeed.toString(16),
+      hpMax: this.opts.hpMax ?? INITIAL_HP,
+      costRate: this.opts.costRate ?? DEFAULT_COST_RATE,
+      deckP0: this.opts.deck,
+      deckP1: this.opts.deck,
+      inputs: this.recorded,
+      finalFrame: this.state.frame,
+      result: this.state.result,
+      recordedAt: Date.now(),
+    };
   }
 
   start() {
@@ -60,6 +79,7 @@ export class OfflineSession {
     while (this.acc >= dt) {
       const local = this.pendingLocal;
       this.pendingLocal = 0;
+      if (local !== 0) this.recorded.push({ f: this.state.frame, s: 0, flags: local });
       step(this.state, local, 0);
       this.acc -= dt;
     }

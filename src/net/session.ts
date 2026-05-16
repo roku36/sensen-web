@@ -43,6 +43,11 @@ export class Session {
   // Deck handshake: each peer sends their own deck once, waits for peer's.
   private peerDeck: CardId[] | null = null;
   private peerDeckResolve: ((d: CardId[]) => void) | null = null;
+  // Replay recording (local view).
+  private recordedInputs: { f: number; s: 0 | 1; flags: number }[] = [];
+  private matchSeed: bigint = 0n;
+  private deckP0: CardId[] = [];
+  private deckP1: CardId[] = [];
 
   constructor(opts: SessionOptions) {
     this.opts = opts;
@@ -92,6 +97,9 @@ export class Session {
     // who is p0 (sorted-id-first) and the deck contents are now mirrored.
     const deckP0 = localPlayer === 0 ? this.opts.deck : peerDeck;
     const deckP1 = localPlayer === 0 ? peerDeck : this.opts.deck;
+    this.matchSeed = matchSeed;
+    this.deckP0 = deckP0;
+    this.deckP1 = deckP1;
     this.opts.onLog?.(`match seed=${matchSeed.toString(16)} you=p${localPlayer}`);
 
     this.engine = new RollbackEngine({
@@ -141,6 +149,12 @@ export class Session {
     if (!this.engine) return;
     if (frame.kind === "input") {
       this.engine.receiveRemoteInput(frame.frame, frame.flags);
+      // Also record the peer's input so an online replay is bit-exact (peer
+      // = whichever side isn't us).
+      if (frame.flags !== 0) {
+        const peer = (this.engine.localPlayer() ^ 1) as 0 | 1;
+        this.recordedInputs.push({ f: frame.frame, s: peer, flags: frame.flags });
+      }
     } else if (frame.kind === "checksum") {
       this.engine.receiveChecksum(frame.frame, frame.hash);
     }
@@ -172,6 +186,8 @@ export class Session {
       this.pendingFlags = 0;
       const { frame } = this.engine.pushLocalInput(flags);
       if (this.remote) this.mb.send(this.remote, encode({ kind: "input", frame, flags }));
+      // Record (own side only; peer's inputs flow through receiveRemoteInput).
+      if (flags !== 0) this.recordedInputs.push({ f: frame, s: this.engine.localPlayer(), flags });
       this.engine.advance();
       this.accumulator -= dt;
     }
@@ -191,4 +207,24 @@ export class Session {
   state(): GameState | undefined { return this.engine?.current(); }
   localPlayer(): 0 | 1 | undefined { return this.engine?.localPlayer(); }
   checksumAt(frame: number): bigint | null { return this.engine?.checksumAt(frame) ?? null; }
+
+  // Build a Replay from the recorded inputs (both ours and the peer's, the
+  // latter captured in handleMessage). Combined with the matchSeed + agreed
+  // decks the deterministic reducer reproduces the match bit-exactly.
+  buildReplay(): import("../replay/format").Replay | null {
+    if (!this.engine) return null;
+    const s = this.engine.current();
+    return {
+      version: 1,
+      matchSeed: this.matchSeed.toString(16),
+      hpMax: this.opts.hpMax ?? INITIAL_HP,
+      costRate: this.opts.costRate ?? DEFAULT_COST_RATE,
+      deckP0: this.deckP0,
+      deckP1: this.deckP1,
+      inputs: this.recordedInputs,
+      finalFrame: s.frame,
+      result: s.result,
+      recordedAt: Date.now(),
+    };
+  }
 }
