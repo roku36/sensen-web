@@ -11,7 +11,7 @@
 import { checksum } from "../sim/checksum";
 import { CardId } from "../sim/cards";
 import { matchSeedFromPeers } from "../sim/rng";
-import { INITIAL_HP } from "../sim/rules";
+import { DEFAULT_COST_RATE, INITIAL_HP } from "../sim/rules";
 import { GameState } from "../sim/state";
 import { MatchboxClient, PeerId } from "./matchbox";
 import { RollbackEngine, RollbackEvent } from "./rollback";
@@ -81,7 +81,7 @@ export class Session {
     this.engine = new RollbackEngine({
       matchSeed,
       hpMax: this.opts.hpMax ?? INITIAL_HP,
-      costRate: this.opts.costRate ?? 0.6,
+      costRate: this.opts.costRate ?? DEFAULT_COST_RATE,
       deckP0: this.opts.deck,
       deckP1: this.opts.deck,
       localPlayer,

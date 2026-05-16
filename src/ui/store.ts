@@ -4,7 +4,7 @@
 import { create } from "zustand";
 import { GameState } from "../sim/state";
 
-export type Screen = "title" | "lobby" | "gameplay";
+export type Screen = "title" | "lobby" | "gameplay" | "deck";
 export type ViewMode = "rich3d" | "simple";
 
 const persistedViewMode = (): ViewMode => {

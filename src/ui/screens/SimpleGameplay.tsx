@@ -11,7 +11,13 @@ import { DRAW_COST } from "../../sim/rules";
 import { PlayerState } from "../../sim/state";
 import { getSession, useKeyboardInput } from "../hooks";
 import { useStore } from "../store";
+import { PilePeek } from "./PilePeek";
 import { ResultPanel } from "./ResultPanel";
+
+type Peek =
+  | { kind: "deck"; side: 0 | 1 }
+  | { kind: "discard"; side: 0 | 1 }
+  | null;
 
 export function SimpleGameplay() {
   useKeyboardInput();
@@ -20,6 +26,7 @@ export function SimpleGameplay() {
   useStore((s) => s.gameFrame);
   const localPlayer = useStore((s) => s.localPlayer);
   const setScreen = useStore((s) => s.setScreen);
+  const [peek, setPeek] = useState<Peek>(null);
 
   if (!game) return null;
   const me = game.players[localPlayer];
@@ -32,9 +39,27 @@ export function SimpleGameplay() {
         <span style={{ opacity: 0.6, fontSize: 12 }}>frame {game.frame} · 2D</span>
       </div>
 
-      <PlayerPanel player={op} title="相手" mirrored />
-      <PlayerPanel player={me} title="自分" />
+      <PlayerPanel player={op} title="相手" mirrored side={(localPlayer ^ 1) as 0 | 1} onPeek={setPeek} />
+      <PlayerPanel player={me} title="自分" side={localPlayer} onPeek={setPeek} />
       <SelfHand player={me} />
+
+      {peek?.kind === "deck" && (
+        <PilePeek
+          title={peek.side === localPlayer ? "自分の山札" : "相手の山札"}
+          cards={game.players[peek.side].deck}
+          ordered={false}
+          onClose={() => setPeek(null)}
+        />
+      )}
+      {peek?.kind === "discard" && (
+        <PilePeek
+          title={peek.side === localPlayer ? "自分の捨札" : "相手の捨札"}
+          cards={game.players[peek.side].discard}
+          ordered
+          onClose={() => setPeek(null)}
+        />
+      )}
+
       {game.result !== 0 && (
         <ResultPanel result={game.result as 1 | 2 | 3} localPlayer={localPlayer} />
       )}
@@ -42,7 +67,12 @@ export function SimpleGameplay() {
   );
 }
 
-function PlayerPanel({ player, title, mirrored = false }: { player: PlayerState; title: string; mirrored?: boolean }) {
+function PlayerPanel({
+  player, title, mirrored = false, side, onPeek,
+}: {
+  player: PlayerState; title: string; mirrored?: boolean;
+  side: 0 | 1; onPeek: (p: Peek) => void;
+}) {
   const hpPct = player.hp / player.hpMax;
   return (
     <div style={{ ...panel, flexDirection: mirrored ? "row-reverse" : "row" }}>
@@ -66,8 +96,8 @@ function PlayerPanel({ player, title, mirrored = false }: { player: PlayerState;
         </div>
       </div>
       <div style={pileStack}>
-        <Pile label="山札" n={player.deck.length} color="#5b9eff" />
-        <Pile label="捨札" n={player.discard.length} color="#ff7a8a" />
+        <Pile label="山札" n={player.deck.length} color="#5b9eff" onClick={() => onPeek({ kind: "deck", side })} />
+        <Pile label="捨札" n={player.discard.length} color="#ff7a8a" onClick={() => onPeek({ kind: "discard", side })} />
         <Pile label="手札" n={player.hand.length} color="#cccccc" />
       </div>
     </div>
@@ -192,12 +222,21 @@ function Bar({ pct, color, label, small = false }: { pct: number; color: string;
   );
 }
 
-function Pile({ label, n, color }: { label: string; n: number; color: string }) {
+function Pile({ label, n, color, onClick }: { label: string; n: number; color: string; onClick?: () => void }) {
   return (
-    <div style={{ textAlign: "center", padding: "4px 8px", borderRadius: 6, background: "#22222a", border: `1px solid ${color}33`, minWidth: 60 }}>
+    <button
+      onClick={onClick}
+      disabled={!onClick}
+      style={{
+        textAlign: "center", padding: "4px 8px", borderRadius: 6,
+        background: "#22222a", border: `1px solid ${color}33`, minWidth: 60,
+        cursor: onClick ? "pointer" : "default", color: "inherit",
+      }}
+      title={onClick ? "クリックで中身を見る" : undefined}
+    >
       <div style={{ color, fontSize: 10, opacity: 0.7 }}>{label}</div>
       <div style={{ color, fontSize: 18, fontWeight: 600 }}>{n}</div>
-    </div>
+    </button>
   );
 }
 

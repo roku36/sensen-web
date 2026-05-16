@@ -1,5 +1,5 @@
 import { useState } from "react";
-import { createTestDeck } from "../../sim/cards";
+import { loadDeck } from "../../sim/deck-storage";
 import { startOffline, startOnline } from "../hooks";
 import { useStore } from "../store";
 
@@ -8,6 +8,8 @@ export function Title() {
   const [signalUrl, setSignalUrl] = useState(remembered);
   const viewMode = useStore((s) => s.viewMode);
   const setViewMode = useStore((s) => s.setViewMode);
+  const setScreen = useStore((s) => s.setScreen);
+  const deckSize = loadDeck().length;
   return (
     <div style={overlay}>
       <div style={panel}>
@@ -25,7 +27,7 @@ export function Title() {
             : "HUD-only — readable numbers for balancing."}
         </p>
 
-        <button style={btn} onClick={() => startOffline(createTestDeck())}>
+        <button style={btn} onClick={() => startOffline(loadDeck())}>
           Practice (offline)
         </button>
         <div style={{ height: 18 }} />
@@ -35,8 +37,13 @@ export function Title() {
           onChange={(e) => setSignalUrl(e.target.value)}
           placeholder="matchbox signaling URL"
         />
-        <button style={btn} onClick={() => startOnline(signalUrl, createTestDeck())}>
+        <button style={btn} onClick={() => startOnline(signalUrl, loadDeck())}>
           Find Match (online)
+        </button>
+
+        <div style={{ height: 14 }} />
+        <button style={deckBtn} onClick={() => setScreen("deck")}>
+          デッキ編集 ({deckSize}枚)
         </button>
       </div>
     </div>
@@ -55,3 +62,4 @@ const overlay: React.CSSProperties = { position: "absolute", inset: 0, display: 
 const panel: React.CSSProperties = { background: "rgba(0,0,0,0.6)", padding: 36, borderRadius: 16, minWidth: 380, textAlign: "center" };
 const btn: React.CSSProperties = { background: "#5a3a8a", color: "white", border: 0, borderRadius: 8, padding: "12px 24px", fontSize: 18, cursor: "pointer", width: "100%" };
 const input: React.CSSProperties = { background: "#1a1a22", color: "white", border: "1px solid #444", borderRadius: 8, padding: "10px 12px", fontSize: 14, marginBottom: 12, width: "calc(100% - 26px)" };
+const deckBtn: React.CSSProperties = { background: "transparent", color: "#aaa", border: "1px solid #444", borderRadius: 8, padding: "8px 16px", fontSize: 13, cursor: "pointer", width: "100%" };

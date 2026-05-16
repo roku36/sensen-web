@@ -8,7 +8,7 @@ import { CardId } from "../sim/cards";
 import { initGame } from "../sim/init";
 import { step } from "../sim/reducer";
 import { fnv1a64 } from "../sim/rng";
-import { INITIAL_HP } from "../sim/rules";
+import { DEFAULT_COST_RATE, INITIAL_HP } from "../sim/rules";
 import { GameState } from "../sim/state";
 
 export interface OfflineOptions {
@@ -33,7 +33,7 @@ export class OfflineSession {
     this.state = initGame({
       matchSeed,
       hpMax: opts.hpMax ?? INITIAL_HP,
-      costRate: opts.costRate ?? 0.6,
+      costRate: opts.costRate ?? DEFAULT_COST_RATE,
       deckP0: opts.deck,
       deckP1: opts.deck,
     });

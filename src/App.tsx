@@ -1,5 +1,6 @@
 import { useEffect } from "react";
 import { getSession } from "./ui/hooks";
+import { DeckBuilder } from "./ui/screens/DeckBuilder";
 import { Gameplay } from "./ui/screens/Gameplay";
 import { Lobby } from "./ui/screens/Lobby";
 import { SimpleGameplay } from "./ui/screens/SimpleGameplay";
@@ -42,6 +43,7 @@ export default function App() {
   return (
     <div style={{ width: "100%", height: "100%", position: "relative" }}>
       {screen === "title" && <Title />}
+      {screen === "deck" && <DeckBuilder />}
       {screen === "lobby" && <Lobby />}
       {screen === "gameplay" && (viewMode === "simple" ? <SimpleGameplay /> : <Gameplay />)}
     </div>

@@ -86,14 +86,15 @@ export async function startOnline(signalUrl: string, deck: CardId[]) {
   await s.start();
 }
 
-// Rematch helpers — used by the post-match panel. Both reuse the deck the
-// match was started with (createTestDeck() for now; deck builder later).
-import { createTestDeck } from "../sim/cards";
+// Rematch helpers — used by the post-match panel. Each picks up the
+// player's currently saved deck (DeckBuilder writes to the same key).
+import { loadDeck } from "../sim/deck-storage";
+export { loadDeck };
 
-export function rematchOffline() { void startOffline(createTestDeck()); }
+export function rematchOffline() { void startOffline(loadDeck()); }
 export function rematchOnline() {
   const url = useStore.getState().lastSignalUrl;
-  void startOnline(url, createTestDeck());
+  void startOnline(url, loadDeck());
 }
 export async function backToTitle() {
   await stopActiveSession();

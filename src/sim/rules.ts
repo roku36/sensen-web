@@ -8,7 +8,7 @@ export const MAX_HAND_SIZE = 10;
 // ── Energy ──
 // No hard cap — energy accumulates without ceiling, like the original Bevy
 // version. The cost-rate alone is the throttle.
-export const DEFAULT_COST_RATE = 0.6;
+export const DEFAULT_COST_RATE = 0.4;
 
 // ── Draw ──
 export const DRAW_COUNT = 1;
