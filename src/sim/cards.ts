@@ -1,9 +1,5 @@
-// Card system. Numbers tuned for the new HP=80 scale.
-//
-// Damage roughly maps Slay-the-Spire turn values to "damage per cast" in
-// real-time. Slay's "Strike: 6 damage" stays 6 here. Block values likewise.
-// Vulnerable/Weak are now SECONDS — short so you have to commit to a
-// follow-up to capitalize, not free 3-turn debuffs.
+// Card system. Names + descriptions in Japanese for in-game readability.
+// Numbers tuned for the HP=80 scale (Slay-the-Spire-shaped).
 
 export const enum CardType {
   Attack = 0,
@@ -40,7 +36,7 @@ export const enum CardId {
 }
 
 export type CardEffect =
-  | { kind: "Damage"; amount: number; pierceBlock?: number }  // pierceBlock 0..1: fraction that ignores block
+  | { kind: "Damage"; amount: number; pierceBlock?: number }
   | { kind: "MultiHit"; damage: number; hits: number; pierceBlock?: number }
   | { kind: "Heal"; amount: number }
   | { kind: "Draw"; count: number }
@@ -75,11 +71,11 @@ export type CardEffect =
 export interface CardDef {
   id: CardId;
   name: string;
+  /** 1–2 sentence description in Japanese for tooltips and card faces. */
+  description: string;
   cardType: CardType;
   cost: number;
   effect: CardEffect;
-  /** chargeAttack=true: requires energy ≥ MAX_COST and consumes ALL of it. */
-  chargeAttack?: boolean;
   /** Cards that exhaust on play (don't return to discard). */
   exhausts?: boolean;
 }
@@ -87,88 +83,87 @@ export interface CardDef {
 const REG: Map<CardId, CardDef> = new Map();
 const def = (d: CardDef) => REG.set(d.id, d);
 
-// === Attacks ===
-def({ id: CardId.Strike,        name: "Strike",          cardType: CardType.Attack, cost: 1.0, effect: { kind: "Damage", amount: 6 } });
-def({ id: CardId.Bash,          name: "Bash",            cardType: CardType.Attack, cost: 2.0, effect: { kind: "Combo", effects: [{ kind: "Damage", amount: 8 }, { kind: "Vulnerable", duration: 3 }] } });
-def({ id: CardId.Anger,         name: "Anger",           cardType: CardType.Attack, cost: 0.5, effect: { kind: "Damage", amount: 6 } });
-def({ id: CardId.Cleave,        name: "Cleave",          cardType: CardType.Attack, cost: 1.0, effect: { kind: "Damage", amount: 8 } });
-def({ id: CardId.Clothesline,   name: "Clothesline",     cardType: CardType.Attack, cost: 2.0, effect: { kind: "Combo", effects: [{ kind: "Damage", amount: 12 }, { kind: "Weak", duration: 3 }] } });
-def({ id: CardId.Headbutt,      name: "Headbutt",        cardType: CardType.Attack, cost: 1.0, effect: { kind: "Damage", amount: 9 } });
-def({ id: CardId.IronWave,      name: "Iron Wave",       cardType: CardType.Attack, cost: 1.0, effect: { kind: "Combo", effects: [{ kind: "Damage", amount: 5 }, { kind: "Block", amount: 5 }] } });
-def({ id: CardId.PommelStrike,  name: "Pommel Strike",   cardType: CardType.Attack, cost: 1.0, effect: { kind: "Combo", effects: [{ kind: "Damage", amount: 9 }, { kind: "Draw", count: 1 }] } });
-def({ id: CardId.SwordBoomerang,name: "Sword Boomerang", cardType: CardType.Attack, cost: 1.0, effect: { kind: "MultiHit", damage: 3, hits: 3 } });
-def({ id: CardId.ThunderClap,   name: "Thunder Clap",    cardType: CardType.Attack, cost: 1.0, effect: { kind: "Combo", effects: [{ kind: "Damage", amount: 4 }, { kind: "Vulnerable", duration: 2 }] } });
-def({ id: CardId.TwinStrike,    name: "Twin Strike",     cardType: CardType.Attack, cost: 1.0, effect: { kind: "MultiHit", damage: 5, hits: 2 } });
-def({ id: CardId.WildStrike,    name: "Wild Strike",     cardType: CardType.Attack, cost: 1.0, effect: { kind: "Combo", effects: [{ kind: "Damage", amount: 12 }, { kind: "AddStatus", cardId: CardId.Wound }] } });
-def({ id: CardId.BodySlam,      name: "Body Slam",       cardType: CardType.Attack, cost: 1.0, effect: { kind: "BodySlam" } });
-def({ id: CardId.Carnage,       name: "Carnage",         cardType: CardType.Attack, cost: 2.0, effect: { kind: "Damage", amount: 20 }, exhausts: true });
-def({ id: CardId.Dropkick,      name: "Dropkick",        cardType: CardType.Attack, cost: 1.0, effect: { kind: "Combo", effects: [{ kind: "Damage", amount: 5 }, { kind: "Draw", count: 1 }, { kind: "Accelerate", bonusRate: 0.5, duration: 2 }] } });
-def({ id: CardId.Hemokinesis,   name: "Hemokinesis",     cardType: CardType.Attack, cost: 1.0, effect: { kind: "Combo", effects: [{ kind: "Bloodletting", amount: -2 }, { kind: "Damage", amount: 15 }] } });
-def({ id: CardId.Pummel,        name: "Pummel",          cardType: CardType.Attack, cost: 1.0, effect: { kind: "MultiHit", damage: 2, hits: 4 } });
-def({ id: CardId.Rampage,       name: "Rampage",         cardType: CardType.Attack, cost: 1.0, effect: { kind: "Damage", amount: 8 } });
-def({ id: CardId.RecklessCharge,name: "Reckless Charge", cardType: CardType.Attack, cost: 0.5, effect: { kind: "Combo", effects: [{ kind: "Damage", amount: 7 }, { kind: "AddStatus", cardId: CardId.Wound }] } });
-def({ id: CardId.SearingBlow,   name: "Searing Blow",    cardType: CardType.Attack, cost: 2.0, effect: { kind: "Damage", amount: 12 } });
-def({ id: CardId.Uppercut,      name: "Uppercut",        cardType: CardType.Attack, cost: 2.0, effect: { kind: "Combo", effects: [{ kind: "Damage", amount: 13 }, { kind: "Weak", duration: 2 }, { kind: "Vulnerable", duration: 2 }] } });
-def({ id: CardId.Whirlwind,     name: "Whirlwind",       cardType: CardType.Attack, cost: 3.0, effect: { kind: "MultiHit", damage: 5, hits: 3 } });
-// Bludgeon: classic finisher. Now a charge attack — requires full energy and drains it.
-def({ id: CardId.Bludgeon,      name: "Bludgeon",        cardType: CardType.Attack, cost: 5.0, effect: { kind: "Damage", amount: 32 }, chargeAttack: true });
-def({ id: CardId.Feed,          name: "Feed",            cardType: CardType.Attack, cost: 1.0, effect: { kind: "Combo", effects: [{ kind: "Damage", amount: 10 }, { kind: "Heal", amount: 3 }] }, exhausts: true });
-def({ id: CardId.FiendFire,     name: "Fiend Fire",      cardType: CardType.Attack, cost: 2.0, effect: { kind: "Damage", amount: 28, pierceBlock: 0.5 }, exhausts: true });
-def({ id: CardId.Immolate,      name: "Immolate",        cardType: CardType.Attack, cost: 2.0, effect: { kind: "Combo", effects: [{ kind: "Damage", amount: 21 }, { kind: "AddStatus", cardId: CardId.Burn }] } });
-def({ id: CardId.Reaper,        name: "Reaper",          cardType: CardType.Attack, cost: 2.0, effect: { kind: "Combo", effects: [{ kind: "Damage", amount: 4, pierceBlock: 1 }, { kind: "Heal", amount: 4 }] } });
+// === 攻撃 (Attacks) ===
+def({ id: CardId.Strike,        name: "打撃",         description: "6ダメージ。",                                         cardType: CardType.Attack, cost: 1.0, effect: { kind: "Damage", amount: 6 } });
+def({ id: CardId.Bash,          name: "強打",         description: "8ダメージ。相手に脆弱を3秒。",                       cardType: CardType.Attack, cost: 2.0, effect: { kind: "Combo", effects: [{ kind: "Damage", amount: 8 }, { kind: "Vulnerable", duration: 3 }] } });
+def({ id: CardId.Anger,         name: "怒り",         description: "6ダメージ。安いが特殊効果なし。",                    cardType: CardType.Attack, cost: 0.5, effect: { kind: "Damage", amount: 6 } });
+def({ id: CardId.Cleave,        name: "薙ぎ払い",     description: "8ダメージ。",                                         cardType: CardType.Attack, cost: 1.0, effect: { kind: "Damage", amount: 8 } });
+def({ id: CardId.Clothesline,   name: "ラリアット",   description: "12ダメージ。相手に弱体を3秒。",                       cardType: CardType.Attack, cost: 2.0, effect: { kind: "Combo", effects: [{ kind: "Damage", amount: 12 }, { kind: "Weak", duration: 3 }] } });
+def({ id: CardId.Headbutt,      name: "頭突き",       description: "9ダメージ。",                                         cardType: CardType.Attack, cost: 1.0, effect: { kind: "Damage", amount: 9 } });
+def({ id: CardId.IronWave,      name: "鉄の波動",     description: "5ダメージ + ブロック5。攻防一体。",                  cardType: CardType.Attack, cost: 1.0, effect: { kind: "Combo", effects: [{ kind: "Damage", amount: 5 }, { kind: "Block", amount: 5 }] } });
+def({ id: CardId.PommelStrike,  name: "柄打ち",       description: "9ダメージ。1枚ドロー。",                              cardType: CardType.Attack, cost: 1.0, effect: { kind: "Combo", effects: [{ kind: "Damage", amount: 9 }, { kind: "Draw", count: 1 }] } });
+def({ id: CardId.SwordBoomerang,name: "剣のブーメラン",description: "3ダメージを3回。多段ヒット。",                       cardType: CardType.Attack, cost: 1.0, effect: { kind: "MultiHit", damage: 3, hits: 3 } });
+def({ id: CardId.ThunderClap,   name: "雷鳴の拍手",   description: "4ダメージ。相手に脆弱を2秒。",                       cardType: CardType.Attack, cost: 1.0, effect: { kind: "Combo", effects: [{ kind: "Damage", amount: 4 }, { kind: "Vulnerable", duration: 2 }] } });
+def({ id: CardId.TwinStrike,    name: "二連撃",       description: "5ダメージを2回。",                                    cardType: CardType.Attack, cost: 1.0, effect: { kind: "MultiHit", damage: 5, hits: 2 } });
+def({ id: CardId.WildStrike,    name: "蛮撃",         description: "12ダメージ。山札に「傷」を1枚追加。",                cardType: CardType.Attack, cost: 1.0, effect: { kind: "Combo", effects: [{ kind: "Damage", amount: 12 }, { kind: "AddStatus", cardId: CardId.Wound }] } });
+def({ id: CardId.BodySlam,      name: "体当たり",     description: "現在のブロック値と同じダメージ。",                   cardType: CardType.Attack, cost: 1.0, effect: { kind: "BodySlam" } });
+def({ id: CardId.Carnage,       name: "殺戮",         description: "20ダメージ。1試合に1回限り。",                        cardType: CardType.Attack, cost: 2.0, effect: { kind: "Damage", amount: 20 }, exhausts: true });
+def({ id: CardId.Dropkick,      name: "ドロップキック",description: "5ダメージ。1枚ドロー。コスト+0.5/秒を2秒。",         cardType: CardType.Attack, cost: 1.0, effect: { kind: "Combo", effects: [{ kind: "Damage", amount: 5 }, { kind: "Draw", count: 1 }, { kind: "Accelerate", bonusRate: 0.5, duration: 2 }] } });
+def({ id: CardId.Hemokinesis,   name: "血操術",       description: "自分が2ダメージ。相手に15ダメージ。",                cardType: CardType.Attack, cost: 1.0, effect: { kind: "Combo", effects: [{ kind: "Bloodletting", amount: -2 }, { kind: "Damage", amount: 15 }] } });
+def({ id: CardId.Pummel,        name: "連打",         description: "2ダメージを4回。",                                    cardType: CardType.Attack, cost: 1.0, effect: { kind: "MultiHit", damage: 2, hits: 4 } });
+def({ id: CardId.Rampage,       name: "猛攻",         description: "8ダメージ。",                                         cardType: CardType.Attack, cost: 1.0, effect: { kind: "Damage", amount: 8 } });
+def({ id: CardId.RecklessCharge,name: "無謀な突進",   description: "7ダメージ。山札に「傷」を1枚追加。",                  cardType: CardType.Attack, cost: 0.5, effect: { kind: "Combo", effects: [{ kind: "Damage", amount: 7 }, { kind: "AddStatus", cardId: CardId.Wound }] } });
+def({ id: CardId.SearingBlow,   name: "灼熱の一撃",   description: "12ダメージ。",                                        cardType: CardType.Attack, cost: 2.0, effect: { kind: "Damage", amount: 12 } });
+def({ id: CardId.Uppercut,      name: "アッパーカット",description: "13ダメージ。弱体2秒+脆弱2秒。",                      cardType: CardType.Attack, cost: 2.0, effect: { kind: "Combo", effects: [{ kind: "Damage", amount: 13 }, { kind: "Weak", duration: 2 }, { kind: "Vulnerable", duration: 2 }] } });
+def({ id: CardId.Whirlwind,     name: "旋風",         description: "5ダメージを3回。",                                    cardType: CardType.Attack, cost: 3.0, effect: { kind: "MultiHit", damage: 5, hits: 3 } });
+def({ id: CardId.Bludgeon,      name: "重撃",         description: "32ダメージ。コスト3の決め技。",                       cardType: CardType.Attack, cost: 3.0, effect: { kind: "Damage", amount: 32 } });
+def({ id: CardId.Feed,          name: "捕食",         description: "10ダメージ + 自分を3回復。1試合に1回限り。",          cardType: CardType.Attack, cost: 1.0, effect: { kind: "Combo", effects: [{ kind: "Damage", amount: 10 }, { kind: "Heal", amount: 3 }] }, exhausts: true });
+def({ id: CardId.FiendFire,     name: "鬼火",         description: "28ダメージ。半分はブロック貫通。1試合に1回限り。",   cardType: CardType.Attack, cost: 2.0, effect: { kind: "Damage", amount: 28, pierceBlock: 0.5 }, exhausts: true });
+def({ id: CardId.Immolate,      name: "焼却",         description: "21ダメージ。捨て札に「火傷」を追加。",               cardType: CardType.Attack, cost: 2.0, effect: { kind: "Combo", effects: [{ kind: "Damage", amount: 21 }, { kind: "AddStatus", cardId: CardId.Burn }] } });
+def({ id: CardId.Reaper,        name: "死神",         description: "4ダメージ(ブロック貫通)+ 4回復。",                    cardType: CardType.Attack, cost: 2.0, effect: { kind: "Combo", effects: [{ kind: "Damage", amount: 4, pierceBlock: 1 }, { kind: "Heal", amount: 4 }] } });
 
-// === Skills ===
-def({ id: CardId.Defend,        name: "Defend",          cardType: CardType.Skill,  cost: 1.0, effect: { kind: "Block", amount: 5 } });
-def({ id: CardId.Armaments,     name: "Armaments",       cardType: CardType.Skill,  cost: 1.0, effect: { kind: "Block", amount: 5 } });
-def({ id: CardId.Flex,          name: "Flex",            cardType: CardType.Skill,  cost: 0.5, effect: { kind: "Strength", amount: 2 } });
-def({ id: CardId.Havoc,         name: "Havoc",           cardType: CardType.Skill,  cost: 1.0, effect: { kind: "Draw", count: 1 } });
-def({ id: CardId.ShrugItOff,    name: "Shrug It Off",    cardType: CardType.Skill,  cost: 1.0, effect: { kind: "Combo", effects: [{ kind: "Block", amount: 8 }, { kind: "Draw", count: 1 }] } });
-def({ id: CardId.TrueGrit,      name: "True Grit",       cardType: CardType.Skill,  cost: 1.0, effect: { kind: "Block", amount: 7 } });
-def({ id: CardId.Warcry,        name: "Warcry",          cardType: CardType.Skill,  cost: 0.5, effect: { kind: "Draw", count: 2 }, exhausts: true });
-def({ id: CardId.BattleTrance,  name: "Battle Trance",   cardType: CardType.Skill,  cost: 0.5, effect: { kind: "Draw", count: 3 } });
-def({ id: CardId.Bloodletting,  name: "Bloodletting",    cardType: CardType.Skill,  cost: 0.5, effect: { kind: "Combo", effects: [{ kind: "Bloodletting", amount: -3 }, { kind: "Accelerate", bonusRate: 1, duration: 5 }] } });
-def({ id: CardId.BurningPact,   name: "Burning Pact",    cardType: CardType.Skill,  cost: 1.0, effect: { kind: "Draw", count: 2 } });
-def({ id: CardId.Disarm,        name: "Disarm",          cardType: CardType.Skill,  cost: 1.0, effect: { kind: "Weak", duration: 4 }, exhausts: true });
-def({ id: CardId.Entrench,      name: "Entrench",        cardType: CardType.Skill,  cost: 2.0, effect: { kind: "DoubleBlock" } });
-def({ id: CardId.FlameBarrier,  name: "Flame Barrier",   cardType: CardType.Skill,  cost: 2.0, effect: { kind: "Combo", effects: [{ kind: "Block", amount: 12 }, { kind: "Thorns", amount: 4 }] } });
-def({ id: CardId.GhostlyArmor,  name: "Ghostly Armor",   cardType: CardType.Skill,  cost: 1.0, effect: { kind: "Block", amount: 10 }, exhausts: true });
-def({ id: CardId.InfernalBlade, name: "Infernal Blade",  cardType: CardType.Skill,  cost: 1.0, effect: { kind: "Draw", count: 2 }, exhausts: true });
-def({ id: CardId.Intimidate,    name: "Intimidate",      cardType: CardType.Skill,  cost: 0.5, effect: { kind: "Weak", duration: 2 } });
-def({ id: CardId.PowerThrough,  name: "Power Through",   cardType: CardType.Skill,  cost: 1.0, effect: { kind: "Combo", effects: [{ kind: "Block", amount: 15 }, { kind: "AddStatus", cardId: CardId.Wound }, { kind: "AddStatus", cardId: CardId.Wound }] } });
-def({ id: CardId.Rage,          name: "Rage",            cardType: CardType.Skill,  cost: 0.5, effect: { kind: "Rage", blockPerAttack: 3 } });
-def({ id: CardId.SecondWind,    name: "Second Wind",     cardType: CardType.Skill,  cost: 1.0, effect: { kind: "Block", amount: 20 }, exhausts: true });
-def({ id: CardId.SeeingRed,     name: "Seeing Red",      cardType: CardType.Skill,  cost: 1.0, effect: { kind: "Accelerate", bonusRate: 1.5, duration: 4 } });
-def({ id: CardId.Sentinel,      name: "Sentinel",        cardType: CardType.Skill,  cost: 1.0, effect: { kind: "Block", amount: 5 } });
-def({ id: CardId.Shockwave,     name: "Shockwave",       cardType: CardType.Skill,  cost: 2.0, effect: { kind: "Combo", effects: [{ kind: "Weak", duration: 3 }, { kind: "Vulnerable", duration: 3 }] }, exhausts: true });
-def({ id: CardId.SpotWeakness,  name: "Spot Weakness",   cardType: CardType.Skill,  cost: 1.0, effect: { kind: "Strength", amount: 3 } });
-def({ id: CardId.DoubleTap,     name: "Double Tap",      cardType: CardType.Skill,  cost: 1.0, effect: { kind: "Draw", count: 1 } });
-def({ id: CardId.Exhume,        name: "Exhume",          cardType: CardType.Skill,  cost: 1.0, effect: { kind: "Draw", count: 2 }, exhausts: true });
-def({ id: CardId.Impervious,    name: "Impervious",      cardType: CardType.Skill,  cost: 2.0, effect: { kind: "Block", amount: 30 }, exhausts: true });
-def({ id: CardId.LimitBreak,    name: "Limit Break",     cardType: CardType.Skill,  cost: 1.0, effect: { kind: "DoubleStrength" }, exhausts: true });
-def({ id: CardId.Offering,      name: "Offering",        cardType: CardType.Skill,  cost: 0.5, effect: { kind: "Combo", effects: [{ kind: "Bloodletting", amount: -6 }, { kind: "Accelerate", bonusRate: 2, duration: 5 }, { kind: "Draw", count: 3 }] }, exhausts: true });
+// === スキル (Skills) ===
+def({ id: CardId.Defend,        name: "防御",         description: "ブロック5。",                                          cardType: CardType.Skill,  cost: 1.0, effect: { kind: "Block", amount: 5 } });
+def({ id: CardId.Armaments,     name: "武装",         description: "ブロック5。",                                          cardType: CardType.Skill,  cost: 1.0, effect: { kind: "Block", amount: 5 } });
+def({ id: CardId.Flex,          name: "誇示",         description: "筋力+2。",                                            cardType: CardType.Skill,  cost: 0.5, effect: { kind: "Strength", amount: 2 } });
+def({ id: CardId.Havoc,         name: "撹乱",         description: "1枚ドロー。",                                          cardType: CardType.Skill,  cost: 1.0, effect: { kind: "Draw", count: 1 } });
+def({ id: CardId.ShrugItOff,    name: "受け流し",     description: "ブロック8 + 1枚ドロー。",                              cardType: CardType.Skill,  cost: 1.0, effect: { kind: "Combo", effects: [{ kind: "Block", amount: 8 }, { kind: "Draw", count: 1 }] } });
+def({ id: CardId.TrueGrit,      name: "不屈",         description: "ブロック7。",                                          cardType: CardType.Skill,  cost: 1.0, effect: { kind: "Block", amount: 7 } });
+def({ id: CardId.Warcry,        name: "鬨の声",       description: "2枚ドロー。1試合に1回限り。",                         cardType: CardType.Skill,  cost: 0.5, effect: { kind: "Draw", count: 2 }, exhausts: true });
+def({ id: CardId.BattleTrance,  name: "戦闘トランス", description: "3枚ドロー。",                                          cardType: CardType.Skill,  cost: 0.5, effect: { kind: "Draw", count: 3 } });
+def({ id: CardId.Bloodletting,  name: "瀉血",         description: "自分が3ダメージ。コスト+1/秒を5秒。",                cardType: CardType.Skill,  cost: 0.5, effect: { kind: "Combo", effects: [{ kind: "Bloodletting", amount: -3 }, { kind: "Accelerate", bonusRate: 1, duration: 5 }] } });
+def({ id: CardId.BurningPact,   name: "焦熱の契約",   description: "2枚ドロー。",                                          cardType: CardType.Skill,  cost: 1.0, effect: { kind: "Draw", count: 2 } });
+def({ id: CardId.Disarm,        name: "武装解除",     description: "相手に弱体を4秒。1試合に1回限り。",                  cardType: CardType.Skill,  cost: 1.0, effect: { kind: "Weak", duration: 4 }, exhausts: true });
+def({ id: CardId.Entrench,      name: "塹壕",         description: "現在のブロックを2倍にする。",                         cardType: CardType.Skill,  cost: 2.0, effect: { kind: "DoubleBlock" } });
+def({ id: CardId.FlameBarrier,  name: "炎の障壁",     description: "ブロック12 + 棘4。",                                  cardType: CardType.Skill,  cost: 2.0, effect: { kind: "Combo", effects: [{ kind: "Block", amount: 12 }, { kind: "Thorns", amount: 4 }] } });
+def({ id: CardId.GhostlyArmor,  name: "幽霊鎧",       description: "ブロック10。1試合に1回限り。",                        cardType: CardType.Skill,  cost: 1.0, effect: { kind: "Block", amount: 10 }, exhausts: true });
+def({ id: CardId.InfernalBlade, name: "地獄の刃",     description: "2枚ドロー。1試合に1回限り。",                         cardType: CardType.Skill,  cost: 1.0, effect: { kind: "Draw", count: 2 }, exhausts: true });
+def({ id: CardId.Intimidate,    name: "威嚇",         description: "相手に弱体を2秒。",                                   cardType: CardType.Skill,  cost: 0.5, effect: { kind: "Weak", duration: 2 } });
+def({ id: CardId.PowerThrough,  name: "底力",         description: "ブロック15。手札に「傷」を2枚追加。",                cardType: CardType.Skill,  cost: 1.0, effect: { kind: "Combo", effects: [{ kind: "Block", amount: 15 }, { kind: "AddStatus", cardId: CardId.Wound }, { kind: "AddStatus", cardId: CardId.Wound }] } });
+def({ id: CardId.Rage,          name: "激昂",         description: "10秒間、攻撃を撃つたびにブロック+3。",               cardType: CardType.Skill,  cost: 0.5, effect: { kind: "Rage", blockPerAttack: 3 } });
+def({ id: CardId.SecondWind,    name: "再起",         description: "ブロック20。1試合に1回限り。",                        cardType: CardType.Skill,  cost: 1.0, effect: { kind: "Block", amount: 20 }, exhausts: true });
+def({ id: CardId.SeeingRed,     name: "赤を見る",     description: "コスト+1.5/秒を4秒。",                                cardType: CardType.Skill,  cost: 1.0, effect: { kind: "Accelerate", bonusRate: 1.5, duration: 4 } });
+def({ id: CardId.Sentinel,      name: "歩哨",         description: "ブロック5。",                                          cardType: CardType.Skill,  cost: 1.0, effect: { kind: "Block", amount: 5 } });
+def({ id: CardId.Shockwave,     name: "衝撃波",       description: "相手に弱体3秒+脆弱3秒。1試合に1回限り。",            cardType: CardType.Skill,  cost: 2.0, effect: { kind: "Combo", effects: [{ kind: "Weak", duration: 3 }, { kind: "Vulnerable", duration: 3 }] }, exhausts: true });
+def({ id: CardId.SpotWeakness,  name: "弱点看破",     description: "筋力+3。",                                            cardType: CardType.Skill,  cost: 1.0, effect: { kind: "Strength", amount: 3 } });
+def({ id: CardId.DoubleTap,     name: "二段撃ち",     description: "1枚ドロー。",                                          cardType: CardType.Skill,  cost: 1.0, effect: { kind: "Draw", count: 1 } });
+def({ id: CardId.Exhume,        name: "発掘",         description: "2枚ドロー。1試合に1回限り。",                         cardType: CardType.Skill,  cost: 1.0, effect: { kind: "Draw", count: 2 }, exhausts: true });
+def({ id: CardId.Impervious,    name: "鉄壁",         description: "ブロック30。1試合に1回限り。",                        cardType: CardType.Skill,  cost: 2.0, effect: { kind: "Block", amount: 30 }, exhausts: true });
+def({ id: CardId.LimitBreak,    name: "限界突破",     description: "現在の筋力を2倍にする。1試合に1回限り。",            cardType: CardType.Skill,  cost: 1.0, effect: { kind: "DoubleStrength" }, exhausts: true });
+def({ id: CardId.Offering,      name: "供物",         description: "自分が6ダメージ。コスト+2/秒を5秒。3枚ドロー。1試合に1回限り。", cardType: CardType.Skill,  cost: 0.5, effect: { kind: "Combo", effects: [{ kind: "Bloodletting", amount: -6 }, { kind: "Accelerate", bonusRate: 2, duration: 5 }, { kind: "Draw", count: 3 }] }, exhausts: true });
 
-// === Powers (more expensive — they're permanent) ===
-def({ id: CardId.Combust,       name: "Combust",         cardType: CardType.Power,  cost: 2.0, effect: { kind: "Combust", selfDmgPerSec: 0.5, enemyDmgPerSec: 2.5 } });
-def({ id: CardId.DarkEmbrace,   name: "Dark Embrace",    cardType: CardType.Power,  cost: 3.0, effect: { kind: "DarkEmbrace", draw: 1 } });
-def({ id: CardId.Evolve,        name: "Evolve",          cardType: CardType.Power,  cost: 2.0, effect: { kind: "Evolve", draw: 1 } });
-def({ id: CardId.FeelNoPain,    name: "Feel No Pain",    cardType: CardType.Power,  cost: 2.0, effect: { kind: "FeelNoPain", block: 3 } });
-def({ id: CardId.FireBreathing, name: "Fire Breathing",  cardType: CardType.Power,  cost: 2.0, effect: { kind: "FireBreathing", damage: 6 } });
-def({ id: CardId.Inflame,       name: "Inflame",         cardType: CardType.Power,  cost: 2.0, effect: { kind: "Strength", amount: 2 } });
-def({ id: CardId.Metallicize,   name: "Metallicize",     cardType: CardType.Power,  cost: 2.0, effect: { kind: "Metallicize", blockPerSecond: 3 } });
-def({ id: CardId.Rupture,       name: "Rupture",         cardType: CardType.Power,  cost: 2.0, effect: { kind: "Rupture", strength: 1 } });
-def({ id: CardId.Barricade,     name: "Barricade",       cardType: CardType.Power,  cost: 4.0, effect: { kind: "Barricade" } });
-def({ id: CardId.Berserk,       name: "Berserk",         cardType: CardType.Power,  cost: 1.0, effect: { kind: "Combo", effects: [{ kind: "SelfVulnerable", duration: 2 }, { kind: "Accelerate", bonusRate: 0.5, duration: 999 }] } });
-def({ id: CardId.Brutality,     name: "Brutality",       cardType: CardType.Power,  cost: 1.0, effect: { kind: "Brutality", selfDmgPerSec: 0.5, draw: 1, drawInterval: 3 } });
-def({ id: CardId.Corruption,    name: "Corruption",      cardType: CardType.Power,  cost: 4.0, effect: { kind: "Corruption" } });
-def({ id: CardId.DemonForm,     name: "Demon Form",      cardType: CardType.Power,  cost: 4.0, effect: { kind: "DemonForm", strengthPerSecond: 0.4 } });
-def({ id: CardId.Juggernaut,    name: "Juggernaut",      cardType: CardType.Power,  cost: 3.0, effect: { kind: "Juggernaut", damageOnBlock: 5 } });
+// === パワー (Powers — 永続効果) ===
+def({ id: CardId.Combust,       name: "燃焼",         description: "毎秒、自分0.5ダメージ・相手2.5ダメージ。",            cardType: CardType.Power,  cost: 2.0, effect: { kind: "Combust", selfDmgPerSec: 0.5, enemyDmgPerSec: 2.5 } });
+def({ id: CardId.DarkEmbrace,   name: "闇の抱擁",     description: "カードが除外されるたびに1枚ドロー。",                cardType: CardType.Power,  cost: 3.0, effect: { kind: "DarkEmbrace", draw: 1 } });
+def({ id: CardId.Evolve,        name: "進化",         description: "状態カードを引くたびに1枚ドロー。",                  cardType: CardType.Power,  cost: 2.0, effect: { kind: "Evolve", draw: 1 } });
+def({ id: CardId.FeelNoPain,    name: "痛覚遮断",     description: "カードが除外されるたびにブロック+3。",                cardType: CardType.Power,  cost: 2.0, effect: { kind: "FeelNoPain", block: 3 } });
+def({ id: CardId.FireBreathing, name: "火炎放射",     description: "状態カードを引くたびに相手に6ダメージ。",            cardType: CardType.Power,  cost: 2.0, effect: { kind: "FireBreathing", damage: 6 } });
+def({ id: CardId.Inflame,       name: "炎上",         description: "筋力+2(永続)。",                                      cardType: CardType.Power,  cost: 2.0, effect: { kind: "Strength", amount: 2 } });
+def({ id: CardId.Metallicize,   name: "金属化",       description: "毎秒ブロック+3。",                                    cardType: CardType.Power,  cost: 2.0, effect: { kind: "Metallicize", blockPerSecond: 3 } });
+def({ id: CardId.Rupture,       name: "破裂",         description: "自傷ダメージを受けるたびに筋力+1。",                 cardType: CardType.Power,  cost: 2.0, effect: { kind: "Rupture", strength: 1 } });
+def({ id: CardId.Barricade,     name: "防壁",         description: "ブロックが減少しなくなる。",                          cardType: CardType.Power,  cost: 4.0, effect: { kind: "Barricade" } });
+def({ id: CardId.Berserk,       name: "狂戦士",       description: "自分に脆弱2秒。コスト+0.5/秒(永続)。",                cardType: CardType.Power,  cost: 1.0, effect: { kind: "Combo", effects: [{ kind: "SelfVulnerable", duration: 2 }, { kind: "Accelerate", bonusRate: 0.5, duration: 999 }] } });
+def({ id: CardId.Brutality,     name: "残虐",         description: "毎秒自分0.5ダメージ。3秒ごとに1枚ドロー。",          cardType: CardType.Power,  cost: 1.0, effect: { kind: "Brutality", selfDmgPerSec: 0.5, draw: 1, drawInterval: 3 } });
+def({ id: CardId.Corruption,    name: "腐敗",         description: "スキルのコスト0、ただし全て除外される。",            cardType: CardType.Power,  cost: 4.0, effect: { kind: "Corruption" } });
+def({ id: CardId.DemonForm,     name: "悪魔の姿",     description: "毎秒、筋力が0.4ずつ増加。",                          cardType: CardType.Power,  cost: 4.0, effect: { kind: "DemonForm", strengthPerSecond: 0.4 } });
+def({ id: CardId.Juggernaut,    name: "巨獣",         description: "ブロックを得るたびに相手に5ダメージ。",              cardType: CardType.Power,  cost: 3.0, effect: { kind: "Juggernaut", damageOnBlock: 5 } });
 
-// === Status (junk cards — clog hand) ===
-def({ id: CardId.Dazed,  name: "Dazed",  cardType: CardType.Status, cost: 999, effect: { kind: "Exhaust" }, exhausts: true });
-def({ id: CardId.Wound,  name: "Wound",  cardType: CardType.Status, cost: 999, effect: { kind: "Exhaust" }, exhausts: true });
-def({ id: CardId.Burn,   name: "Burn",   cardType: CardType.Status, cost: 999, effect: { kind: "Bloodletting", amount: -2 }, exhausts: true });
-def({ id: CardId.Slimed, name: "Slimed", cardType: CardType.Status, cost: 1,   effect: { kind: "Exhaust" }, exhausts: true });
-def({ id: CardId.Void,   name: "Void",   cardType: CardType.Status, cost: 999, effect: { kind: "Exhaust" }, exhausts: true });
+// === 状態カード (Status — junk that clogs the hand) ===
+def({ id: CardId.Dazed,  name: "幻惑", description: "プレイ不可。手札を圧迫する。",                              cardType: CardType.Status, cost: 999, effect: { kind: "Exhaust" }, exhausts: true });
+def({ id: CardId.Wound,  name: "傷",   description: "プレイ不可。",                                              cardType: CardType.Status, cost: 999, effect: { kind: "Exhaust" }, exhausts: true });
+def({ id: CardId.Burn,   name: "火傷", description: "プレイすると自分が2ダメージ。",                            cardType: CardType.Status, cost: 999, effect: { kind: "Bloodletting", amount: -2 }, exhausts: true });
+def({ id: CardId.Slimed, name: "粘液", description: "コスト1で何も起こらず除外される。",                        cardType: CardType.Status, cost: 1,   effect: { kind: "Exhaust" }, exhausts: true });
+def({ id: CardId.Void,   name: "虚無", description: "プレイ不可。",                                              cardType: CardType.Status, cost: 999, effect: { kind: "Exhaust" }, exhausts: true });
 
 export const getCardDef = (id: CardId): CardDef | undefined => REG.get(id);
 export const allCards = (): CardDef[] => Array.from(REG.values());

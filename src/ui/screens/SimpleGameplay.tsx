@@ -2,11 +2,12 @@
 // you can A/B numbers without being seduced by visual polish.
 //
 // Same input path as the 3D view: clicks/keys go through getSession().pushLocalInput.
+// Re-renders are driven by the store's gameFrame counter (subscribed in App).
 
-import { useEffect, useState } from "react";
-import { CardType, getCardDef } from "../../sim/cards";
+import { useState } from "react";
+import { CardEffect, CardType, getCardDef } from "../../sim/cards";
 import { cardFlag, INPUT_DRAW } from "../../sim/input";
-import { COMBO_WINDOW, DRAW_COST } from "../../sim/rules";
+import { DRAW_COST } from "../../sim/rules";
 import { PlayerState } from "../../sim/state";
 import { getSession, useKeyboardInput } from "../hooks";
 import { useStore } from "../store";
@@ -14,15 +15,10 @@ import { useStore } from "../store";
 export function SimpleGameplay() {
   useKeyboardInput();
   const game = useStore((s) => s.game);
+  // Subscribe to per-frame ticks so bars update every sim step (60Hz).
+  useStore((s) => s.gameFrame);
   const localPlayer = useStore((s) => s.localPlayer);
   const setScreen = useStore((s) => s.setScreen);
-
-  // Force re-render at ~30Hz so the bars track the sim.
-  const [, setT] = useState(0);
-  useEffect(() => {
-    const id = setInterval(() => setT((t) => t + 1), 33);
-    return () => clearInterval(id);
-  }, []);
 
   if (!game) return null;
   const me = game.players[localPlayer];
@@ -31,18 +27,13 @@ export function SimpleGameplay() {
   return (
     <div style={page}>
       <div style={topBar}>
-        <button style={ghostBtn} onClick={() => setScreen("title")}>← Title</button>
-        <span style={{ opacity: 0.6, fontSize: 12 }}>frame {game.frame} · simple view</span>
+        <button style={ghostBtn} onClick={() => setScreen("title")}>← タイトル</button>
+        <span style={{ opacity: 0.6, fontSize: 12 }}>frame {game.frame} · 2D</span>
       </div>
 
-      {/* Opponent panel */}
-      <PlayerPanel player={op} title="OPPONENT" mirrored />
-
+      <PlayerPanel player={op} title="相手" mirrored />
       <Center game={game} />
-
-      {/* Self panel */}
-      <PlayerPanel player={me} title="YOU" />
-
+      <PlayerPanel player={me} title="自分" />
       <SelfHand player={me} />
     </div>
   );
@@ -51,35 +42,37 @@ export function SimpleGameplay() {
 function Center({ game }: { game: any }) {
   const result = game.result as 0 | 1 | 2 | 3;
   if (result === 0) return null;
-  const text = result === 1 ? "P0 WINS" : result === 2 ? "P1 WINS" : "DRAW";
-  return (
-    <div style={banner}>{text}</div>
-  );
+  const text = result === 1 ? "P0 勝利" : result === 2 ? "P1 勝利" : "引き分け";
+  return <div style={banner}>{text}</div>;
 }
 
 function PlayerPanel({ player, title, mirrored = false }: { player: PlayerState; title: string; mirrored?: boolean }) {
   const hpPct = player.hp / player.hpMax;
-  const energyPct = player.cost / player.costMax;
   return (
     <div style={{ ...panel, flexDirection: mirrored ? "row-reverse" : "row" }}>
       <div style={{ flex: 1 }}>
         <div style={panelLabel}>{title}</div>
-        <Bar pct={hpPct} color={hpPct > 0.4 ? "#34c759" : hpPct > 0.2 ? "#ffcc00" : "#ff3b30"} label={`${Math.round(player.hp)} / ${player.hpMax} HP`} flash={false} />
-        <Bar pct={energyPct} color="#ffd166" label={`${player.cost.toFixed(1)} / ${player.costMax} energy (+${player.costRate.toFixed(2)}/s)`} small />
-        <div style={pill("#5fa0e0")}>Block {Math.round(player.block)}</div>
-        {player.thorns > 0 && <div style={pill("#ff9f43")}>Thorns {Math.round(player.thorns)}</div>}
-        {player.strength !== 0 && <div style={pill("#ff6961")}>Str {player.strength > 0 ? "+" : ""}{player.strength}</div>}
-        {player.vulnerableSecs > 0 && <div style={pill("#ff8a00")}>Vuln {player.vulnerableSecs.toFixed(1)}s</div>}
-        {player.weakSecs > 0 && <div style={pill("#a899ff")}>Weak {player.weakSecs.toFixed(1)}s</div>}
-        {player.metallicize && <div style={pill("#9bb")}>Metallicize +{player.metallicize.blockPerSec}/s</div>}
-        {player.combust && <div style={pill("#ff5757")}>Combust {player.combust.enemyPerSec}/s</div>}
-        {player.demonForm && <div style={pill("#c050ff")}>DemonForm +{player.demonForm.strengthPerSec}str/s</div>}
-        {player.barricade && <div style={pill("#80ffe0")}>Barricade</div>}
+        <Bar pct={hpPct} color={hpPct > 0.4 ? "#34c759" : hpPct > 0.2 ? "#ffcc00" : "#ff3b30"}
+             label={`HP ${Math.round(player.hp)} / ${player.hpMax}`} />
+        <Bar pct={Math.min(1, player.cost / 5)} color="#ffd166"
+             label={`エネルギー ${player.cost.toFixed(1)} (+${player.costRate.toFixed(2)}/秒)`} small />
+        <div style={pillRow}>
+          <span style={pill("#5fa0e0")}>ブロック {Math.round(player.block)}</span>
+          {player.thorns > 0 && <span style={pill("#ff9f43")}>棘 {Math.round(player.thorns)}</span>}
+          {player.strength !== 0 && <span style={pill("#ff6961")}>筋力 {player.strength > 0 ? "+" : ""}{player.strength}</span>}
+          {player.vulnerableSecs > 0 && <span style={pill("#ff8a00")}>脆弱 {player.vulnerableSecs.toFixed(1)}秒</span>}
+          {player.weakSecs > 0 && <span style={pill("#a899ff")}>弱体 {player.weakSecs.toFixed(1)}秒</span>}
+          {player.metallicize && <span style={pill("#9bb")}>金属化 +{player.metallicize.blockPerSec}/秒</span>}
+          {player.combust && <span style={pill("#ff5757")}>燃焼 {player.combust.enemyPerSec}/秒</span>}
+          {player.demonForm && <span style={pill("#c050ff")}>悪魔の姿 +{player.demonForm.strengthPerSec}筋力/秒</span>}
+          {player.barricade && <span style={pill("#80ffe0")}>防壁</span>}
+          {player.corruption && <span style={pill("#aa6688")}>腐敗</span>}
+        </div>
       </div>
       <div style={pileStack}>
-        <Pile label="Deck" n={player.deck.length} color="#5b9eff" />
-        <Pile label="Discard" n={player.discard.length} color="#ff7a8a" />
-        <Pile label="Hand" n={player.hand.length} color="#cccccc" />
+        <Pile label="山札" n={player.deck.length} color="#5b9eff" />
+        <Pile label="捨札" n={player.discard.length} color="#ff7a8a" />
+        <Pile label="手札" n={player.hand.length} color="#cccccc" />
       </div>
     </div>
   );
@@ -98,17 +91,11 @@ function SelfHand({ player }: { player: PlayerState }) {
 
 function SimpleCard({ cardId, idx, player }: { cardId: number; idx: number; player: PlayerState }) {
   const def = getCardDef(cardId);
+  const [hover, setHover] = useState(false);
   if (!def) return null;
   const isCorruptionDiscount = !!player.corruption && def.cardType === CardType.Skill;
-  const now = (useStore.getState().game?.frame ?? 0) / 60;
-  const isComboReady =
-    player.lastPlayedCard === cardId && now - player.lastPlayedAt < COMBO_WINDOW;
-  const baseCost = isCorruptionDiscount ? 0 : def.cost;
-  const effectiveCost = isComboReady ? baseCost * 0.5 : baseCost;
-  const isCharge = !!def.chargeAttack;
-  const playable =
-    def.cost !== 999 &&
-    (isCharge ? player.cost >= player.costMax - 0.01 : player.cost >= effectiveCost);
+  const cost = isCorruptionDiscount ? 0 : def.cost;
+  const playable = def.cost !== 999 && player.cost >= cost;
 
   const onClick = () => {
     const flag = cardFlag(idx);
@@ -116,49 +103,93 @@ function SimpleCard({ cardId, idx, player }: { cardId: number; idx: number; play
   };
 
   return (
-    <button
-      onClick={onClick}
-      disabled={!playable}
-      style={{
-        ...cardStyle,
-        background: typeColor(def.cardType, playable),
-        cursor: playable ? "pointer" : "not-allowed",
-        boxShadow: isComboReady ? "0 0 16px #ffe066" : (playable ? "0 4px 12px rgba(0,0,0,0.4)" : "none"),
-        opacity: playable ? 1 : 0.5,
-      }}
-      title={effectLabel(def.effect)}
+    <div
+      style={{ position: "relative" }}
+      onMouseEnter={() => setHover(true)}
+      onMouseLeave={() => setHover(false)}
     >
-      <div style={cardCost(isComboReady)}>
-        {def.cost === 999 ? "✗" : isCharge ? "★" : effectiveCost.toFixed(1).replace(".0", "")}
-        {isComboReady && <span style={{ fontSize: 9, marginLeft: 2, color: "#ffe066" }}>combo</span>}
+      <button
+        onClick={onClick}
+        disabled={!playable}
+        style={{
+          ...cardStyle,
+          background: typeColor(def.cardType, playable),
+          cursor: playable ? "pointer" : "not-allowed",
+          boxShadow: playable ? "0 4px 12px rgba(0,0,0,0.4)" : "none",
+          opacity: playable ? 1 : 0.55,
+          outline: def.exhausts ? "1px solid #ffaa55" : "none",
+        }}
+      >
+        <div style={cardCostStyle}>
+          {def.cost === 999 ? "✗" : cost % 1 === 0 ? cost.toFixed(0) : cost.toFixed(1)}
+        </div>
+        <div style={typeBadge}>
+          {def.cardType === CardType.Attack ? "攻撃"
+            : def.cardType === CardType.Skill ? "技"
+            : def.cardType === CardType.Power ? "パワー"
+            : "状態"}
+          {def.exhausts && " · 1回限り"}
+        </div>
+        <div style={cardHeader}>{def.name}</div>
+        <div style={cardEffect}>{def.description}</div>
+        <div style={cardKeyHint}>{idx === 9 ? "0" : (idx + 1).toString()}</div>
+      </button>
+      {hover && <Tooltip def={def} />}
+    </div>
+  );
+}
+
+function Tooltip({ def }: { def: ReturnType<typeof getCardDef> }) {
+  if (!def) return null;
+  return (
+    <div style={tooltipBox}>
+      <div style={tooltipTitle}>{def.name}</div>
+      <div style={tooltipMeta}>
+        {def.cardType === CardType.Attack ? "攻撃"
+          : def.cardType === CardType.Skill ? "技"
+          : def.cardType === CardType.Power ? "パワー"
+          : "状態"}
+        {" · "}コスト {def.cost === 999 ? "—" : def.cost}
+        {def.exhausts && " · 1回限り(除外)"}
       </div>
-      <div style={cardHeader}>{def.name}</div>
-      <div style={cardEffect}>{effectLabel(def.effect)}</div>
-      <div style={cardKeyHint}>{idx === 9 ? "0" : (idx + 1).toString()}</div>
-    </button>
+      <div style={tooltipBody}>{def.description}</div>
+      <div style={tooltipMeta}>効果: {effectText(def.effect)}</div>
+    </div>
   );
 }
 
 function DrawCard({ player }: { player: PlayerState }) {
   const ok = player.cost >= DRAW_COST;
+  const [hover, setHover] = useState(false);
   return (
-    <button
-      style={{ ...cardStyle, ...drawCard, opacity: ok ? 1 : 0.5, cursor: ok ? "pointer" : "not-allowed" }}
-      onClick={() => getSession()?.pushLocalInput(INPUT_DRAW)}
-    >
-      <div style={cardCost(false)}>{DRAW_COST}</div>
-      <div style={cardHeader}>Draw</div>
-      <div style={cardEffect}>Draw 1 card</div>
-      <div style={cardKeyHint}>D</div>
-    </button>
+    <div style={{ position: "relative" }} onMouseEnter={() => setHover(true)} onMouseLeave={() => setHover(false)}>
+      <button
+        style={{ ...cardStyle, ...drawCard, opacity: ok ? 1 : 0.55, cursor: ok ? "pointer" : "not-allowed" }}
+        onClick={() => getSession()?.pushLocalInput(INPUT_DRAW)}
+      >
+        <div style={cardCostStyle}>{DRAW_COST}</div>
+        <div style={typeBadge}>ドロー</div>
+        <div style={cardHeader}>引く</div>
+        <div style={cardEffect}>山札から1枚引く。</div>
+        <div style={cardKeyHint}>D</div>
+      </button>
+      {hover && (
+        <div style={tooltipBox}>
+          <div style={tooltipTitle}>ドロー</div>
+          <div style={tooltipBody}>エネルギーを{DRAW_COST}消費して山札から1枚引く。山札が尽きたら捨札をシャッフルして補充。</div>
+        </div>
+      )}
+    </div>
   );
 }
 
-function Bar({ pct, color, label, small = false, flash = false }: { pct: number; color: string; label: string; small?: boolean; flash?: boolean }) {
+function Bar({ pct, color, label, small = false }: { pct: number; color: string; label: string; small?: boolean }) {
   return (
     <div style={{ marginBottom: 6 }}>
       <div style={{ ...barTrack, height: small ? 10 : 18 }}>
-        <div style={{ width: `${Math.max(0, Math.min(100, pct * 100))}%`, height: "100%", background: color, transition: "width 0.15s ease-out", boxShadow: flash ? "0 0 12px white" : "none" }} />
+        {/* No CSS transition — width updates instantly so the bar tracks the
+            simulation step exactly instead of trailing behind. */}
+        <div style={{ width: `${Math.max(0, Math.min(100, pct * 100))}%`, height: "100%", background: color }} />
       </div>
       <div style={{ fontSize: 11, opacity: 0.75, marginTop: 2 }}>{label}</div>
     </div>
@@ -174,50 +205,48 @@ function Pile({ label, n, color }: { label: string; n: number; color: string }) 
   );
 }
 
-function effectLabel(e: any): string {
+function effectText(e: CardEffect): string {
   switch (e.kind) {
-    default: return e.kind ?? "";
-    case "Damage": return `Deal ${e.amount}${e.pierceBlock ? ` (pierce ${(e.pierceBlock * 100) | 0}%)` : ""}`;
-    case "MultiHit": return `${e.damage} × ${e.hits}${e.pierceBlock ? ` (pierce ${(e.pierceBlock * 100) | 0}%)` : ""}`;
-    case "Heal": return `Heal ${e.amount}`;
-    case "Draw": return `Draw ${e.count}`;
-    case "Block": return `Block ${e.amount}`;
-    case "Thorns": return `+${e.amount} Thorns`;
-    case "Strength": return `+${e.amount} Str`;
-    case "Vulnerable": return `Vuln ${e.duration}s`;
-    case "SelfVulnerable": return `Self-Vuln ${e.duration}s`;
-    case "Weak": return `Weak ${e.duration}s`;
-    case "Accelerate": return `Accel +${e.bonusRate}/s for ${e.duration}s`;
-    case "BodySlam": return `Damage = current Block`;
-    case "Bloodletting": return e.amount < 0 ? `Lose ${-e.amount} HP` : `Heal ${e.amount}`;
-    case "DoubleBlock": return `Double Block`;
-    case "DoubleStrength": return `Double Str`;
-    case "Rage": return `Rage: +${e.blockPerAttack} Block on Attack`;
-    case "Metallicize": return `+${e.blockPerSecond} Block/s`;
-    case "Combust": return `Combust ${e.enemyDmgPerSec}/s`;
-    case "DemonForm": return `+${e.strengthPerSecond} Str/s`;
-    case "Barricade": return `Block doesn't decay`;
-    case "Juggernaut": return `Damage on Block`;
-    case "DarkEmbrace": return `+${e.draw} draw on exhaust`;
-    case "Evolve": return `+${e.draw} draw on status`;
-    case "FeelNoPain": return `+${e.block} Block on exhaust`;
-    case "FireBreathing": return `${e.damage} dmg on status draw`;
-    case "Rupture": return `+${e.strength} Str on self-dmg`;
-    case "Corruption": return `Skills cost 0 + exhaust`;
-    case "Brutality": return `Self-dmg + draw`;
-    case "Exhaust": return `Unplayable`;
-    case "AddStatus": return `Add status to discard`;
-    case "Combo": return e.effects.map(effectLabel).join(" · ");
+    case "Damage": return `${e.amount}ダメージ${e.pierceBlock ? `(貫通${(e.pierceBlock * 100) | 0}%)` : ""}`;
+    case "MultiHit": return `${e.damage}ダメージ×${e.hits}${e.pierceBlock ? `(貫通${(e.pierceBlock * 100) | 0}%)` : ""}`;
+    case "Heal": return `${e.amount}回復`;
+    case "Draw": return `${e.count}枚ドロー`;
+    case "Block": return `ブロック+${e.amount}`;
+    case "Thorns": return `棘+${e.amount}`;
+    case "Strength": return `筋力+${e.amount}`;
+    case "Vulnerable": return `相手に脆弱${e.duration}秒`;
+    case "SelfVulnerable": return `自分に脆弱${e.duration}秒`;
+    case "Weak": return `相手に弱体${e.duration}秒`;
+    case "Accelerate": return `コスト+${e.bonusRate}/秒を${e.duration}秒`;
+    case "BodySlam": return `現在のブロックと同じダメージ`;
+    case "Bloodletting": return e.amount < 0 ? `自分が${-e.amount}ダメージ` : `${e.amount}回復`;
+    case "DoubleBlock": return `現在のブロックを2倍`;
+    case "DoubleStrength": return `現在の筋力を2倍`;
+    case "Rage": return `攻撃ごとブロック+${e.blockPerAttack}を10秒`;
+    case "Metallicize": return `毎秒ブロック+${e.blockPerSecond}`;
+    case "Combust": return `毎秒、自分${e.selfDmgPerSec}・相手${e.enemyDmgPerSec}ダメージ`;
+    case "DemonForm": return `毎秒筋力+${e.strengthPerSecond}`;
+    case "Barricade": return `ブロックが減らなくなる`;
+    case "Juggernaut": return `ブロック獲得時に${e.damageOnBlock}ダメージ`;
+    case "DarkEmbrace": return `除外時${e.draw}枚ドロー`;
+    case "Evolve": return `状態カード引き時${e.draw}枚追加ドロー`;
+    case "FeelNoPain": return `除外時ブロック+${e.block}`;
+    case "FireBreathing": return `状態カード引き時${e.damage}ダメージ`;
+    case "Rupture": return `自傷時筋力+${e.strength}`;
+    case "Corruption": return `スキルが0コスト・除外`;
+    case "Brutality": return `毎秒自分${e.selfDmgPerSec}+${e.drawInterval}秒ごと${e.draw}枚`;
+    case "Exhaust": return `効果なし(除外)`;
+    case "AddStatus": return `状態カードを追加`;
+    case "Combo": return e.effects.map(effectText).join(" + ");
   }
-  return "";
 }
 
 function typeColor(t: CardType, playable: boolean): string {
   const dim = playable ? 1 : 0.55;
   switch (t) {
-    case CardType.Attack: return `rgba(${Math.round(193 * dim)}, ${Math.round(45 * dim)}, ${Math.round(45 * dim)}, 1)`;
-    case CardType.Skill:  return `rgba(${Math.round(45 * dim)}, ${Math.round(105 * dim)}, ${Math.round(193 * dim)}, 1)`;
-    case CardType.Power:  return `rgba(${Math.round(140 * dim)}, ${Math.round(60 * dim)}, ${Math.round(193 * dim)}, 1)`;
+    case CardType.Attack: return `rgba(${(193 * dim) | 0}, ${(45 * dim) | 0}, ${(45 * dim) | 0}, 1)`;
+    case CardType.Skill:  return `rgba(${(45 * dim) | 0}, ${(105 * dim) | 0}, ${(193 * dim) | 0}, 1)`;
+    case CardType.Power:  return `rgba(${(140 * dim) | 0}, ${(60 * dim) | 0}, ${(193 * dim) | 0}, 1)`;
     case CardType.Status: return "#444";
   }
 }
@@ -233,9 +262,10 @@ const topBar: React.CSSProperties = { display: "flex", justifyContent: "space-be
 const ghostBtn: React.CSSProperties = { background: "transparent", color: "#aaa", border: "1px solid #333", borderRadius: 6, padding: "4px 10px", cursor: "pointer", fontSize: 12 };
 const panel: React.CSSProperties = { display: "flex", padding: 12, background: "#181822", border: "1px solid #2a2a35", borderRadius: 10, gap: 16, alignItems: "center" };
 const panelLabel: React.CSSProperties = { fontSize: 12, opacity: 0.6, letterSpacing: 2, marginBottom: 6 };
+const pillRow: React.CSSProperties = { marginTop: 4, display: "flex", flexWrap: "wrap", gap: 4 };
 const pileStack: React.CSSProperties = { display: "flex", gap: 6, flexShrink: 0 };
 const barTrack: React.CSSProperties = { background: "#0c0c12", border: "1px solid #2a2a35", borderRadius: 4, overflow: "hidden" };
-const pill = (color: string): React.CSSProperties => ({ display: "inline-block", padding: "2px 8px", borderRadius: 999, background: `${color}22`, color, fontSize: 11, marginRight: 6, marginTop: 4, border: `1px solid ${color}55` });
+const pill = (color: string): React.CSSProperties => ({ display: "inline-block", padding: "2px 8px", borderRadius: 999, background: `${color}22`, color, fontSize: 11, border: `1px solid ${color}55` });
 const handRow: React.CSSProperties = { display: "flex", gap: 8, justifyContent: "center", marginTop: "auto", overflowX: "auto", paddingBottom: 8 };
 const cardStyle: React.CSSProperties = {
   width: 130, height: 180, padding: 10, borderRadius: 8, border: "1px solid #00000040",
@@ -243,12 +273,24 @@ const cardStyle: React.CSSProperties = {
   position: "relative", textAlign: "left", flexShrink: 0,
 };
 const drawCard: React.CSSProperties = { background: "#3a2a55", border: "1px solid #6a4ab0" };
-const cardCost = (combo: boolean): React.CSSProperties => ({
+const cardCostStyle: React.CSSProperties = {
   position: "absolute", top: 6, left: 8, fontSize: 22, fontWeight: 700,
-  color: combo ? "#ffe066" : "#ffe580", textShadow: "0 1px 2px black",
-  display: "flex", alignItems: "center",
-});
-const cardHeader: React.CSSProperties = { fontWeight: 600, fontSize: 13, marginTop: 22, textShadow: "0 1px 2px black" };
-const cardEffect: React.CSSProperties = { fontSize: 11, opacity: 0.92, lineHeight: 1.25, marginTop: 4 };
+  color: "#ffe580", textShadow: "0 1px 2px black",
+};
+const typeBadge: React.CSSProperties = {
+  position: "absolute", top: 8, right: 8, fontSize: 10, opacity: 0.85,
+  background: "rgba(0,0,0,0.35)", padding: "1px 6px", borderRadius: 4,
+};
+const cardHeader: React.CSSProperties = { fontWeight: 600, fontSize: 13, marginTop: 32, textShadow: "0 1px 2px black" };
+const cardEffect: React.CSSProperties = { fontSize: 11, opacity: 0.92, lineHeight: 1.3, marginTop: 4 };
 const cardKeyHint: React.CSSProperties = { position: "absolute", bottom: 6, right: 8, fontSize: 11, opacity: 0.6, fontFamily: "ui-monospace, monospace" };
 const banner: React.CSSProperties = { position: "absolute", top: "40%", left: 0, right: 0, textAlign: "center", padding: 16, fontSize: 32, background: "rgba(0,0,0,0.7)" };
+const tooltipBox: React.CSSProperties = {
+  position: "absolute", bottom: "100%", left: "50%", transform: "translateX(-50%)",
+  marginBottom: 8, padding: "10px 12px", background: "rgba(20, 20, 28, 0.97)",
+  border: "1px solid #444", borderRadius: 8, minWidth: 220, maxWidth: 300,
+  boxShadow: "0 4px 16px rgba(0,0,0,0.6)", zIndex: 50, pointerEvents: "none",
+};
+const tooltipTitle: React.CSSProperties = { fontWeight: 700, fontSize: 14, marginBottom: 4 };
+const tooltipMeta: React.CSSProperties = { fontSize: 11, opacity: 0.65, marginTop: 4 };
+const tooltipBody: React.CSSProperties = { fontSize: 12, opacity: 0.95, lineHeight: 1.4 };

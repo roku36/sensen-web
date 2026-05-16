@@ -1,4 +1,4 @@
-import { useEffect, useState } from "react";
+import { useEffect } from "react";
 import { getSession } from "./ui/hooks";
 import { Gameplay } from "./ui/screens/Gameplay";
 import { Lobby } from "./ui/screens/Lobby";
@@ -30,14 +30,9 @@ if (typeof window !== "undefined") {
 export default function App() {
   const screen = useStore((s) => s.screen);
   const viewMode = useStore((s) => s.viewMode);
-
-  // Force a re-render at ~30Hz so HUD/3D values track the simulation snapshot.
-  // (The simulation itself runs at 60Hz inside the session.)
-  const [, setTick] = useState(0);
-  useEffect(() => {
-    const id = setInterval(() => setTick((t) => t + 1), 33);
-    return () => clearInterval(id);
-  }, []);
+  // Subscribe to gameFrame so any HUD that reads from `game` re-renders on
+  // every sim step (60Hz). No more 33ms polling interval.
+  useStore((s) => s.gameFrame);
 
   return (
     <div style={{ width: "100%", height: "100%", position: "relative" }}>

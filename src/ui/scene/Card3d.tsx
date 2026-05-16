@@ -4,11 +4,11 @@
 // faceUp=false renders the back-face shader branch and hides the text; this
 // is what the opponent's hand looks like to us.
 
-import { Text } from "@react-three/drei";
+import { Html, Text } from "@react-three/drei";
 import { ThreeEvent, useFrame } from "@react-three/fiber";
 import { useMemo, useRef, useState } from "react";
 import { GLSL3, ShaderMaterial } from "three";
-import { CardEffect, getCardDef } from "../../sim/cards";
+import { CardType, getCardDef } from "../../sim/cards";
 import { useShader, useShaderHotReload } from "./shaders/hmr";
 
 export interface Card3dProps {
@@ -138,7 +138,7 @@ export function Card3d({
           </Text>
           <Text
             position={[0, -0.55, 0.01]}
-            fontSize={0.13}
+            fontSize={0.12}
             color="#fff"
             outlineWidth={0.008}
             outlineColor="#000"
@@ -146,46 +146,29 @@ export function Card3d({
             anchorY="middle"
             maxWidth={1.25}
           >
-            {effectLabel(def.effect)}
+            {def.description}
           </Text>
+          {hover && interactive && (
+            <Html position={[0, 1.2, 0.05]} center distanceFactor={6} pointerEvents="none">
+              <div style={tipBox}>
+                <div style={tipTitle}>{def.name}</div>
+                <div style={tipMeta}>
+                  {def.cardType === CardType.Attack ? "攻撃" : def.cardType === CardType.Skill ? "技" : def.cardType === CardType.Power ? "パワー" : "状態"}
+                  {" · "}コスト {def.cost === 999 ? "—" : def.cost}
+                  {def.exhausts && " · 1回限り"}
+                </div>
+                <div style={tipBody}>{def.description}</div>
+              </div>
+            </Html>
+          )}
         </>
       )}
     </group>
   );
 }
 
-function effectLabel(e: CardEffect): string {
-  switch (e.kind) {
-    case "Damage": return `Deal ${e.amount}`;
-    case "MultiHit": return `${e.damage} × ${e.hits}`;
-    case "Heal": return `Heal ${e.amount}`;
-    case "Draw": return `Draw ${e.count}`;
-    case "Block": return `Block ${e.amount}`;
-    case "Thorns": return `Thorns ${e.amount}`;
-    case "Strength": return `+${e.amount} Str`;
-    case "Vulnerable": return `Vuln ${e.duration}s`;
-    case "SelfVulnerable": return `Self-Vuln ${e.duration}s`;
-    case "Weak": return `Weak ${e.duration}s`;
-    case "Accelerate": return `Accel +${e.bonusRate}/s`;
-    case "BodySlam": return `Block as Damage`;
-    case "Bloodletting": return e.amount < 0 ? `Lose ${-e.amount} HP` : `Heal ${e.amount}`;
-    case "DoubleBlock": return `2× Block`;
-    case "DoubleStrength": return `2× Str`;
-    case "Rage": return `Rage`;
-    case "Metallicize": return `Metal +${e.blockPerSecond}/s`;
-    case "Combust": return `Combust`;
-    case "DemonForm": return `Demon`;
-    case "Barricade": return `Barricade`;
-    case "Juggernaut": return `Juggernaut`;
-    case "DarkEmbrace": return `Dark Embrace`;
-    case "Evolve": return `Evolve`;
-    case "FeelNoPain": return `FNP`;
-    case "FireBreathing": return `Fire Breath`;
-    case "Rupture": return `Rupture`;
-    case "Corruption": return `Corruption`;
-    case "Brutality": return `Brutality`;
-    case "Exhaust": return `Exhaust`;
-    case "AddStatus": return `+Status`;
-    case "Combo": return `Combo`;
-  }
-}
+const tipBox: React.CSSProperties = { background: "rgba(20,20,28,0.97)", border: "1px solid #555", borderRadius: 6, padding: "8px 10px", minWidth: 180, color: "#fff", fontFamily: "ui-sans-serif, system-ui, sans-serif" };
+const tipTitle: React.CSSProperties = { fontWeight: 700, fontSize: 13, marginBottom: 2 };
+const tipMeta: React.CSSProperties = { fontSize: 10, opacity: 0.65 };
+const tipBody: React.CSSProperties = { fontSize: 11, marginTop: 4, lineHeight: 1.35 };
+

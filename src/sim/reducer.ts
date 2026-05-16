@@ -12,13 +12,10 @@ import {
 } from "./cards";
 import { cardFlag, INPUT_DRAW } from "./input";
 import {
-  BLOCK_DECAY_K,
-  COMBO_DISCOUNT,
-  COMBO_WINDOW,
+  BLOCK_DECAY_RATE,
   DRAW_COST,
   DRAW_COUNT,
   DT,
-  MAX_COST,
   MAX_HAND_SIZE,
   PLAYED_TO_DISCARD,
 } from "./rules";
@@ -111,10 +108,7 @@ function tickPowers(s: GameState, dt: number, bus: Bus) {
 
 function tickBlockDecay(p: PlayerState, dt: number) {
   if (p.barricade || p.block <= 0) return;
-  // Exponential half-life decay. block(t+dt) = block(t) * exp(-k*dt).
-  // Below 0.05 we snap to 0 so the bar reads cleanly empty.
-  p.block = p.block * Math.exp(-BLOCK_DECAY_K * dt);
-  if (p.block < 0.05) p.block = 0;
+  p.block = Math.max(0, p.block - BLOCK_DECAY_RATE * dt);
 }
 
 function tickAcceleration(p: PlayerState, dt: number) {
@@ -129,7 +123,7 @@ function tickAcceleration(p: PlayerState, dt: number) {
 }
 
 const accumulateCost = (p: PlayerState, dt: number) => {
-  p.cost = Math.min(p.costMax, p.cost + p.costRate * dt);
+  p.cost += p.costRate * dt;
 };
 
 // ── Input handling ──
@@ -137,7 +131,6 @@ const accumulateCost = (p: PlayerState, dt: number) => {
 function applyInput(s: GameState, idx: 0 | 1, flags: number, bus: Bus) {
   if (flags === 0) return;
   const p = s.players[idx];
-  const now = s.frame * DT;
 
   // Draw: flat 1-cost.
   if ((flags & INPUT_DRAW) !== 0) {
@@ -157,23 +150,10 @@ function applyInput(s: GameState, idx: 0 | 1, flags: number, bus: Bus) {
     const def = getCardDef(cardId);
     if (!def) break;
 
-    // Charge attacks: require full energy AND drain it all.
-    if (def.chargeAttack) {
-      if (p.cost < p.costMax - 0.01) break;
-      p.cost = 0;
-      playCard(s, idx, i, bus, now);
-      break;
-    }
-
-    // Combo: same card within COMBO_WINDOW seconds → discount.
-    let cost = def.cost;
-    if (p.corruption && def.cardType === CardType.Skill) cost = 0;
-    else if (p.lastPlayedCard === cardId && (now - p.lastPlayedAt) < COMBO_WINDOW) {
-      cost = cost * (1 - COMBO_DISCOUNT);
-    }
+    const cost = (p.corruption && def.cardType === CardType.Skill) ? 0 : def.cost;
     if (p.cost < cost) break;
     p.cost -= cost;
-    playCard(s, idx, i, bus, now);
+    playCard(s, idx, i, bus);
     break;
   }
 }
@@ -247,7 +227,7 @@ function drawCards(s: GameState, idx: 0 | 1, count: number, bus: Bus) {
   }
 }
 
-function playCard(s: GameState, idx: 0 | 1, handIndex: number, bus: Bus, now: number) {
+function playCard(s: GameState, idx: 0 | 1, handIndex: number, bus: Bus) {
   const p = s.players[idx];
   if (handIndex >= p.hand.length) return;
   const cardId = p.hand[handIndex];
@@ -255,10 +235,6 @@ function playCard(s: GameState, idx: 0 | 1, handIndex: number, bus: Bus, now: nu
 
   const def = getCardDef(cardId);
   if (!def) return;
-
-  // Track for combo on next play.
-  p.lastPlayedCard = cardId;
-  p.lastPlayedAt = now;
 
   // Disposition: powers stay attached (vanish from circulation), exhausting
   // cards are removed permanently from this match, otherwise → discard pile

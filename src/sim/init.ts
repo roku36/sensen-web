@@ -1,23 +1,21 @@
 import { CardId } from "./cards";
 import { dealCards } from "./reducer";
 import { seedForHandle } from "./rng";
-import { INITIAL_HAND, MAX_COST } from "./rules";
+import { INITIAL_HAND } from "./rules";
 import { GameState, makePlayer } from "./state";
 
 export interface InitOptions {
   matchSeed: bigint;
   hpMax: number;
   costRate: number;
-  costMax?: number;
   deckP0: CardId[];
   deckP1: CardId[];
 }
 
 // Canonical initial state. Both peers must call this with identical InitOptions.
 export function initGame(opts: InitOptions): GameState {
-  const costMax = opts.costMax ?? MAX_COST;
-  const p0 = makePlayer(0, opts.costRate, costMax, opts.hpMax, seedForHandle(opts.matchSeed, 0), opts.deckP0);
-  const p1 = makePlayer(1, opts.costRate, costMax, opts.hpMax, seedForHandle(opts.matchSeed, 1), opts.deckP1);
+  const p0 = makePlayer(0, opts.costRate, opts.hpMax, seedForHandle(opts.matchSeed, 0), opts.deckP0);
+  const p1 = makePlayer(1, opts.costRate, opts.hpMax, seedForHandle(opts.matchSeed, 1), opts.deckP1);
   const s: GameState = { frame: 0, matchSeed: opts.matchSeed, players: [p0, p1], result: 0 };
   dealCards(p0, INITIAL_HAND);
   dealCards(p1, INITIAL_HAND);

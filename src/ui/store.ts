@@ -22,6 +22,9 @@ interface UiStore {
   setViewMode: (v: ViewMode) => void;
 
   game: GameState | null;
+  // Live frame counter — primitive, so subscribers re-render on every sim step
+  // even though `game` is mutated in-place by the deterministic reducer.
+  gameFrame: number;
   setGame: (s: GameState) => void;
 
   log: string[];
@@ -45,7 +48,10 @@ export const useStore = create<UiStore>((set) => ({
   },
 
   game: null,
-  setGame: (g) => set({ game: g }),
+  gameFrame: 0,
+  // The reducer mutates `game` in place to avoid GC churn on hot path; pass
+  // it as the same reference but bump `gameFrame` so subscribers fire.
+  setGame: (g) => set({ game: g, gameFrame: g.frame }),
 
   log: [],
   pushLog: (line) => set((s) => ({ log: [...s.log.slice(-200), line] })),

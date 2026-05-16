@@ -100,25 +100,26 @@ describe("reducer determinism", () => {
     expect(dealt).toBeLessThanOrEqual(6.5);
   });
 
-  it("combo discount halves cost on a same-card replay within 2s", () => {
-    const deck = [CardId.Strike, CardId.Strike, CardId.Strike, CardId.Strike];
+  it("played non-power cards go to discard, not back to deck", () => {
+    const deck = [CardId.Strike, CardId.Strike, CardId.Strike];
     const s = initGame({ matchSeed: 1n, hpMax: 80, costRate: 1, deckP0: deck, deckP1: deck });
-    // Advance until we have plenty of cost (1.5 = 1.0 + 0.5 discounted second)
-    for (let f = 0; f < 100; f++) step(s, 0, 0);
-    const c0 = s.players[0].cost;
-    step(s, cardFlag(0)!, 0); // first Strike: full cost (1.0)
-    const c1 = s.players[0].cost;
-    step(s, cardFlag(0)!, 0); // second Strike same frame: combo discount → 0.5
-    const c2 = s.players[0].cost;
-    const firstSpent = c0 - c1;
-    const secondSpent = c1 - c2;
-    expect(firstSpent).toBeCloseTo(1.0, 1);
-    expect(secondSpent).toBeCloseTo(0.5, 1);
+    for (let f = 0; f < 70; f++) step(s, 0, 0);
+    const beforeDiscard = s.players[0].discard.length;
+    step(s, cardFlag(0)!, 0); // play hand[0]
+    expect(s.players[0].discard.length).toBe(beforeDiscard + 1);
   });
 
-  it("energy is hard-capped at costMax", () => {
-    const s = initGame({ matchSeed: 1n, hpMax: 80, costRate: 5, costMax: 3, deckP0: [CardId.Strike], deckP1: [CardId.Strike] });
-    for (let f = 0; f < 600; f++) step(s, 0, 0); // 10s @ 5/s would normally hit 50
-    expect(s.players[0].cost).toBeLessThanOrEqual(3.01);
+  it("block decays linearly at BLOCK_DECAY_RATE", () => {
+    const deck = [CardId.Defend, CardId.Defend];
+    const s = initGame({ matchSeed: 1n, hpMax: 80, costRate: 1, deckP0: deck, deckP1: deck });
+    for (let f = 0; f < 70; f++) step(s, 0, 0);
+    step(s, cardFlag(0)!, 0); // Defend → block 5
+    const b0 = s.players[0].block;
+    expect(b0).toBeGreaterThan(4.5);
+    // 60 frames = 1s, at 2/s decay block should drop by ~2
+    for (let f = 0; f < 60; f++) step(s, 0, 0);
+    const b1 = s.players[0].block;
+    expect(b0 - b1).toBeGreaterThan(1.5);
+    expect(b0 - b1).toBeLessThan(2.5);
   });
 });
