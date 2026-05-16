@@ -19,9 +19,6 @@ export function useKeyboardInput() {
       if (e.key === "d" || e.key === "D") flags = 1;
       else if (e.key >= "1" && e.key <= "9") flags = 1 << (Number(e.key));
       else if (e.key === "0") flags = 1 << 10;
-      else if (e.key === "z" || e.key === "Z") flags = 1 << 11;
-      else if (e.key === "x" || e.key === "X") flags = 1 << 12;
-      else if (e.key === "c" || e.key === "C") flags = 1 << 13;
       if (flags !== 0) s.pushLocalInput(flags);
     };
     window.addEventListener("keydown", onKey);
@@ -64,13 +61,17 @@ export async function startOffline(deck: CardId[]) {
   useStore.getState().setScreen("gameplay");
 }
 
-export async function startOnline(signalUrl: string, deck: CardId[]) {
+export async function startOnline(signalUrlBase: string, deck: CardId[]) {
   await stopActiveSession();
   // Tiny grace period: the WebSocket close above is "done" from the client's
   // POV but the matchbox server may still be processing our PeerLeft. 250ms
   // empirically clears the ghost.
   await new Promise((r) => setTimeout(r, 250));
-  useStore.getState().setLastSignalUrl(signalUrl);
+  useStore.getState().setLastSignalUrl(signalUrlBase);
+  // Inject the current win-streak bucket into the matchbox topic so we pair
+  // with players in a similar streak range. Both peers in the same room.
+  const streak = loadStreak();
+  const signalUrl = urlForStreak(signalUrlBase, streak);
   const log = (line: string) => useStore.getState().pushLog(line);
   const s = new Session({
     signalUrl,
@@ -91,7 +92,7 @@ export async function startOnline(signalUrl: string, deck: CardId[]) {
 
 // Rematch helpers — used by the post-match panel. Each picks up the
 // player's currently saved deck (DeckBuilder writes to the same key).
-import { loadDeck } from "../sim/deck-storage";
+import { loadDeck, loadStreak, urlForStreak } from "../sim/deck-storage";
 export { loadDeck };
 
 export function rematchOffline() { void startOffline(loadDeck()); }

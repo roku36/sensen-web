@@ -109,37 +109,27 @@ describe("reducer determinism", () => {
     expect(s.players[0].discard.length).toBe(beforeDiscard + 1);
   });
 
-  it("draft offers fire deterministically and a pick goes to discard", async () => {
-    const { DRAFT_FIRST_AT_SECS, DRAFT_TTL_SECS, DRAFT_PICK_COUNT } = await import("../src/sim/rules");
-    const { INPUT_PICK_2 } = await import("../src/sim/input");
-    const deck = [CardId.Strike, CardId.Strike, CardId.Defend];
-    const a = initGame({ matchSeed: 42n, hpMax: 80, costRate: 0.4, deckP0: deck, deckP1: deck });
-    const b = initGame({ matchSeed: 42n, hpMax: 80, costRate: 0.4, deckP0: deck, deckP1: deck });
-    // Advance past the first-offer time (12s ≈ 720 frames).
-    const framesIn = Math.ceil(DRAFT_FIRST_AT_SECS * 60) + 5;
-    for (let f = 0; f < framesIn; f++) { step(a, 0, 0); step(b, 0, 0); }
-    expect(a.players[0].offer).not.toBeNull();
-    expect(b.players[0].offer).not.toBeNull();
-    expect(a.players[0].offer!.cards).toEqual(b.players[0].offer!.cards);
-    expect(a.players[0].offer!.cards.length).toBe(DRAFT_PICK_COUNT);
-    // Both pick the second card on the next frame.
-    const picked = a.players[0].offer!.cards[1];
-    const beforeDiscard = a.players[0].discard.length;
-    step(a, INPUT_PICK_2, 0);
-    step(b, INPUT_PICK_2, 0);
-    expect(a.players[0].discard.length).toBe(beforeDiscard + 1);
-    expect(a.players[0].discard[a.players[0].discard.length - 1]).toBe(picked);
-    expect(checksum(a)).toBe(checksum(b));
+  it("streak bucket maps streaks to expected matchmaking groups", async () => {
+    const { streakBucket } = await import("../src/sim/deck-storage");
+    expect(streakBucket(0)).toBe("0");
+    expect(streakBucket(1)).toBe("1to2");
+    expect(streakBucket(2)).toBe("1to2");
+    expect(streakBucket(3)).toBe("3to5");
+    expect(streakBucket(5)).toBe("3to5");
+    expect(streakBucket(6)).toBe("6to10");
+    expect(streakBucket(10)).toBe("6to10");
+    expect(streakBucket(11)).toBe("11to20");
+    expect(streakBucket(20)).toBe("11to20");
+    expect(streakBucket(21)).toBe("21up");
+    expect(streakBucket(999)).toBe("21up");
   });
 
-  it("an unattended draft expires after DRAFT_TTL_SECS without changing the deck", async () => {
-    const { DRAFT_FIRST_AT_SECS, DRAFT_TTL_SECS } = await import("../src/sim/rules");
-    const deck = [CardId.Strike];
-    const s = initGame({ matchSeed: 5n, hpMax: 80, costRate: 0.4, deckP0: deck, deckP1: deck });
-    const total = Math.ceil((DRAFT_FIRST_AT_SECS + DRAFT_TTL_SECS + 0.2) * 60);
-    for (let f = 0; f < total; f++) step(s, 0, 0);
-    expect(s.players[0].offer).toBeNull();
-    expect(s.players[0].discard.length).toBe(0);
+  it("urlForStreak appends bucket to topic path", async () => {
+    const { urlForStreak } = await import("../src/sim/deck-storage");
+    expect(urlForStreak("ws://localhost:3536/sensen?next=2", 0))
+      .toBe("ws://localhost:3536/sensen-streak-0?next=2");
+    expect(urlForStreak("ws://localhost:3536/sensen?next=2", 4))
+      .toBe("ws://localhost:3536/sensen-streak-3to5?next=2");
   });
 
   it("block decays linearly at BLOCK_DECAY_RATE", () => {

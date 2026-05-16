@@ -10,13 +10,9 @@ import {
   CardType,
   getCardDef,
 } from "./cards";
-import { DRAFT_POOL } from "./draft-pool";
-import { cardFlag, INPUT_DRAW, INPUT_PICK_1, INPUT_PICK_2, INPUT_PICK_3 } from "./input";
+import { cardFlag, INPUT_DRAW } from "./input";
 import {
   BLOCK_DECAY_RATE,
-  DRAFT_INTERVAL_SECS,
-  DRAFT_PICK_COUNT,
-  DRAFT_TTL_SECS,
   DRAW_COST,
   DRAW_COUNT,
   DT,
@@ -135,17 +131,6 @@ const accumulateCost = (p: PlayerState, dt: number) => {
 function applyInput(s: GameState, idx: 0 | 1, flags: number, bus: Bus) {
   if (flags === 0) return;
   const p = s.players[idx];
-
-  // Draft pick (Z/X/C). Only meaningful if there's an active offer; if so
-  // we consume it before falling through to card play, and the pick goes to
-  // the discard pile so it enters circulation through the normal cycle.
-  if (p.offer && (flags & (INPUT_PICK_1 | INPUT_PICK_2 | INPUT_PICK_3)) !== 0) {
-    const pickIdx = (flags & INPUT_PICK_1) ? 0 : (flags & INPUT_PICK_2) ? 1 : 2;
-    const cardId = p.offer.cards[pickIdx];
-    if (cardId !== undefined) p.discard.push(cardId);
-    p.offer = null;
-    p.nextOfferAt = s.frame * DT + DRAFT_INTERVAL_SECS;
-  }
 
   // Draw: flat 1-cost.
   if ((flags & INPUT_DRAW) !== 0) {
@@ -514,36 +499,6 @@ function processDraw(s: GameState, bus: Bus) {
   }
 }
 
-// Per-frame draft housekeeping. Each player has an independent timer; when
-// it elapses we sample DRAFT_PICK_COUNT distinct cards from DRAFT_POOL using
-// the player's own RNG (seeded from match seed + handle, so deterministic).
-// If a player ignores an offer for DRAFT_TTL_SECS it expires silently and
-// the timer resets — no auto-pick (would either be random/diverging or
-// require remembering the pre-offer state).
-function tickDrafts(s: GameState) {
-  const now = s.frame * DT;
-  for (const p of s.players) {
-    // Expire stale offer.
-    if (p.offer && now - p.offer.spawnedAt >= DRAFT_TTL_SECS) {
-      p.offer = null;
-      p.nextOfferAt = now + DRAFT_INTERVAL_SECS;
-    }
-    // Spawn a new one when the timer is up and there isn't one already.
-    if (!p.offer && now >= p.nextOfferAt) {
-      const cards: number[] = [];
-      const used = new Set<number>();
-      // Sample without replacement so a draft never offers duplicates.
-      let safety = 0;
-      while (cards.length < DRAFT_PICK_COUNT && safety++ < 64) {
-        const i = Number(rangeU64(p.rng, BigInt(DRAFT_POOL.length)));
-        if (used.has(i)) continue;
-        used.add(i);
-        cards.push(DRAFT_POOL[i]);
-      }
-      p.offer = { cards: cards as any, spawnedAt: now };
-    }
-  }
-}
 
 // ── The frame step. Mutates `s` in place. Order matches Rust GameplaySystems. ──
 
@@ -565,9 +520,6 @@ export function step(s: GameState, p0Input: number, p1Input: number, dt: number 
     tickAcceleration(p, dt);
     accumulateCost(p, dt);
   }
-
-  // Draft offers: spawn / expire.
-  tickDrafts(s);
 
   // Input.
   applyInput(s, 0, p0Input, bus);

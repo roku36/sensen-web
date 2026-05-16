@@ -1,5 +1,5 @@
 import { useState } from "react";
-import { loadDeck } from "../../sim/deck-storage";
+import { loadDeck, loadStreak, streakBucket } from "../../sim/deck-storage";
 import { startOffline, startOnline } from "../hooks";
 import { useStore } from "../store";
 
@@ -10,11 +10,18 @@ export function Title() {
   const setViewMode = useStore((s) => s.setViewMode);
   const setScreen = useStore((s) => s.setScreen);
   const deckSize = loadDeck().length;
+  const streak = loadStreak();
   return (
     <div style={overlay}>
       <div style={panel}>
         <h1 style={{ fontSize: 56, margin: 0, letterSpacing: 8 }}>SENSEN</h1>
-        <p style={{ opacity: 0.6, margin: "0 0 24px" }}>web port — react three fiber + p2p rollback</p>
+        <p style={{ opacity: 0.6, margin: "0 0 12px" }}>web port — react three fiber + p2p rollback</p>
+        {streak > 0 && (
+          <div style={streakChip}>
+            🔥 連勝 {streak}
+            <span style={streakBucketHint}>(マッチング帯: {streakBucket(streak)})</span>
+          </div>
+        )}
 
         {/* View toggle: rich 3D vs simple HUD */}
         <div style={toggleRow}>
@@ -63,3 +70,5 @@ const panel: React.CSSProperties = { background: "rgba(0,0,0,0.6)", padding: 36,
 const btn: React.CSSProperties = { background: "#5a3a8a", color: "white", border: 0, borderRadius: 8, padding: "12px 24px", fontSize: 18, cursor: "pointer", width: "100%" };
 const input: React.CSSProperties = { background: "#1a1a22", color: "white", border: "1px solid #444", borderRadius: 8, padding: "10px 12px", fontSize: 14, marginBottom: 12, width: "calc(100% - 26px)" };
 const deckBtn: React.CSSProperties = { background: "transparent", color: "#aaa", border: "1px solid #444", borderRadius: 8, padding: "8px 16px", fontSize: 13, cursor: "pointer", width: "100%" };
+const streakChip: React.CSSProperties = { display: "inline-block", padding: "6px 14px", borderRadius: 999, background: "rgba(255,180,80,0.18)", color: "#ffd070", border: "1px solid rgba(255,180,80,0.45)", fontSize: 14, marginBottom: 18 };
+const streakBucketHint: React.CSSProperties = { fontSize: 11, opacity: 0.7, marginLeft: 8 };

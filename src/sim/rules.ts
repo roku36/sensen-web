@@ -20,20 +20,13 @@ export const INITIAL_HAND = 5;
 // scale is 1/10 of the old numbers — i.e. 5 Block lasts about 2.5s.
 export const BLOCK_DECAY_RATE = 2.0;
 
-// ── Mid-match card drafts ──
-// Every DRAFT_INTERVAL_SECS, both players are offered DRAFT_PICK_COUNT
-// random cards from a pool. They pick one with Z/X/C; the picked card
-// goes into the discard pile and enters circulation through normal
-// shuffle/draw. Picks expire after DRAFT_TTL_SECS.
-//
-// This adds Slay-the-Spire-style mid-combat deck building and breaks
-// the symmetry of "both peers chose the same starter deck": even if
-// loadouts began equal, picks diverge based on player choice.
-export const DRAFT_INTERVAL_SECS = 20;
-export const DRAFT_TTL_SECS = 8;
+// ── Post-victory card drafts ──
+// On winning a match the player is offered DRAFT_PICK_COUNT cards drawn
+// from a curated pool, picks one, and it's appended to their persisted
+// deck. The pick is local-only (not sim-synced) — by the time it happens
+// the match is over and the next sim starts from scratch with the new
+// deck contents exchanged in the handshake.
 export const DRAFT_PICK_COUNT = 3;
-// First draft fires this many seconds in (gives the match time to settle).
-export const DRAFT_FIRST_AT_SECS = 12;
 
 // ── Card return policy ──
 // Slay-the-Spire-style: played cards go to the discard pile, NOT back into
