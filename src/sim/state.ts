@@ -39,6 +39,12 @@ export interface PlayerState {
   discard: CardId[];
   // Per-player RNG state for shuffling/drawing.
   rng: Rng;
+  // Mid-match draft: when set, the player is being offered DRAFT_PICK_COUNT
+  // cards to pick from. Resolves on input flag (INPUT_PICK_1..3) or expires
+  // after DRAFT_TTL_SECS without a pick.
+  offer: { cards: CardId[]; spawnedAt: number } | null;
+  // Sim time (seconds) when the next draft offer becomes available.
+  nextOfferAt: number;
 }
 
 export interface GameState {
@@ -87,6 +93,8 @@ const DEFAULT_PLAYER = (
   hand: [],
   discard: [],
   rng: { state: rngState },
+  offer: null,
+  nextOfferAt: 0, // overridden by initGame to DRAFT_FIRST_AT_SECS
 });
 
 export function makePlayer(
@@ -111,6 +119,7 @@ export function snapshot(s: GameState): GameState {
 
 const clonePlayer = (p: PlayerState): PlayerState => ({
   ...p,
+  offer: p.offer ? { cards: p.offer.cards.slice(), spawnedAt: p.offer.spawnedAt } : null,
   rage: p.rage ? { ...p.rage } : null,
   metallicize: p.metallicize ? { ...p.metallicize } : null,
   demonForm: p.demonForm ? { ...p.demonForm } : null,

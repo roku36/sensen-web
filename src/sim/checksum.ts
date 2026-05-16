@@ -56,6 +56,14 @@ function hashPlayer(p: PlayerState) {
   u32(p.hand.length); for (const c of p.hand) u32(c);
   u32(p.discard.length); for (const c of p.discard) u32(c);
   u64(p.rng.state);
+  // Offer + nextOfferAt — must be in the checksum for cross-peer agreement.
+  byte(p.offer ? 1 : 0);
+  if (p.offer) {
+    u32(p.offer.cards.length);
+    for (const c of p.offer.cards) u32(c);
+    f(p.offer.spawnedAt);
+  }
+  f(p.nextOfferAt);
 }
 
 export function checksum(s: GameState): bigint {

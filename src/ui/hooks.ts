@@ -19,6 +19,9 @@ export function useKeyboardInput() {
       if (e.key === "d" || e.key === "D") flags = 1;
       else if (e.key >= "1" && e.key <= "9") flags = 1 << (Number(e.key));
       else if (e.key === "0") flags = 1 << 10;
+      else if (e.key === "z" || e.key === "Z") flags = 1 << 11;
+      else if (e.key === "x" || e.key === "X") flags = 1 << 12;
+      else if (e.key === "c" || e.key === "C") flags = 1 << 13;
       if (flags !== 0) s.pushLocalInput(flags);
     };
     window.addEventListener("keydown", onKey);

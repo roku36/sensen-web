@@ -109,6 +109,39 @@ describe("reducer determinism", () => {
     expect(s.players[0].discard.length).toBe(beforeDiscard + 1);
   });
 
+  it("draft offers fire deterministically and a pick goes to discard", async () => {
+    const { DRAFT_FIRST_AT_SECS, DRAFT_TTL_SECS, DRAFT_PICK_COUNT } = await import("../src/sim/rules");
+    const { INPUT_PICK_2 } = await import("../src/sim/input");
+    const deck = [CardId.Strike, CardId.Strike, CardId.Defend];
+    const a = initGame({ matchSeed: 42n, hpMax: 80, costRate: 0.4, deckP0: deck, deckP1: deck });
+    const b = initGame({ matchSeed: 42n, hpMax: 80, costRate: 0.4, deckP0: deck, deckP1: deck });
+    // Advance past the first-offer time (12s ≈ 720 frames).
+    const framesIn = Math.ceil(DRAFT_FIRST_AT_SECS * 60) + 5;
+    for (let f = 0; f < framesIn; f++) { step(a, 0, 0); step(b, 0, 0); }
+    expect(a.players[0].offer).not.toBeNull();
+    expect(b.players[0].offer).not.toBeNull();
+    expect(a.players[0].offer!.cards).toEqual(b.players[0].offer!.cards);
+    expect(a.players[0].offer!.cards.length).toBe(DRAFT_PICK_COUNT);
+    // Both pick the second card on the next frame.
+    const picked = a.players[0].offer!.cards[1];
+    const beforeDiscard = a.players[0].discard.length;
+    step(a, INPUT_PICK_2, 0);
+    step(b, INPUT_PICK_2, 0);
+    expect(a.players[0].discard.length).toBe(beforeDiscard + 1);
+    expect(a.players[0].discard[a.players[0].discard.length - 1]).toBe(picked);
+    expect(checksum(a)).toBe(checksum(b));
+  });
+
+  it("an unattended draft expires after DRAFT_TTL_SECS without changing the deck", async () => {
+    const { DRAFT_FIRST_AT_SECS, DRAFT_TTL_SECS } = await import("../src/sim/rules");
+    const deck = [CardId.Strike];
+    const s = initGame({ matchSeed: 5n, hpMax: 80, costRate: 0.4, deckP0: deck, deckP1: deck });
+    const total = Math.ceil((DRAFT_FIRST_AT_SECS + DRAFT_TTL_SECS + 0.2) * 60);
+    for (let f = 0; f < total; f++) step(s, 0, 0);
+    expect(s.players[0].offer).toBeNull();
+    expect(s.players[0].discard.length).toBe(0);
+  });
+
   it("block decays linearly at BLOCK_DECAY_RATE", () => {
     const deck = [CardId.Defend, CardId.Defend];
     const s = initGame({ matchSeed: 1n, hpMax: 80, costRate: 1, deckP0: deck, deckP1: deck });

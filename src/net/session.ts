@@ -40,6 +40,9 @@ export class Session {
   private opts: SessionOptions;
   private stopped = false;
   private pendingFlags = 0;
+  // Deck handshake: each peer sends their own deck once, waits for peer's.
+  private peerDeck: CardId[] | null = null;
+  private peerDeckResolve: ((d: CardId[]) => void) | null = null;
 
   constructor(opts: SessionOptions) {
     this.opts = opts;
@@ -71,24 +74,41 @@ export class Session {
   // the upcoming frame; the loop drains and broadcasts them every frame.
   pushLocalInput(flags: number) { this.pendingFlags |= flags; }
 
-  private beginMatch(remote: PeerId) {
+  private async beginMatch(remote: PeerId) {
     if (this.engine) return;
     this.remote = remote;
+
+    // Send our deck and wait for the peer's. Both sides are symmetric.
+    this.opts.onLog?.(`exchanging decks…`);
+    this.mb.send(remote, encode({ kind: "deck", cards: this.opts.deck }));
+    const peerDeck = await this.waitForPeerDeck();
+    if (this.stopped) return;
+    this.opts.onLog?.(`peer deck received (${peerDeck.length}枚)`);
+
     const ids = [this.mb.localId, remote].sort();
     const matchSeed = matchSeedFromPeers(ids);
     const localPlayer: 0 | 1 = ids[0] === this.mb.localId ? 0 : 1;
+    // Both peers compute identical {deckP0, deckP1} since they agreed on
+    // who is p0 (sorted-id-first) and the deck contents are now mirrored.
+    const deckP0 = localPlayer === 0 ? this.opts.deck : peerDeck;
+    const deckP1 = localPlayer === 0 ? peerDeck : this.opts.deck;
     this.opts.onLog?.(`match seed=${matchSeed.toString(16)} you=p${localPlayer}`);
+
     this.engine = new RollbackEngine({
       matchSeed,
       hpMax: this.opts.hpMax ?? INITIAL_HP,
       costRate: this.opts.costRate ?? DEFAULT_COST_RATE,
-      deckP0: this.opts.deck,
-      deckP1: this.opts.deck,
+      deckP0, deckP1,
       localPlayer,
     });
     this.engine.on((ev) => this.onEngineEvent(ev));
     this.last = performance.now();
     this.loop();
+  }
+
+  private waitForPeerDeck(): Promise<CardId[]> {
+    if (this.peerDeck) return Promise.resolve(this.peerDeck);
+    return new Promise((resolve) => { this.peerDeckResolve = resolve; });
   }
 
   private onEngineEvent(ev: RollbackEvent) {
@@ -109,7 +129,16 @@ export class Session {
 
   private handleMessage(_peer: PeerId, raw: ArrayBuffer | string) {
     const frame = decode(raw);
-    if (!frame || !this.engine) return;
+    if (!frame) return;
+    // Deck frame must be processed BEFORE the engine exists.
+    if (frame.kind === "deck") {
+      this.peerDeck = frame.cards;
+      const r = this.peerDeckResolve;
+      this.peerDeckResolve = null;
+      r?.(frame.cards);
+      return;
+    }
+    if (!this.engine) return;
     if (frame.kind === "input") {
       this.engine.receiveRemoteInput(frame.frame, frame.flags);
     } else if (frame.kind === "checksum") {

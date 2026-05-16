@@ -11,6 +11,7 @@ import { DRAW_COST } from "../../sim/rules";
 import { PlayerState } from "../../sim/state";
 import { getSession, useKeyboardInput } from "../hooks";
 import { useStore } from "../store";
+import { DraftPanel, OpponentDraftHint } from "./DraftPanel";
 import { PilePeek } from "./PilePeek";
 import { ResultPanel } from "./ResultPanel";
 
@@ -42,6 +43,8 @@ export function SimpleGameplay() {
       <PlayerPanel player={op} title="相手" mirrored side={(localPlayer ^ 1) as 0 | 1} onPeek={setPeek} />
       <PlayerPanel player={me} title="自分" side={localPlayer} onPeek={setPeek} />
       <SelfHand player={me} />
+      <OpponentDraftHint opponent={op} />
+      <DraftPanel player={me} nowSec={game.frame / 60} />
 
       {peek?.kind === "deck" && (
         <PilePeek
