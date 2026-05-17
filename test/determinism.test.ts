@@ -74,9 +74,10 @@ describe("reducer determinism", () => {
     const deck = Array(20).fill(CardId.Strike);
     const s = initGame({ matchSeed: 1n, hpMax: 80, deckP0: deck, deckP1: deck });
     const startHp = s.players[1].hp;
-    step(s, cardFlag(0)!, 0);
+    step(s, cardFlag(0)!, 0); // queue Strike (3 sec)
     expect(s.players[0].queue.length).toBe(1);
-    for (let f = 0; f < 65; f++) step(s, 0, 0);
+    // Need 3 sec = 180 frames, +5 buffer.
+    for (let f = 0; f < 185; f++) step(s, 0, 0);
     expect(s.players[0].queue.length).toBe(0);
     const dealt = startHp - s.players[1].hp;
     expect(dealt).toBeGreaterThanOrEqual(5.5);
@@ -87,44 +88,69 @@ describe("reducer determinism", () => {
   it("clicking multiple cards APPENDS to the queue (this is the queue mechanic)", () => {
     const deck = Array(20).fill(CardId.Strike);
     const s = initGame({ matchSeed: 1n, hpMax: 80, deckP0: deck, deckP1: deck });
-    // Queue three Strikes back-to-back in three consecutive frames.
     step(s, cardFlag(0)!, 0);
     step(s, cardFlag(0)!, 0);
     step(s, cardFlag(0)!, 0);
     expect(s.players[0].queue.length).toBe(3);
-    expect(s.players[0].hand.length).toBe(2); // 5 - 3 queued
+    expect(s.players[0].hand.length).toBe(2);
   });
 
   it("queued casts resolve in order with carry-over time (no drift)", () => {
     const deck = Array(20).fill(CardId.Strike);
     const s = initGame({ matchSeed: 1n, hpMax: 80, deckP0: deck, deckP1: deck });
-    // Queue 3 Strikes (1s each). Total wait = 3s = 180 frames.
+    // 3 Strikes (3s each) = 9s = 540 frames.
     step(s, cardFlag(0)!, 0);
     step(s, cardFlag(0)!, 0);
     step(s, cardFlag(0)!, 0);
     const startHp = s.players[1].hp;
-    // After 1s exactly → 1 should have resolved.
-    for (let f = 0; f < 65; f++) step(s, 0, 0);
+    for (let f = 0; f < 185; f++) step(s, 0, 0); // ~3s → first resolved
     expect(s.players[0].queue.length).toBe(2);
     expect(startHp - s.players[1].hp).toBeGreaterThanOrEqual(5.5);
-    // After another 1s → 2 resolved total.
-    for (let f = 0; f < 60; f++) step(s, 0, 0);
+    for (let f = 0; f < 180; f++) step(s, 0, 0); // ~6s → second resolved
     expect(s.players[0].queue.length).toBe(1);
     expect(startHp - s.players[1].hp).toBeGreaterThanOrEqual(11);
-    // After the third → queue empty, 3 strikes dealt.
-    for (let f = 0; f < 60; f++) step(s, 0, 0);
+    for (let f = 0; f < 180; f++) step(s, 0, 0); // ~9s → third resolved
     expect(s.players[0].queue.length).toBe(0);
     expect(startHp - s.players[1].hp).toBeGreaterThanOrEqual(17);
   });
 
+  it("prereqQueueTime blocks queueing a finisher unless setup is in place", () => {
+    // Hand: 4 Strikes + Bludgeon (prereq 6).
+    const deck = [CardId.Strike, CardId.Strike, CardId.Strike, CardId.Strike, CardId.Bludgeon];
+    const s = initGame({ matchSeed: 1n, hpMax: 80, deckP0: deck, deckP1: deck });
+    // Find Bludgeon's index in the dealt hand (deal order may vary).
+    const bludIdx = s.players[0].hand.indexOf(CardId.Bludgeon);
+    expect(bludIdx).toBeGreaterThanOrEqual(0);
+
+    // Empty queue → Bludgeon should be REJECTED.
+    step(s, cardFlag(bludIdx)!, 0);
+    expect(s.players[0].queue.length).toBe(0);
+    expect(s.players[0].hand.indexOf(CardId.Bludgeon)).toBeGreaterThanOrEqual(0);
+
+    // Queue 2 Strikes (cost 3 each = 6s of setup).
+    const strikeIdxs: number[] = [];
+    for (let i = 0; i < s.players[0].hand.length; i++) {
+      if (s.players[0].hand[i] === CardId.Strike) strikeIdxs.push(i);
+    }
+    step(s, cardFlag(strikeIdxs[0])!, 0);
+    // Indices shift after splice — re-find a Strike.
+    const nextStrikeIdx = s.players[0].hand.indexOf(CardId.Strike);
+    step(s, cardFlag(nextStrikeIdx)!, 0);
+    expect(s.players[0].queue.length).toBe(2);
+    // queueRemainingTime should be ~6s; let's queue Bludgeon now.
+    const bludIdxNow = s.players[0].hand.indexOf(CardId.Bludgeon);
+    step(s, cardFlag(bludIdxNow)!, 0);
+    expect(s.players[0].queue.length).toBe(3); // Bludgeon accepted
+    expect(s.players[0].queue[2].cardId).toBe(CardId.Bludgeon);
+  });
+
   it("played non-power cards go to discard on resolve", () => {
-    // Use a deck large enough that the auto-refill draw on resolve doesn't
-    // immediately shuffle the just-discarded card back into play.
     const deck = Array(20).fill(CardId.Strike);
     const s = initGame({ matchSeed: 1n, hpMax: 80, deckP0: deck, deckP1: deck });
     const beforeDiscard = s.players[0].discard.length;
     step(s, cardFlag(0)!, 0);
-    for (let f = 0; f < 70; f++) step(s, 0, 0);
+    // Strike now costs 3s = 180 frames + buffer.
+    for (let f = 0; f < 200; f++) step(s, 0, 0);
     expect(s.players[0].discard.length).toBe(beforeDiscard + 1);
   });
 
@@ -136,12 +162,12 @@ describe("reducer determinism", () => {
   });
 
   it("block decays linearly at BLOCK_DECAY_RATE", () => {
-    const deck = [CardId.Defend, CardId.Defend, CardId.Defend];
+    const deck = Array(20).fill(CardId.Defend);
     const s = initGame({ matchSeed: 1n, hpMax: 80, deckP0: deck, deckP1: deck });
-    step(s, cardFlag(0)!, 0); // start cast
-    for (let f = 0; f < 65; f++) step(s, 0, 0); // resolve
+    step(s, cardFlag(0)!, 0); // start cast (3s)
+    for (let f = 0; f < 185; f++) step(s, 0, 0); // resolve
     const b0 = s.players[0].block;
-    expect(b0).toBeGreaterThan(2.5); // Defend = block 5, then ~1s decay = ~3 left
+    expect(b0).toBeGreaterThan(4); // Defend = block 5, just resolved → ~5
     // Another full second of decay should drop ~2.
     for (let f = 0; f < 60; f++) step(s, 0, 0);
     const b1 = s.players[0].block;

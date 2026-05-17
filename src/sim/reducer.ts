@@ -148,9 +148,29 @@ function tickCasting(s: GameState, now: number, bus: Bus) {
 // plan). The opponent sees your queue too — that's the whole point of the
 // mechanic: visible commitment they can read and respond to.
 
+// Total declared cost (in seconds) of cards currently in the player's queue.
+// Used to gate prereqQueueTime cards: a finisher with prereq=6 needs at
+// least 6 sec of other cards already in the queue before it can be added.
+//
+// We sum full durations (not remaining) per the user spec
+// (「現在積まれているカードのcost つまり時間の合計値」), so the prereq
+// stays stable as the head card progresses — once you've committed the
+// setup, the finisher remains queueable until those setup cards pop off.
+export function queueTotalCost(p: PlayerState): number {
+  let total = 0;
+  for (const q of p.queue) total += q.duration;
+  return total;
+}
+
+/** @deprecated kept for backwards source compat; alias of queueTotalCost. */
+export function queueRemainingTime(p: PlayerState, _now: number): number {
+  return queueTotalCost(p);
+}
+
 function applyInput(s: GameState, idx: 0 | 1, flags: number) {
   if (flags === 0) return;
   const p = s.players[idx];
+  const now = s.frame * DT;
 
   for (let i = 0; i < MAX_HAND_SIZE; i++) {
     const flag = cardFlag(i);
@@ -162,14 +182,16 @@ function applyInput(s: GameState, idx: 0 | 1, flags: number) {
     if (!def) break;
     if (def.cost >= 900) break; // status junk — unplayable
 
+    // Prereq gate: required queued cast time must already be committed.
+    const prereq = def.prereqQueueTime ?? 0;
+    if (prereq > 0 && queueTotalCost(p) < prereq) break;
+
     let duration = def.cost;
     if (p.corruption && def.cardType === CardType.Skill) duration = 0;
 
     // Move card from hand → end of queue.
     p.hand.splice(i, 1);
-    // If queue was empty, the new head starts NOW. Otherwise it'll start
-    // when previous entries complete (castStartedAt advances on each pop).
-    if (p.queue.length === 0) p.castStartedAt = s.frame * DT;
+    if (p.queue.length === 0) p.castStartedAt = now;
     p.queue.push({ cardId, duration });
     break;
   }

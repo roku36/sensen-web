@@ -16,8 +16,13 @@
 import { useState } from "react";
 import { CardEffect, CardType, getCardDef } from "../../sim/cards";
 import { cardFlag } from "../../sim/input";
+import { queueRemainingTime } from "../../sim/reducer";
 import { DT } from "../../sim/rules";
 import { PlayerState } from "../../sim/state";
+
+// Queue rendering scale: 35 px per second of cast time so a cost-3 chip is
+// 105 px, cost-6 is 210 px — the visual proportion to commitment is direct.
+const PX_PER_SEC = 35;
 import { getActiveMode, getSession, useKeyboardInput } from "../hooks";
 import { useStore } from "../store";
 import { PilePeek } from "./PilePeek";
@@ -65,7 +70,7 @@ export function SimpleGameplay() {
 
       <BattleZone op={op} me={me} now={now} />
 
-      <SelfHand player={me} />
+      <SelfHand player={me} now={now} />
       <StatusPanel player={me} title={selfTitle} side={localPlayer} onPeek={setPeek} />
 
       {peek?.kind === "deck" && (
@@ -166,7 +171,7 @@ function CastBar({ player, now, side, label }: { player: PlayerState; now: numbe
       <div style={queueRow}>
         <QueueChip cardId={head.cardId} pct={headPct} remaining={headRemaining} duration={head.duration} isHead />
         {rest.map((q, i) => (
-          <QueueChip key={i} cardId={q.cardId} pct={0} remaining={q.duration} duration={q.duration} />
+          <QueueChip key={i + 1} cardId={q.cardId} pct={0} remaining={q.duration} duration={q.duration} />
         ))}
       </div>
     </div>
@@ -178,8 +183,12 @@ function QueueChip({ cardId, pct, remaining, duration, isHead = false }: { cardI
   const color = def?.cardType === CardType.Attack ? "#e3553c"
     : def?.cardType === CardType.Power ? "#b465e0"
     : "#5fa0e0";
+  // Width proportional to duration so the player can SEE how much time
+  // each queued card represents — a cost-6 chip is twice as wide as a
+  // cost-3, no math needed.
+  const w = Math.max(60, duration * PX_PER_SEC);
   return (
-    <div style={{ ...queueChip, opacity: isHead ? 1 : 0.7, borderColor: isHead ? color : "#444" }}>
+    <div style={{ ...queueChip, width: w, opacity: isHead ? 1 : 0.78, borderColor: isHead ? color : "#444" }}>
       <div style={{ ...queueChipFill, width: `${pct * 100}%`, background: color }} />
       <div style={queueChipContent}>
         <span style={queueChipName}>{def?.name ?? "??"}</span>
@@ -221,23 +230,28 @@ function OpponentHand({ count }: { count: number }) {
 
 // ── Self hand ──
 
-function SelfHand({ player }: { player: PlayerState }) {
+function SelfHand({ player, now }: { player: PlayerState; now: number }) {
   return (
     <div style={handRow}>
       {player.hand.map((cardId, i) => (
-        <SimpleCard key={i} cardId={cardId} idx={i} player={player} />
+        <SimpleCard key={i} cardId={cardId} idx={i} player={player} now={now} />
       ))}
     </div>
   );
 }
 
-function SimpleCard({ cardId, idx, player }: { cardId: number; idx: number; player: PlayerState }) {
+function SimpleCard({ cardId, idx, player, now }: { cardId: number; idx: number; player: PlayerState; now: number }) {
   const def = getCardDef(cardId);
   const [hover, setHover] = useState(false);
   if (!def) return null;
   const unplayable = def.cost >= 900;
-  // You can keep clicking to queue more casts; only status junk is unplayable.
-  const clickable = !unplayable;
+  // Prereq gate: card requires this much already-queued time before it can
+  // be added. Show it greyed out (but still clickable to read the tooltip)
+  // until the queue has enough committed time.
+  const queued = queueRemainingTime(player, now);
+  const prereq = def.prereqQueueTime ?? 0;
+  const prereqOk = prereq <= queued;
+  const clickable = !unplayable && prereqOk;
 
   const onClick = () => {
     if (!clickable) return;
@@ -263,7 +277,12 @@ function SimpleCard({ cardId, idx, player }: { cardId: number; idx: number; play
           <div aria-hidden style={{ position: "absolute", inset: 0, background: "rgba(0,0,0,0.4)", pointerEvents: "none" }} />
         )}
         <div style={{ ...cardCostStyle, color: clickable ? "#ffe580" : "#cfd6e0" }}>
-          {unplayable ? "✗" : (def.cost % 1 === 0 ? def.cost.toFixed(0) : def.cost.toFixed(1)) + "s"}
+          {unplayable ? "✗" : def.cost + "s"}
+          {prereq > 0 && (
+            <span style={{ fontSize: 10, marginLeft: 4, color: prereqOk ? "#80ffa0" : "#ff9a40" }}>
+              要{prereq}s
+            </span>
+          )}
         </div>
         <div style={typeBadge}>
           {def.cardType === CardType.Attack ? "攻撃"
@@ -415,7 +434,7 @@ const castName: React.CSSProperties = { fontWeight: 700, fontSize: 14, color: "w
 const castSub: React.CSSProperties = { fontSize: 10, opacity: 0.55 };
 const queueRow: React.CSSProperties = { display: "flex", flex: 1, gap: 6, minWidth: 0, overflowX: "auto" };
 const queueChip: React.CSSProperties = {
-  position: "relative", minWidth: 110, maxWidth: 180, height: 38, padding: "4px 8px",
+  position: "relative", height: 38, padding: "4px 8px",
   border: "1.5px solid #444", borderRadius: 6,
   background: "#0c0c12", color: "white",
   overflow: "hidden", flex: "0 0 auto",

@@ -9,6 +9,8 @@
 
 import { CardEffect, getCardDef } from "../sim/cards";
 import { cardFlag } from "../sim/input";
+import { queueRemainingTime } from "../sim/reducer";
+import { DT } from "../sim/rules";
 import { GameState, PlayerState } from "../sim/state";
 
 export type Policy = (state: GameState, side: 0 | 1) => number;
@@ -27,12 +29,14 @@ function mulberry32(seed: number) {
   };
 }
 
-function playableIndices(p: PlayerState): number[] {
+function playableIndices(p: PlayerState, now: number): number[] {
   const out: number[] = [];
+  const queued = queueRemainingTime(p, now);
   for (let i = 0; i < p.hand.length; i++) {
     const d = getCardDef(p.hand[i]);
     if (!d) continue;
-    if (d.cost >= 900) continue; // status junk — can't cast
+    if (d.cost >= 900) continue; // status junk
+    if ((d.prereqQueueTime ?? 0) > queued) continue; // not enough setup
     out.push(i);
   }
   return out;
@@ -92,7 +96,7 @@ export const random: PolicyFactory = (seed = 1) => {
     // single-slot behavior; 2 lets the AI commit to a short combo and
     // makes the queue actually visible during play.
     if (p.queue.length >= 2) return 0;
-    const opts = playableIndices(p);
+    const opts = playableIndices(p, state.frame * DT);
     if (opts.length === 0) return 0;
     return cardFlag(opts[Math.floor(r() * opts.length)]) ?? 0;
   };
@@ -107,7 +111,7 @@ export const greedyAttack: PolicyFactory = (seed = 1) => {
     // single-slot behavior; 2 lets the AI commit to a short combo and
     // makes the queue actually visible during play.
     if (p.queue.length >= 2) return 0;
-    const opts = playableIndices(p);
+    const opts = playableIndices(p, state.frame * DT);
     if (opts.length === 0) return 0;
     let bestI = opts[0], bestScore = -Infinity;
     for (const i of opts) {
@@ -129,7 +133,7 @@ export const greedyDefense: PolicyFactory = (seed = 1) => {
     // single-slot behavior; 2 lets the AI commit to a short combo and
     // makes the queue actually visible during play.
     if (p.queue.length >= 2) return 0;
-    const opts = playableIndices(p);
+    const opts = playableIndices(p, state.frame * DT);
     if (opts.length === 0) return 0;
     const wantBlock = p.hp / p.hpMax < 0.6 && p.block < 8;
     let bestI = opts[0], bestScore = -Infinity;
@@ -154,7 +158,7 @@ export const heuristic: PolicyFactory = (seed = 1) => {
     // single-slot behavior; 2 lets the AI commit to a short combo and
     // makes the queue actually visible during play.
     if (p.queue.length >= 2) return 0;
-    const opts = playableIndices(p);
+    const opts = playableIndices(p, state.frame * DT);
     if (opts.length === 0) return 0;
     const hpFrac = p.hp / p.hpMax;
     const oppNearDead = o.hp <= 15;
