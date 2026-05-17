@@ -43,6 +43,14 @@ interface UiStore {
 
   loadedReplay: Replay | null;
   setLoadedReplay: (r: Replay | null) => void;
+
+  // CPU opponent for offline practice. Persisted to localStorage so the
+  // choice survives reload, and surfaced in the opponent panel so the
+  // player knows what level of opposition they're facing.
+  aiOpponentName: string; // matches a key in policies (passive/random/...)
+  aiSpectate: boolean;    // when true, AI plays for the local side too
+  setAiOpponentName: (n: string) => void;
+  setAiSpectate: (b: boolean) => void;
 }
 
 export const useStore = create<UiStore>((set) => ({
@@ -80,4 +88,17 @@ export const useStore = create<UiStore>((set) => ({
 
   loadedReplay: null,
   setLoadedReplay: (r) => set({ loadedReplay: r }),
+
+  aiOpponentName:
+    (typeof window !== "undefined" && localStorage.getItem("sensen.aiOpponent")) || "heuristic",
+  aiSpectate:
+    typeof window !== "undefined" && localStorage.getItem("sensen.aiSpectate") === "1",
+  setAiOpponentName: (n) => {
+    if (typeof window !== "undefined") localStorage.setItem("sensen.aiOpponent", n);
+    set({ aiOpponentName: n });
+  },
+  setAiSpectate: (b) => {
+    if (typeof window !== "undefined") localStorage.setItem("sensen.aiSpectate", b ? "1" : "0");
+    set({ aiSpectate: b });
+  },
 }));

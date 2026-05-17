@@ -16,10 +16,19 @@ import { CardEffect, CardType, getCardDef } from "../../sim/cards";
 import { cardFlag, INPUT_DRAW } from "../../sim/input";
 import { DRAW_COST } from "../../sim/rules";
 import { PlayerState } from "../../sim/state";
-import { getSession, useKeyboardInput } from "../hooks";
+import { getActiveMode, getSession, useKeyboardInput } from "../hooks";
 import { useStore } from "../store";
 import { PilePeek } from "./PilePeek";
 import { ResultPanel } from "./ResultPanel";
+
+// AI-level display name lookup. Mirrors the choices on Title.
+const AI_LABEL: Record<string, string> = {
+  passive: "なし",
+  random: "ランダム",
+  greedyDefense: "防御型",
+  greedyAttack: "攻撃型",
+  heuristic: "バランス型",
+};
 
 type Peek =
   | { kind: "deck"; side: 0 | 1 }
@@ -35,6 +44,15 @@ export function SimpleGameplay() {
   const setScreen = useStore((s) => s.setScreen);
   const [peek, setPeek] = useState<Peek>(null);
 
+  // Decide what to title the opposing player panel.
+  const mode = getActiveMode();
+  const aiName = useStore((s) => s.aiOpponentName);
+  const opponentTitle =
+    mode === "offline" ? `CPU 相手 (${AI_LABEL[aiName] ?? aiName})` : "相手";
+  const selfTitle =
+    mode === "offline" && useStore.getState().aiSpectate
+      ? `CPU 自分 (${AI_LABEL[aiName] ?? aiName})` : "自分";
+
   if (!game) return null;
   const me = game.players[localPlayer];
   const op = game.players[(localPlayer ^ 1) as 0 | 1];
@@ -46,13 +64,13 @@ export function SimpleGameplay() {
         <span style={{ opacity: 0.6, fontSize: 12 }}>frame {game.frame} · 2D</span>
       </div>
 
-      <StatusPanel player={op} title="相手" mirrored side={(localPlayer ^ 1) as 0 | 1} onPeek={setPeek} />
+      <StatusPanel player={op} title={opponentTitle} mirrored side={(localPlayer ^ 1) as 0 | 1} onPeek={setPeek} />
       <OpponentHand count={op.hand.length} />
 
       <BattleZone op={op} me={me} />
 
       <SelfHand player={me} />
-      <StatusPanel player={me} title="自分" side={localPlayer} onPeek={setPeek} />
+      <StatusPanel player={me} title={selfTitle} side={localPlayer} onPeek={setPeek} />
 
       {peek?.kind === "deck" && (
         <PilePeek

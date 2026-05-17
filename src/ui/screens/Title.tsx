@@ -1,8 +1,19 @@
 import { useState } from "react";
+import { policies } from "../../ai/policy";
 import { loadDeck, loadStreak, streakBucket } from "../../sim/deck-storage";
 import { startOffline, startOnline } from "../hooks";
 import { useStore } from "../store";
 import { pickReplayFile } from "./ReplayViewer";
+
+// AI options surfaced on Title — labels in Japanese, key matches a policy
+// factory exported from ../../ai/policy.
+const AI_LEVELS: { key: string; label: string; desc: string }[] = [
+  { key: "passive",       label: "なし",         desc: "相手は何もしない (旧 Practice)" },
+  { key: "random",        label: "ランダム",     desc: "出せる手から無造作にプレイ" },
+  { key: "greedyDefense", label: "防御型",       desc: "HPが減ると堅実に守る" },
+  { key: "greedyAttack",  label: "攻撃型",       desc: "常に最大ダメージを優先" },
+  { key: "heuristic",     label: "バランス型",   desc: "状況で守る/攻める/止める。推奨" },
+];
 
 export function Title() {
   const remembered = useStore((s) => s.lastSignalUrl);
@@ -10,8 +21,19 @@ export function Title() {
   const viewMode = useStore((s) => s.viewMode);
   const setViewMode = useStore((s) => s.setViewMode);
   const setScreen = useStore((s) => s.setScreen);
+  const aiName = useStore((s) => s.aiOpponentName);
+  const setAiName = useStore((s) => s.setAiOpponentName);
+  const spectate = useStore((s) => s.aiSpectate);
+  const setSpectate = useStore((s) => s.setAiSpectate);
   const deckSize = loadDeck().length;
   const streak = loadStreak();
+
+  const startSolo = () => {
+    const oppFact = policies[aiName] ?? policies.heuristic;
+    const selfFact = spectate ? oppFact : undefined;
+    void startOffline(loadDeck(), { opponentPolicy: oppFact, selfPolicy: selfFact });
+  };
+
   return (
     <div style={overlay}>
       <div style={panel}>
@@ -24,19 +46,26 @@ export function Title() {
           </div>
         )}
 
-        {/* View toggle: rich 3D vs simple HUD */}
+        {/* View toggle */}
         <div style={toggleRow}>
           <button style={toggleBtn(viewMode === "rich3d")} onClick={() => setViewMode("rich3d")}>3D Rich</button>
           <button style={toggleBtn(viewMode === "simple")} onClick={() => setViewMode("simple")}>2D Simple</button>
         </div>
-        <p style={hint}>
-          {viewMode === "rich3d"
-            ? "Full Three.js scene with shaders & particles."
-            : "HUD-only — readable numbers for balancing."}
-        </p>
 
-        <button style={btn} onClick={() => startOffline(loadDeck())}>
-          Practice (offline)
+        {/* AI opponent picker */}
+        <div style={{ marginTop: 8, marginBottom: 10, textAlign: "left" }}>
+          <label style={sectionLabel}>CPU 対戦相手</label>
+          <select style={select} value={aiName} onChange={(e) => setAiName(e.target.value)}>
+            {AI_LEVELS.map((l) => <option key={l.key} value={l.key}>{l.label} — {l.desc}</option>)}
+          </select>
+          <label style={checkboxRow}>
+            <input type="checkbox" checked={spectate} onChange={(e) => setSpectate(e.target.checked)} />
+            <span>AI vs AI 観戦 (自分側も CPU が操作)</span>
+          </label>
+        </div>
+
+        <button style={btn} onClick={startSolo}>
+          {spectate ? "AI 同士の試合を観戦" : `CPU と対戦 (${AI_LEVELS.find((l) => l.key === aiName)?.label})`}
         </button>
         <div style={{ height: 18 }} />
         <input
@@ -65,18 +94,20 @@ export function Title() {
   );
 }
 
-const toggleRow: React.CSSProperties = { display: "flex", gap: 0, marginBottom: 6, justifyContent: "center" };
+const toggleRow: React.CSSProperties = { display: "flex", gap: 0, marginBottom: 4, justifyContent: "center" };
 const toggleBtn = (active: boolean): React.CSSProperties => ({
   background: active ? "#5a3a8a" : "#2a2a35",
   color: "white", border: 0, padding: "6px 16px", cursor: "pointer", fontSize: 13,
   borderRadius: 0,
 });
-const hint: React.CSSProperties = { fontSize: 11, opacity: 0.55, margin: "0 0 18px" };
+const sectionLabel: React.CSSProperties = { display: "block", fontSize: 11, opacity: 0.7, letterSpacing: 1, marginBottom: 4 };
+const select: React.CSSProperties = { background: "#1a1a22", color: "white", border: "1px solid #444", borderRadius: 6, padding: "6px 10px", fontSize: 12, width: "100%" };
+const checkboxRow: React.CSSProperties = { display: "flex", gap: 6, fontSize: 11, opacity: 0.85, marginTop: 6, cursor: "pointer", color: "#ccc" };
 
 const overlay: React.CSSProperties = { position: "absolute", inset: 0, display: "grid", placeItems: "center", pointerEvents: "auto" };
-const panel: React.CSSProperties = { background: "rgba(0,0,0,0.6)", padding: 36, borderRadius: 16, minWidth: 380, textAlign: "center" };
-const btn: React.CSSProperties = { background: "#5a3a8a", color: "white", border: 0, borderRadius: 8, padding: "12px 24px", fontSize: 18, cursor: "pointer", width: "100%" };
+const panel: React.CSSProperties = { background: "rgba(0,0,0,0.6)", padding: 32, borderRadius: 16, minWidth: 380, maxWidth: 460, textAlign: "center" };
+const btn: React.CSSProperties = { background: "#5a3a8a", color: "white", border: 0, borderRadius: 8, padding: "12px 24px", fontSize: 16, cursor: "pointer", width: "100%" };
 const input: React.CSSProperties = { background: "#1a1a22", color: "white", border: "1px solid #444", borderRadius: 8, padding: "10px 12px", fontSize: 14, marginBottom: 12, width: "calc(100% - 26px)" };
 const deckBtn: React.CSSProperties = { background: "transparent", color: "#aaa", border: "1px solid #444", borderRadius: 8, padding: "8px 16px", fontSize: 13, cursor: "pointer", width: "100%" };
-const streakChip: React.CSSProperties = { display: "inline-block", padding: "6px 14px", borderRadius: 999, background: "rgba(255,180,80,0.18)", color: "#ffd070", border: "1px solid rgba(255,180,80,0.45)", fontSize: 14, marginBottom: 18 };
+const streakChip: React.CSSProperties = { display: "inline-block", padding: "6px 14px", borderRadius: 999, background: "rgba(255,180,80,0.18)", color: "#ffd070", border: "1px solid rgba(255,180,80,0.45)", fontSize: 14, marginBottom: 14 };
 const streakBucketHint: React.CSSProperties = { fontSize: 11, opacity: 0.7, marginLeft: 8 };

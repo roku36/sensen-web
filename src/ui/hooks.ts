@@ -1,8 +1,17 @@
 import { useEffect, useRef } from "react";
 import { OfflineSession } from "../net/offline";
 import { Session } from "../net/session";
+import { PolicyFactory } from "../ai/policy";
 import { CardId } from "../sim/cards";
 import { useStore } from "./store";
+
+export interface AiOptions {
+  opponentPolicy?: PolicyFactory;
+  selfPolicy?: PolicyFactory;
+}
+
+// Remembered across rematches so '次のマッチへ' keeps the chosen CPU.
+let lastOfflineAi: AiOptions = {};
 
 export type AnySession = OfflineSession | Session;
 let activeSession: AnySession | null = null;
@@ -48,11 +57,14 @@ async function stopActiveSession(): Promise<void> {
   useStore.setState({ game: null, gameFrame: 0, log: [], desyncFrame: null });
 }
 
-export async function startOffline(deck: CardId[]) {
+export async function startOffline(deck: CardId[], ai: AiOptions = {}) {
   await stopActiveSession();
+  lastOfflineAi = ai;
   const s = new OfflineSession({
     deck,
     onState: (g) => useStore.getState().setGame(g),
+    opponentPolicy: ai.opponentPolicy,
+    selfPolicy: ai.selfPolicy,
   });
   setSession(s);
   activeMode = "offline";
@@ -95,7 +107,7 @@ export async function startOnline(signalUrlBase: string, deck: CardId[]) {
 import { loadDeck, loadStreak, urlForStreak } from "../sim/deck-storage";
 export { loadDeck };
 
-export function rematchOffline() { void startOffline(loadDeck()); }
+export function rematchOffline() { void startOffline(loadDeck(), lastOfflineAi); }
 export function rematchOnline() {
   const url = useStore.getState().lastSignalUrl;
   void startOnline(url, loadDeck());

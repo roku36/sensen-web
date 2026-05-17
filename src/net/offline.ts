@@ -1,8 +1,11 @@
-// Offline session: single peer, no networking, fixed-step sim. Useful for local
-// playtesting and as a fallback when no opponent is available.
+// Offline session: single peer, no networking, fixed-step sim.
 //
-// Mirrors src/game/mod.rs GameMode::Offline behavior — opponent exists but is
-// idle (no AI in the original).
+// Either side (LocalPlayer / Opponent) can be driven by an AI policy. The
+// most common cases:
+//   - Neither policy set        → "practice dummy" (opponent does nothing).
+//   - opponentPolicy = something → human plays vs CPU (the v1 release mode).
+//   - both policies set         → AI-vs-AI spectator (handy for debugging and
+//                                  watching balance changes ripple through).
 
 import { CardId } from "../sim/cards";
 import { initGame } from "../sim/init";
@@ -10,6 +13,7 @@ import { step } from "../sim/reducer";
 import { fnv1a64 } from "../sim/rng";
 import { DEFAULT_COST_RATE, INITIAL_HP } from "../sim/rules";
 import { GameState } from "../sim/state";
+import { Policy, PolicyFactory } from "../ai/policy";
 import { Replay } from "../replay/format";
 
 export interface OfflineOptions {
@@ -17,6 +21,10 @@ export interface OfflineOptions {
   hpMax?: number;
   costRate?: number;
   onState?: (s: GameState) => void;
+  /** Drive the OPPONENT side. Unset = idle dummy. */
+  opponentPolicy?: PolicyFactory;
+  /** Drive the LOCAL side too (spectator / AI-vs-AI mode). */
+  selfPolicy?: PolicyFactory;
 }
 
 export class OfflineSession {
@@ -30,6 +38,9 @@ export class OfflineSession {
   // Recording: keep all non-zero inputs so we can rebuild a Replay on exit.
   private matchSeed: bigint;
   private recorded: { f: number; s: 0 | 1; flags: number }[] = [];
+  // Instantiated AI closures (each holds its own seeded RNG + cooldown).
+  private selfAi: Policy | null;
+  private oppAi: Policy | null;
 
   constructor(opts: OfflineOptions) {
     this.opts = opts;
@@ -41,6 +52,11 @@ export class OfflineSession {
       deckP0: opts.deck,
       deckP1: opts.deck,
     });
+    // Each AI gets a stable seed derived from the match seed so a given
+    // match plays out identically across reloads (useful for repro).
+    const seedNum = Number(this.matchSeed & 0xffffffffn);
+    this.selfAi = opts.selfPolicy?.(seedNum ^ 0x9e37) ?? null;
+    this.oppAi = opts.opponentPolicy?.(seedNum ^ 0x4815) ?? null;
   }
 
   buildReplay(): Replay {
@@ -77,10 +93,19 @@ export class OfflineSession {
     this.acc += elapsed;
     const dt = 1 / 60;
     while (this.acc >= dt) {
-      const local = this.pendingLocal;
+      // Local side: AI overrides keyboard input only if a selfPolicy is set
+      // (spectator mode). Otherwise we take queued human input.
+      let local = this.pendingLocal;
       this.pendingLocal = 0;
+      if (this.selfAi) {
+        const ai = this.selfAi(this.state, 0);
+        if (ai !== 0) local = ai;
+      }
+      const opp = this.oppAi ? this.oppAi(this.state, 1) : 0;
+
       if (local !== 0) this.recorded.push({ f: this.state.frame, s: 0, flags: local });
-      step(this.state, local, 0);
+      if (opp   !== 0) this.recorded.push({ f: this.state.frame, s: 1, flags: opp });
+      step(this.state, local, opp);
       this.acc -= dt;
     }
     this.opts.onState?.(this.state);
