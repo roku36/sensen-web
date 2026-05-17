@@ -12,7 +12,7 @@
 //   opponent: pivot at far edge, faces toward -Z (away from us → backs visible).
 
 import { CardType, getCardDef } from "../../sim/cards";
-import { cardFlag, INPUT_DRAW } from "../../sim/input";
+import { cardFlag } from "../../sim/input";
 import { PlayerState } from "../../sim/state";
 import { getSession } from "../hooks";
 import { Card3d } from "./Card3d";
@@ -61,9 +61,10 @@ export function Hand({ player, side, interactive = side === "self" }: HandProps)
         const rotZ = -a;
 
         const def = getCardDef(cardId);
-        const effectiveCost =
-          def && player.corruption && def.cardType === CardType.Skill ? 0 : def?.cost ?? 999;
-        const playable = !!def && player.cost >= effectiveCost && def.cost !== 999;
+        // In the cast-time model, a card is "playable" (clickable to start a
+        // cast) whenever its cost is finite AND the player is not already
+        // casting something else.
+        const playable = !!def && def.cost < 900 && !player.casting;
 
         return (
           <Card3d
@@ -87,25 +88,7 @@ export function Hand({ player, side, interactive = side === "self" }: HandProps)
         );
       })}
 
-      {/* Draw button — only for self */}
-      {side === "self" && (
-        <group
-          position={[FAN_RADIUS + 1.4, FAN_RADIUS - 0.4, 0]}
-          onClick={(e) => {
-            e.stopPropagation();
-            getSession()?.pushLocalInput(INPUT_DRAW);
-          }}
-        >
-          <mesh>
-            <boxGeometry args={[0.9, 0.9, 0.08]} />
-            <meshStandardMaterial
-              color={player.cost >= player.hand.length ? "#5a3a8a" : "#2a1a3a"}
-              emissive={player.cost >= player.hand.length ? "#a070ff" : "#000000"}
-              emissiveIntensity={0.4}
-            />
-          </mesh>
-        </group>
-      )}
+      {/* No draw button in the cast-time model — cards auto-refill after each resolve. */}
     </group>
   );
 }

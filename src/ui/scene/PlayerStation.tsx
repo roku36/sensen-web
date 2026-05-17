@@ -54,7 +54,6 @@ function buildStatus(p: PlayerState): string {
   if (p.strength !== 0) parts.push(`Str${p.strength > 0 ? "+" : ""}${p.strength.toFixed(0)}`);
   if (p.vulnerableSecs > 0) parts.push(`Vuln(${p.vulnerableSecs.toFixed(1)}s)`);
   if (p.weakSecs > 0) parts.push(`Weak(${p.weakSecs.toFixed(1)}s)`);
-  if (p.accelRemaining > 0) parts.push(`Accel+${p.accelBonusRate.toFixed(1)}(${p.accelRemaining.toFixed(1)}s)`);
   if (p.rage && p.rage.remaining > 0) parts.push(`Rage(${p.rage.remaining.toFixed(1)}s)`);
   if (p.metallicize) parts.push(`Metal+${p.metallicize.blockPerSec}/s`);
   if (p.demonForm) parts.push(`Demon+${p.demonForm.strengthPerSec}str/s`);

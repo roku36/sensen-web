@@ -1,6 +1,5 @@
 import { OrbitControls } from "@react-three/drei";
 import { Background } from "./Background";
-import { CostMeter } from "./CostMeter";
 import { Hand } from "./Hand";
 import { PlayerStation } from "./PlayerStation";
 import { CardFlights } from "../effects/CardFlight";
@@ -46,8 +45,6 @@ export function Scene() {
       <PlayerStation player={op} position={[0, 2.6, -5.5]} isSelf={false} side={remotePlayer} />
       <PlayerStation player={me} position={[0, 1.6, 2.5]} isSelf={true} side={localPlayer} />
 
-      <CostMeter cost={me.cost} rate={me.costRate} position={[5.6, 1.6, 2.0]} />
-      <CostMeter cost={op.cost} rate={op.costRate} position={[-5.6, 2.6, -3.5]} />
 
       <Hand player={me} side="self" />
       <Hand player={op} side="opponent" />

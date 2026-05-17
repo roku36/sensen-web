@@ -12,7 +12,6 @@ import { Policy } from "./policy";
 export interface MatchOptions {
   matchSeed: bigint;
   hpMax?: number;
-  costRate?: number;
   deckP0: CardId[];
   deckP1: CardId[];
   /** Cap so a stalled match (passive vs passive) doesn't loop forever. */
@@ -35,10 +34,9 @@ export interface MatchResult {
 
 export function runMatch(opts: MatchOptions): MatchResult {
   const hpMax = opts.hpMax ?? 80;
-  const costRate = opts.costRate ?? 0.4;
   const maxFrames = opts.maxFrames ?? 60 * 180; // 3 minutes
   const s = initGame({
-    matchSeed: opts.matchSeed, hpMax, costRate,
+    matchSeed: opts.matchSeed, hpMax,
     deckP0: opts.deckP0, deckP1: opts.deckP1,
   });
 

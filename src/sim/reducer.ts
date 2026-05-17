@@ -1,8 +1,10 @@
-// Pure deterministic reducer. Both peers run the identical logic on identical
-// inputs to converge on identical state. This is what makes rollback work.
+// Pure deterministic reducer (cast-time model v2).
 //
-// Port of src/game/{cost,deck,effect,health,status,input_buffer}.rs collapsed
-// into one fixed-step function: step(state, [p0input, p1input], dt) -> state.
+// One cast slot per player. Clicking a card immediately moves it from hand
+// to the cast slot; after `cost` seconds elapse, the card's effect resolves,
+// the card lands in the discard pile, and one new card is drawn to refill
+// the hand. Damage / status / persistent powers are unchanged from v1 —
+// only the interlock between "wanting to play" and "actually playing" is.
 
 import {
   CardEffect,
@@ -10,11 +12,9 @@ import {
   CardType,
   getCardDef,
 } from "./cards";
-import { cardFlag, INPUT_DRAW } from "./input";
+import { cardFlag } from "./input";
 import {
   BLOCK_DECAY_RATE,
-  DRAW_COST,
-  DRAW_COUNT,
   DT,
   MAX_HAND_SIZE,
   PLAYED_TO_DISCARD,
@@ -56,7 +56,7 @@ const newBus = (): Bus => ({
 
 const opp = (i: 0 | 1): 0 | 1 => (i === 0 ? 1 : 0);
 
-// ── Tick (status durations + persistent powers + block decay + acceleration + cost) ──
+// ── Time-based ticks: statuses, persistent powers, block decay ──
 
 function tickStatus(p: PlayerState, dt: number) {
   if (p.vulnerableSecs > 0) p.vulnerableSecs = Math.max(0, p.vulnerableSecs - dt);
@@ -111,36 +111,45 @@ function tickBlockDecay(p: PlayerState, dt: number) {
   p.block = Math.max(0, p.block - BLOCK_DECAY_RATE * dt);
 }
 
-function tickAcceleration(p: PlayerState, dt: number) {
-  if (p.accelRemaining > 0) {
-    p.accelRemaining -= dt;
-    if (p.accelRemaining <= 0) {
-      p.costRate = Math.max(0, p.costRate - p.accelBonusRate);
-      p.accelBonusRate = 0;
-      p.accelRemaining = 0;
-    }
+// ── Cast slot: start (from input) and resolve (from tick) ──
+
+function tickCasting(s: GameState, now: number, bus: Bus) {
+  for (const idx of [0, 1] as const) {
+    const p = s.players[idx];
+    if (!p.casting) continue;
+    if (now - p.casting.startedAt < p.casting.duration) continue;
+    // Cast complete — resolve.
+    const cardId = p.casting.cardId;
+    const def = getCardDef(cardId);
+    p.casting = null;
+    if (!def) continue;
+
+    // Dispose: powers vanish from circulation; exhausting cards disappear
+    // permanently; everything else → discard pile.
+    let goToDiscard = PLAYED_TO_DISCARD;
+    let countsAsExhaust = false;
+    if (def.cardType === CardType.Power) { goToDiscard = false; }
+    if (def.exhausts || def.effect.kind === "Exhaust") { goToDiscard = false; countsAsExhaust = true; }
+    if (def.cardType === CardType.Skill && p.corruption) { goToDiscard = false; countsAsExhaust = true; }
+    if (goToDiscard) p.discard.push(cardId);
+
+    bus.cardPlayed.push({ player: idx, cardId });
+    if (countsAsExhaust) bus.exhausted.push({ player: idx, cardId });
+
+    // Auto-refill: draw 1 new card so hand returns to its post-cast size.
+    bus.draw.push({ target: idx, count: 1 });
   }
 }
 
-const accumulateCost = (p: PlayerState, dt: number) => {
-  p.cost += p.costRate * dt;
-};
-
 // ── Input handling ──
 
-function applyInput(s: GameState, idx: 0 | 1, flags: number, bus: Bus) {
+function applyInput(s: GameState, idx: 0 | 1, flags: number) {
   if (flags === 0) return;
   const p = s.players[idx];
+  // Already casting → ignore. Single slot.
+  if (p.casting) return;
 
-  // Draw: flat 1-cost.
-  if ((flags & INPUT_DRAW) !== 0) {
-    if (p.cost >= DRAW_COST) {
-      p.cost -= DRAW_COST;
-      bus.draw.push({ target: idx, count: DRAW_COUNT });
-    }
-  }
-
-  // First card-flag wins.
+  // First matching card-flag wins.
   for (let i = 0; i < MAX_HAND_SIZE; i++) {
     const flag = cardFlag(i);
     if (flag === null) continue;
@@ -149,18 +158,19 @@ function applyInput(s: GameState, idx: 0 | 1, flags: number, bus: Bus) {
     if (cardId === undefined) break;
     const def = getCardDef(cardId);
     if (!def) break;
-
-    const cost = (p.corruption && def.cardType === CardType.Skill) ? 0 : def.cost;
-    if (p.cost < cost) break;
-    p.cost -= cost;
-    playCard(s, idx, i, bus);
+    if (def.cost >= 900) break; // status junk — unplayable, sits in hand
+    // Corruption: skills cost 0s (instant resolution next frame).
+    let duration = def.cost;
+    if (p.corruption && def.cardType === CardType.Skill) duration = 0;
+    // Move card from hand → cast slot.
+    p.hand.splice(i, 1);
+    p.casting = { cardId, startedAt: s.frame * DT, duration };
     break;
   }
 }
 
 // ── Deck / hand / discard ──
 
-// Public deal helper (used by init to give the opening hand without spending cost).
 export function dealCards(p: PlayerState, count: number) {
   let remaining = count;
   while (remaining > 0) {
@@ -190,7 +200,7 @@ function drawOne(p: PlayerState): CardId | null {
   const idx = Number(rangeU64(p.rng, BigInt(p.deck.length)));
   const last = p.deck.length - 1;
   const out = p.deck[idx];
-  p.deck[idx] = p.deck[last]; // swap_remove
+  p.deck[idx] = p.deck[last];
   p.deck.pop();
   return out;
 }
@@ -201,13 +211,11 @@ function drawCards(s: GameState, idx: 0 | 1, count: number, bus: Bus) {
   while (remaining > 0) {
     if (p.hand.length >= MAX_HAND_SIZE) break;
     remaining--;
-
     if (p.deck.length === 0 && p.discard.length > 0) {
       p.deck.push(...p.discard);
       p.discard.length = 0;
       shuffleDeck(p);
     }
-
     const c = drawOne(p);
     if (c === null) break;
     p.hand.push(c);
@@ -227,34 +235,9 @@ function drawCards(s: GameState, idx: 0 | 1, count: number, bus: Bus) {
   }
 }
 
-function playCard(s: GameState, idx: 0 | 1, handIndex: number, bus: Bus) {
-  const p = s.players[idx];
-  if (handIndex >= p.hand.length) return;
-  const cardId = p.hand[handIndex];
-  p.hand.splice(handIndex, 1);
-
-  const def = getCardDef(cardId);
-  if (!def) return;
-
-  // Disposition: powers stay attached (vanish from circulation), exhausting
-  // cards are removed permanently from this match, otherwise → discard pile
-  // (Slay-style cycling). Corruption forces every skill to exhaust.
-  let goToDiscard = PLAYED_TO_DISCARD;
-  let countsAsExhaust = false;
-  if (def.cardType === CardType.Power) { goToDiscard = false; }
-  if (def.exhausts || def.effect.kind === "Exhaust") { goToDiscard = false; countsAsExhaust = true; }
-  if (def.cardType === CardType.Skill && p.corruption) { goToDiscard = false; countsAsExhaust = true; }
-
-  if (goToDiscard) p.discard.push(cardId);
-
-  bus.cardPlayed.push({ player: idx, cardId });
-  if (countsAsExhaust) bus.exhausted.push({ player: idx, cardId });
-}
-
 // ── Card effect resolution ──
 
 function attackDamage(base: number, attacker: PlayerState, defender: PlayerState | null): number {
-  // Slay-style: +1 Strength = +1 damage per attack-hit (flat additive).
   let dmg = base + attacker.strength;
   if (attacker.weakSecs > 0) dmg *= 0.75;
   if (defender && defender.vulnerableSecs > 0) dmg *= 1.5;
@@ -305,14 +288,10 @@ function applyEffect(
       bus.weak.push({ target: opp(idx), duration: effect.duration });
       break;
     case "Accelerate":
-      p.costRate += effect.bonusRate;
-      if (p.accelRemaining > 0) {
-        p.accelBonusRate += effect.bonusRate;
-        p.accelRemaining = Math.max(p.accelRemaining, effect.duration);
-      } else {
-        p.accelBonusRate = effect.bonusRate;
-        p.accelRemaining = Math.max(0, effect.duration);
-      }
+      // No-op in cast-time model. The old meaning (cost regen boost) doesn't
+      // map cleanly here. Cards that had this effect (Bloodletting/SeeingRed
+      // /Offering/Dropkick/Berserk) are weaker than intended for now; will
+      // redesign as e.g. "next cast is N× faster" in a follow-up.
       break;
     case "BodySlam":
       bus.damage.push({ target: opp(idx), amount: attackDamage(p.block, p, o), source: idx, kind: DamageKind.Attack });
@@ -370,7 +349,7 @@ function applyEffect(
       p.brutality = { selfPerSec: effect.selfDmgPerSec, draw: effect.draw, interval: effect.drawInterval, timer: 0 };
       break;
     case "Exhaust":
-      // Handled by deck system (card already excluded from deck).
+      // Card vanishes (handled by disposition logic in tickCasting).
       break;
     case "AddStatus":
       bus.addStatus.push({ target: idx, cardId: effect.cardId });
@@ -382,8 +361,6 @@ function applyEffect(
 }
 
 function processCardPlayed(s: GameState, bus: Bus) {
-  // Drain card-played and exhausted queues. Each can re-enqueue further effects.
-  // Loop until both are empty (bounded by cards in hand).
   while (bus.cardPlayed.length > 0 || bus.exhausted.length > 0) {
     const played = bus.cardPlayed.splice(0, bus.cardPlayed.length);
     const exhausted = bus.exhausted.splice(0, bus.exhausted.length);
@@ -411,10 +388,7 @@ function processCardPlayed(s: GameState, bus: Bus) {
   }
 }
 
-// ── Health / damage / block / juggernaut / thorns ──
-
 function processBlockGains(s: GameState, bus: Bus) {
-  // Juggernaut fires a Damage on block-gain.
   while (bus.block.length > 0) {
     const m = bus.block.shift()!;
     const p = s.players[m.target];
@@ -430,18 +404,15 @@ function processBlockGains(s: GameState, bus: Bus) {
   }
   while (bus.thorns.length > 0) {
     const m = bus.thorns.shift()!;
-    const p = s.players[m.target];
-    p.thorns = Math.max(0, p.thorns + m.amount);
+    s.players[m.target].thorns = Math.max(0, s.players[m.target].thorns + m.amount);
   }
 }
 
 function processDamage(s: GameState, bus: Bus) {
-  // Damage may queue thorns (which queue more damage), so loop.
   while (bus.damage.length > 0) {
     const m = bus.damage.shift()!;
     const target = s.players[m.target];
     const total = Math.max(0, m.amount);
-    // pierce: fraction that skips block entirely (FiendFire 50%, Reaper 100%).
     const pierce = Math.max(0, Math.min(1, m.pierce ?? 0));
     const directHp = total * pierce;
     let blockable = total * (1 - pierce);
@@ -499,34 +470,29 @@ function processDraw(s: GameState, bus: Bus) {
   }
 }
 
-
-// ── The frame step. Mutates `s` in place. Order matches Rust GameplaySystems. ──
+// ── The frame step. Mutates `s` in place. ──
 
 export function step(s: GameState, p0Input: number, p1Input: number, dt: number = DT): GameState {
   if (s.result !== 0) {
     s.frame++;
     return s;
   }
-
+  const now = s.frame * DT;
   const bus = newBus();
 
-  // Tick: status durations, persistent powers, block decay, acceleration, cost.
-  for (const p of s.players) {
-    tickStatus(p, dt);
-  }
+  // 1. Time-based ticks.
+  for (const p of s.players) tickStatus(p, dt);
   tickPowers(s, dt, bus);
-  for (const p of s.players) {
-    tickBlockDecay(p, dt);
-    tickAcceleration(p, dt);
-    accumulateCost(p, dt);
-  }
+  for (const p of s.players) tickBlockDecay(p, dt);
 
-  // Input.
-  applyInput(s, 0, p0Input, bus);
-  applyInput(s, 1, p1Input, bus);
+  // 2. Cast slots: anything completing this frame resolves now.
+  tickCasting(s, now, bus);
 
-  // Effect / deck / health resolution loop until no more messages.
-  // tickPowers may have queued block messages. Settle them first.
+  // 3. Inputs: start new casts (no-op if already casting).
+  applyInput(s, 0, p0Input);
+  applyInput(s, 1, p1Input);
+
+  // 4. Drain effect / draw / damage chains until quiescent.
   let safety = 0;
   while (
     bus.cardPlayed.length || bus.exhausted.length ||
@@ -534,7 +500,7 @@ export function step(s: GameState, p0Input: number, p1Input: number, dt: number 
     bus.block.length || bus.thorns.length ||
     bus.strength.length || bus.vuln.length || bus.weak.length || bus.addStatus.length
   ) {
-    if (++safety > 256) break; // bounded by cards in hand + chained effects
+    if (++safety > 256) break;
     processCardPlayed(s, bus);
     processStatusBus(s, bus);
     processBlockGains(s, bus);
@@ -543,7 +509,7 @@ export function step(s: GameState, p0Input: number, p1Input: number, dt: number 
     processDraw(s, bus);
   }
 
-  // Game-over check.
+  // 5. Game over?
   if (s.players[0].hp <= 0 && s.players[1].hp <= 0) s.result = 3;
   else if (s.players[0].hp <= 0) s.result = 2;
   else if (s.players[1].hp <= 0) s.result = 1;

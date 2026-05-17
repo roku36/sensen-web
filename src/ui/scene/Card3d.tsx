@@ -44,7 +44,7 @@ export function Card3d({
     u_time: { value: 0 },
     u_type: { value: def?.cardType ?? 3 },
     u_playable: { value: playable && faceUp ? 1 : 0 },
-    u_disabled: { value: !playable || def?.cost === 999 ? 1 : 0 },
+    u_disabled: { value: !playable || (def && def.cost >= 900) ? 1 : 0 },
     u_hover: { value: 0 },
     u_faceUp: { value: face },
   });
@@ -62,7 +62,7 @@ export function Card3d({
       m.uniforms.u_time.value += dt;
       m.uniforms.u_type.value = def?.cardType ?? 3;
       m.uniforms.u_playable.value = playable && faceUp ? 1 : 0;
-      m.uniforms.u_disabled.value = !playable || def?.cost === 999 ? 1 : 0;
+      m.uniforms.u_disabled.value = !playable || (def && def.cost >= 900) ? 1 : 0;
       const target = hover && interactive ? 1 : 0;
       m.uniforms.u_hover.value += (target - m.uniforms.u_hover.value) * Math.min(1, dt * 8);
     }
@@ -134,7 +134,7 @@ export function Card3d({
             anchorX="center"
             anchorY="middle"
           >
-            {def.cost === 999 ? "X" : def.cost.toFixed(1)}
+            {def.cost >= 900 ? "X" : def.cost.toFixed(1) + "s"}
           </Text>
           <Text
             position={[0, -0.55, 0.01]}
@@ -154,7 +154,7 @@ export function Card3d({
                 <div style={tipTitle}>{def.name}</div>
                 <div style={tipMeta}>
                   {def.cardType === CardType.Attack ? "攻撃" : def.cardType === CardType.Skill ? "技" : def.cardType === CardType.Power ? "パワー" : "状態"}
-                  {" · "}コスト {def.cost === 999 ? "—" : def.cost}
+                  {" · "}キャスト {def.cost >= 900 ? "不可" : def.cost + "秒"}
                   {def.exhausts && " · 1回限り"}
                 </div>
                 <div style={tipBody}>{def.description}</div>

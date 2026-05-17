@@ -15,7 +15,6 @@ export interface Replay {
   /** Hex-encoded u64 matchSeed (bigint serialization). */
   matchSeed: string;
   hpMax: number;
-  costRate: number;
   deckP0: CardId[];
   deckP1: CardId[];
   /** Compact per-input record. `s` is side (0|1), `flags` is input bitfield. */

@@ -29,7 +29,6 @@ export class ReplayEngine {
     this.state = initGame({
       matchSeed: BigInt("0x" + replay.matchSeed),
       hpMax: replay.hpMax,
-      costRate: replay.costRate,
       deckP0: replay.deckP0,
       deckP1: replay.deckP1,
     });

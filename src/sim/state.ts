@@ -1,7 +1,14 @@
 import { CardId } from "./cards";
 import { Rng } from "./rng";
 
-// Status effect bag attached to a player. All scalar so JSON-clonable.
+// One slot per player. cardId = what's being cast, startedAt = sim seconds
+// when the cast began, duration = cast time in seconds (= card.cost).
+export interface CastSlot {
+  cardId: CardId;
+  startedAt: number;
+  duration: number;
+}
+
 export interface PlayerState {
   handle: number;
   // Vitals
@@ -9,17 +16,13 @@ export interface PlayerState {
   hpMax: number;
   block: number;
   thorns: number;
-  // Resources
-  cost: number;
-  costRate: number;
-  // Status (ducked)
+  // Cast slot — when non-null, this player cannot start another cast.
+  casting: CastSlot | null;
+  // Status durations (seconds remaining)
   strength: number;
   vulnerableSecs: number;
   weakSecs: number;
-  // Acceleration buff
-  accelBonusRate: number;
-  accelRemaining: number;
-  // Persistent powers (each is independent)
+  // Persistent powers
   rage: { blockPerAttack: number; remaining: number } | null;
   metallicize: { blockPerSec: number } | null;
   demonForm: { strengthPerSec: number; accumulated: number } | null;
@@ -42,18 +45,14 @@ export interface PlayerState {
 }
 
 export interface GameState {
-  // Frame counter (each fixed step increments).
   frame: number;
-  // Match-level seed (shared across peers).
   matchSeed: bigint;
   players: [PlayerState, PlayerState];
-  // Game over: 0 = playing, 1 = p0 wins, 2 = p1 wins, 3 = draw
   result: 0 | 1 | 2 | 3;
 }
 
 const DEFAULT_PLAYER = (
   handle: number,
-  costRate: number,
   hpMax: number,
   rngState: bigint,
   initialDeck: CardId[],
@@ -63,13 +62,10 @@ const DEFAULT_PLAYER = (
   hpMax,
   block: 0,
   thorns: 0,
-  cost: 0,
-  costRate,
+  casting: null,
   strength: 0,
   vulnerableSecs: 0,
   weakSecs: 0,
-  accelBonusRate: 0,
-  accelRemaining: 0,
   rage: null,
   metallicize: null,
   demonForm: null,
@@ -91,15 +87,14 @@ const DEFAULT_PLAYER = (
 
 export function makePlayer(
   handle: number,
-  costRate: number,
   hpMax: number,
   rngState: bigint,
   deck: CardId[],
 ): PlayerState {
-  return DEFAULT_PLAYER(handle, costRate, hpMax, rngState, deck);
+  return DEFAULT_PLAYER(handle, hpMax, rngState, deck);
 }
 
-// Deep-clone snapshot. JSON ops bail on bigint, so we manually walk.
+// Deep-clone snapshot.
 export function snapshot(s: GameState): GameState {
   return {
     frame: s.frame,
@@ -111,6 +106,7 @@ export function snapshot(s: GameState): GameState {
 
 const clonePlayer = (p: PlayerState): PlayerState => ({
   ...p,
+  casting: p.casting ? { ...p.casting } : null,
   rage: p.rage ? { ...p.rage } : null,
   metallicize: p.metallicize ? { ...p.metallicize } : null,
   demonForm: p.demonForm ? { ...p.demonForm } : null,

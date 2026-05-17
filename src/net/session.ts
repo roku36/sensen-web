@@ -11,7 +11,7 @@
 import { checksum } from "../sim/checksum";
 import { CardId } from "../sim/cards";
 import { matchSeedFromPeers } from "../sim/rng";
-import { DEFAULT_COST_RATE, INITIAL_HP } from "../sim/rules";
+import { INITIAL_HP } from "../sim/rules";
 import { GameState } from "../sim/state";
 import { MatchboxClient, PeerId } from "./matchbox";
 import { RollbackEngine, RollbackEvent } from "./rollback";
@@ -23,7 +23,6 @@ export interface SessionOptions {
   signalUrl: string;
   iceServers?: RTCIceServer[];
   deck: CardId[];
-  costRate?: number;
   hpMax?: number;
   onState?: (s: GameState) => void;
   onLog?: (line: string) => void;
@@ -105,7 +104,6 @@ export class Session {
     this.engine = new RollbackEngine({
       matchSeed,
       hpMax: this.opts.hpMax ?? INITIAL_HP,
-      costRate: this.opts.costRate ?? DEFAULT_COST_RATE,
       deckP0, deckP1,
       localPlayer,
     });
@@ -218,7 +216,6 @@ export class Session {
       version: 1,
       matchSeed: this.matchSeed.toString(16),
       hpMax: this.opts.hpMax ?? INITIAL_HP,
-      costRate: this.opts.costRate ?? DEFAULT_COST_RATE,
       deckP0: this.deckP0,
       deckP1: this.deckP1,
       inputs: this.recordedInputs,

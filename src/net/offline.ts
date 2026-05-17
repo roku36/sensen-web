@@ -11,7 +11,7 @@ import { CardId } from "../sim/cards";
 import { initGame } from "../sim/init";
 import { step } from "../sim/reducer";
 import { fnv1a64 } from "../sim/rng";
-import { DEFAULT_COST_RATE, INITIAL_HP } from "../sim/rules";
+import { INITIAL_HP } from "../sim/rules";
 import { GameState } from "../sim/state";
 import { Policy, PolicyFactory } from "../ai/policy";
 import { Replay } from "../replay/format";
@@ -19,7 +19,6 @@ import { Replay } from "../replay/format";
 export interface OfflineOptions {
   deck: CardId[];
   hpMax?: number;
-  costRate?: number;
   onState?: (s: GameState) => void;
   /** Drive the OPPONENT side. Unset = idle dummy. */
   opponentPolicy?: PolicyFactory;
@@ -48,7 +47,6 @@ export class OfflineSession {
     this.state = initGame({
       matchSeed: this.matchSeed,
       hpMax: opts.hpMax ?? INITIAL_HP,
-      costRate: opts.costRate ?? DEFAULT_COST_RATE,
       deckP0: opts.deck,
       deckP1: opts.deck,
     });
@@ -64,7 +62,6 @@ export class OfflineSession {
       version: 1,
       matchSeed: this.matchSeed.toString(16),
       hpMax: this.opts.hpMax ?? INITIAL_HP,
-      costRate: this.opts.costRate ?? DEFAULT_COST_RATE,
       deckP0: this.opts.deck,
       deckP1: this.opts.deck,
       inputs: this.recorded,
