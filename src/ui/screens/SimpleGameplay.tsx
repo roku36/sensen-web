@@ -133,131 +133,151 @@ function StatusPanel({
   );
 }
 
-// ── Battle zone: shared timeline ──
+// ── Battle zone: unified shared-time timeline ──
 //
-// Time runs LEFT → RIGHT. The vertical "NOW" line is at x = NOW_OFFSET
-// pixels from the left of the timeline. Cards in each player's queue are
-// drawn as boxes anchored by their RESOLUTION TIME: a card resolving in 2s
-// has its right edge at NOW + 2s. Width = duration * PX_PER_SEC.
-//
-// As real time advances every frame, every box's right-edge x decreases →
-// boxes flow LEFT toward the NOW line. When a box's right edge crosses the
-// NOW line the card has just resolved (sim removes it from the queue and
-// applies its effect).
-//
-// Both players' queues share THE SAME X AXIS — opponent on top, me on
-// bottom — so vertically-aligned positions resolve simultaneously. Read
-// the opponent's queue to see what's coming and when.
+// Single scrollable container. Time runs LEFT → RIGHT. Vertical NOW line
+// (gold) at x = NOW_OFFSET. Opponent's queue boxes pinned to the TOP half;
+// my queue boxes pinned to the BOTTOM half. Same X axis → vertically
+// aligned column = simultaneous resolution. The whole thing scrolls
+// horizontally (mouse wheel or trackpad) — both rows move together because
+// they live in the same scroll viewport.
 
-const TIMELINE_VISIBLE_SEC = 12;
-const NOW_OFFSET = 60; // px from container left edge — past time can clip out left
+const MIN_TIMELINE_SEC = 12;
+const NOW_OFFSET = 70;
+const ROW_HEIGHT = 60;          // each player's track height
+const CENTER_GUTTER = 30;       // gap between top and bottom tracks
+const BOX_HEIGHT = 46;
 
 function BattleZone({ op, me, now }: { op: PlayerState; me: PlayerState; now: number }) {
+  // Pre-compute each player's box positions and how far out the timeline
+  // needs to extend.
+  const opBoxes = computeBoxes(op, now);
+  const meBoxes = computeBoxes(me, now);
+  const maxSec = Math.max(
+    MIN_TIMELINE_SEC,
+    Math.ceil((opBoxes[opBoxes.length - 1]?.endRel ?? 0) + 2),
+    Math.ceil((meBoxes[meBoxes.length - 1]?.endRel ?? 0) + 2),
+  );
+  const innerWidth = NOW_OFFSET + maxSec * PX_PER_SEC + 20;
+  const totalHeight = ROW_HEIGHT * 2 + CENTER_GUTTER;
+
+  // Vertical mouse wheel → horizontal scroll. Lets the user inspect long
+  // queues without learning shift+wheel.
+  const onWheel = (e: React.WheelEvent<HTMLDivElement>) => {
+    if (e.deltaY === 0) return;
+    e.currentTarget.scrollLeft += e.deltaY;
+  };
+
   return (
     <div style={battleZone}>
-      <TimelineRow player={op} now={now} side="top" label="相手" />
-      <TimelineDivider />
-      <TimelineRow player={me} now={now} side="bottom" label="自分" />
+      <div style={timelineMetaRow}>
+        <PlayerMeta side="top" player={op} label="相手" boxes={opBoxes} />
+        <PlayerMeta side="bottom" player={me} label="自分" boxes={meBoxes} />
+      </div>
+      <div style={scrollWrap} onWheel={onWheel}>
+        <div style={{ ...timelineInner, width: innerWidth, height: totalHeight }}>
+          {/* Time grid (vertical guides + sec labels). */}
+          {Array.from({ length: maxSec + 1 }).map((_, s) => (
+            <TimeTick key={s} sec={s} totalHeight={totalHeight} />
+          ))}
+          {/* Center divider that visually unifies the two tracks. */}
+          <div style={{ ...centerDivider, top: ROW_HEIGHT }} />
+          <div style={{ ...nowDivider, top: ROW_HEIGHT + CENTER_GUTTER / 2 - 8 }}>NOW</div>
+          {/* NOW vertical line spans both tracks. */}
+          <div style={{ ...nowLine, left: NOW_OFFSET, height: totalHeight }} />
+          {/* Opponent boxes (top half). */}
+          {opBoxes.map((b, i) => (
+            <QueueBox key={`o${i}`} {...b} yTop={(ROW_HEIGHT - BOX_HEIGHT) / 2} />
+          ))}
+          {/* Self boxes (bottom half). */}
+          {meBoxes.map((b, i) => (
+            <QueueBox key={`m${i}`} {...b} yTop={ROW_HEIGHT + CENTER_GUTTER + (ROW_HEIGHT - BOX_HEIGHT) / 2} />
+          ))}
+          {/* Idle hints. */}
+          {opBoxes.length === 0 && <span style={{ ...idleHint, top: ROW_HEIGHT / 2 - 7 }}>相手キュー空</span>}
+          {meBoxes.length === 0 && <span style={{ ...idleHint, top: ROW_HEIGHT + CENTER_GUTTER + ROW_HEIGHT / 2 - 7 }}>自分キュー空</span>}
+        </div>
+      </div>
     </div>
   );
 }
 
-function TimelineDivider() {
-  return (
-    <div style={timelineDividerRow}>
-      <div style={dividerLine} />
-      <span style={dividerLabel}>NOW</span>
-      <div style={dividerLine} />
-    </div>
-  );
+interface BoxLayout {
+  cardId: number;
+  duration: number;
+  startRel: number;
+  endRel: number;
+  isHead: boolean;
 }
 
-function TimelineRow({ player, now, side, label }: { player: PlayerState; now: number; side: "top" | "bottom"; label: string }) {
-  // Compute each queue entry's resolve-time relative to now.
-  let endRel = player.queue.length > 0
-    ? Math.max(0, player.queue[0].duration - (now - player.castStartedAt))
-    : 0;
-  const boxes = player.queue.map((q, i) => {
+function computeBoxes(player: PlayerState, now: number): BoxLayout[] {
+  if (player.queue.length === 0) return [];
+  let endRel = Math.max(0, player.queue[0].duration - (now - player.castStartedAt));
+  return player.queue.map((q, i) => {
     if (i > 0) endRel += q.duration;
     return {
       cardId: q.cardId,
       duration: q.duration,
-      endRel,                          // sec from now until this card resolves
-      startRel: endRel - q.duration,   // sec from now until this card starts casting
+      endRel,
+      startRel: endRel - q.duration,
       isHead: i === 0,
     };
   });
+}
 
+function PlayerMeta({ side, player, label, boxes }: { side: "top" | "bottom"; player: PlayerState; label: string; boxes: BoxLayout[] }) {
+  const totalSec = boxes[boxes.length - 1]?.endRel ?? 0;
   return (
-    <div style={{ display: "flex", flexDirection: "column" }}>
-      <div style={timelineHeader}>
-        <span style={timelineLabel}>{label}</span>
-        <BlockBadge value={player.block} />
-        {player.queue.length > 0 && (
-          <span style={timelineSub}>
-            {player.queue.length}枚 · 合計 {boxes[boxes.length - 1].endRel.toFixed(1)}秒
-          </span>
-        )}
-      </div>
-      <div style={timelineTrack}>
-        <div style={{ ...nowLine, left: NOW_OFFSET }} />
-        {Array.from({ length: TIMELINE_VISIBLE_SEC }).map((_, s) => (
-          <TimeTick key={s} sec={s + 1} side={side} />
-        ))}
-        {boxes.map((b, i) => (
-          <QueueBox
-            key={i}
-            cardId={b.cardId}
-            duration={b.duration}
-            startRel={b.startRel}
-            endRel={b.endRel}
-            isHead={b.isHead}
-            side={side}
-          />
-        ))}
-        {player.queue.length === 0 && (
-          <span style={idleHint}>(キュー空)</span>
-        )}
-      </div>
+    <div style={{ ...timelineHeader, flexDirection: side === "top" ? "row" : "row" }}>
+      <span style={timelineLabel}>{label}</span>
+      <BlockBadge value={player.block} />
+      {boxes.length > 0 && (
+        <span style={timelineSub}>
+          {boxes.length}枚 · 合計 {totalSec.toFixed(1)}秒
+        </span>
+      )}
     </div>
   );
 }
 
-function TimeTick({ sec, side }: { sec: number; side: "top" | "bottom" }) {
+function TimeTick({ sec, totalHeight }: { sec: number; totalHeight: number }) {
   const x = NOW_OFFSET + sec * PX_PER_SEC;
+  const isMajor = sec % 5 === 0;
   return (
     <>
-      <div style={{ position: "absolute", left: x, top: 0, bottom: 0, width: 1, background: "rgba(255,255,255,0.06)" }} />
       <div style={{
-        position: "absolute", left: x + 2,
-        [side === "top" ? "top" : "bottom"]: 1,
-        fontSize: 9, color: "rgba(255,255,255,0.35)", fontFamily: "ui-monospace, monospace",
-      }}>{sec}s</div>
+        position: "absolute", left: x, top: 0, height: totalHeight, width: 1,
+        background: isMajor ? "rgba(255,255,255,0.12)" : "rgba(255,255,255,0.05)",
+      }} />
+      {sec > 0 && (
+        <div style={{
+          position: "absolute", left: x + 2, top: totalHeight / 2 - 6,
+          fontSize: 9, color: "rgba(255,255,255,0.4)", fontFamily: "ui-monospace, monospace",
+          pointerEvents: "none",
+        }}>{sec}s</div>
+      )}
     </>
   );
 }
 
-function QueueBox({ cardId, duration, startRel, endRel, isHead, side }: {
-  cardId: number; duration: number; startRel: number; endRel: number;
-  isHead: boolean; side: "top" | "bottom";
-}) {
+function QueueBox({ cardId, duration, startRel, endRel, isHead, yTop }: BoxLayout & { yTop: number }) {
   const def = getCardDef(cardId);
   const color = def?.cardType === CardType.Attack ? "#e3553c"
     : def?.cardType === CardType.Power ? "#b465e0"
     : "#5fa0e0";
   const left = NOW_OFFSET + startRel * PX_PER_SEC;
   const w = duration * PX_PER_SEC;
-  // About-to-resolve glow: head with right edge within ~0.4s of NOW.
   const glow = isHead && endRel < 0.4;
   const glowIntensity = glow ? 1 - endRel / 0.4 : 0;
   return (
     <div
       style={{
         position: "absolute",
-        left, width: w, height: 40,
-        top: side === "top" ? 20 : 20,
+        left, width: w, height: BOX_HEIGHT,
+        top: yTop,
         background: color,
         border: `2px solid ${glow ? "#fff" : color}`,
+        boxSizing: "border-box",       // ← THIS prevents overlap between adjacent boxes
         boxShadow: glow
           ? `0 0 ${10 + 20 * glowIntensity}px rgba(255,255,200,${0.4 + 0.5 * glowIntensity})`
           : "0 2px 6px rgba(0,0,0,0.4)",
@@ -266,10 +286,6 @@ function QueueBox({ cardId, duration, startRel, endRel, isHead, side }: {
         color: "white",
         overflow: "hidden",
         opacity: isHead ? 1 : 0.85,
-        // Right-align the text so it stays visible as the box slides past
-        // the NOW line (the "consumed" portion is on the left, which
-        // matches the visual metaphor — the past is gone, the future is
-        // what's right of NOW).
         display: "flex",
         flexDirection: "column",
         justifyContent: "center",
@@ -287,9 +303,7 @@ function QueueBox({ cardId, duration, startRel, endRel, isHead, side }: {
 
 function BlockBadge({ value }: { value: number }) {
   if (value <= 0) return null;
-  return (
-    <span style={blockBadge}>🛡 {Math.round(value)}</span>
-  );
+  return <span style={blockBadge}>🛡 {Math.round(value)}</span>;
 }
 
 // ── Opponent hand: face-down backs ──
@@ -496,42 +510,59 @@ const cardBack: React.CSSProperties = {
 const cardBackSigil: React.CSSProperties = { color: "#7a5db8", opacity: 0.55, fontSize: 24 };
 
 const battleZone: React.CSSProperties = {
-  display: "flex", flexDirection: "column", gap: 4, padding: "10px 12px",
+  display: "flex", flexDirection: "column", gap: 6, padding: "10px 12px",
   background: "rgba(40, 30, 60, 0.25)",
   border: "1px solid rgba(110, 80, 170, 0.35)",
   borderRadius: 10,
 };
-const timelineRow: React.CSSProperties = { display: "flex" };
+const timelineMetaRow: React.CSSProperties = {
+  display: "flex", justifyContent: "space-between", gap: 12,
+  padding: "0 4px",
+};
 const timelineHeader: React.CSSProperties = {
   display: "flex", alignItems: "center", gap: 8, padding: "2px 4px",
   fontSize: 11, opacity: 0.85,
 };
 const timelineLabel: React.CSSProperties = { fontWeight: 700, letterSpacing: 1 };
 const timelineSub: React.CSSProperties = { fontSize: 10, opacity: 0.55, fontFamily: "ui-monospace, monospace" };
-const timelineTrack: React.CSSProperties = {
-  position: "relative", width: "100%", height: 80,
-  background: "rgba(0,0,0,0.25)",
+// Scrollable viewport: clips the inner timeline and allows horizontal scroll.
+// The inner div is sized to fit the longest queue, and the wheel handler
+// translates vertical wheel deltas into horizontal scroll so trackpad users
+// don't need shift-wheel.
+const scrollWrap: React.CSSProperties = {
+  position: "relative", width: "100%",
+  overflowX: "auto", overflowY: "hidden",
+  background: "rgba(0,0,0,0.30)",
   borderRadius: 6,
-  overflow: "hidden",
+  border: "1px solid rgba(255,255,255,0.05)",
+};
+const timelineInner: React.CSSProperties = {
+  position: "relative",
+  // height + width are set inline based on max queue size
+};
+const centerDivider: React.CSSProperties = {
+  position: "absolute", left: 0, right: 0, height: CENTER_GUTTER,
+  background: "linear-gradient(180deg, rgba(255,224,102,0) 0%, rgba(255,224,102,0.12) 50%, rgba(255,224,102,0) 100%)",
+  pointerEvents: "none",
+};
+const nowDivider: React.CSSProperties = {
+  position: "absolute", left: NOW_OFFSET - 22, width: 36,
+  height: 16, lineHeight: "16px",
+  fontSize: 9, color: "#1a1a22", letterSpacing: 2, fontWeight: 700,
+  fontFamily: "ui-monospace, monospace", textAlign: "center",
+  background: "#ffe066", borderRadius: 4,
+  pointerEvents: "none", zIndex: 3,
+  boxShadow: "0 0 6px rgba(255,224,102,0.55)",
 };
 const nowLine: React.CSSProperties = {
-  position: "absolute", top: 0, bottom: 0, width: 2,
+  position: "absolute", top: 0, width: 2,
   background: "linear-gradient(180deg, #fff 0%, #ffe066 50%, #fff 100%)",
   boxShadow: "0 0 8px rgba(255,224,102,0.6)",
-  zIndex: 1,
+  zIndex: 2,
 };
 const idleHint: React.CSSProperties = {
-  position: "absolute", left: NOW_OFFSET + 8, top: 30,
+  position: "absolute", left: NOW_OFFSET + 8,
   fontSize: 11, opacity: 0.4, fontStyle: "italic",
-};
-const timelineDividerRow: React.CSSProperties = {
-  display: "flex", alignItems: "center", gap: 8, padding: "1px 0",
-};
-const dividerLine: React.CSSProperties = {
-  flex: 1, height: 1, background: "linear-gradient(90deg, transparent, rgba(255,224,102,0.5), transparent)",
-};
-const dividerLabel: React.CSSProperties = {
-  fontSize: 9, color: "#ffe066", letterSpacing: 2, opacity: 0.7, fontFamily: "ui-monospace, monospace",
 };
 const queueBoxName: React.CSSProperties = { fontWeight: 700, fontSize: 12, lineHeight: 1.1, textShadow: "0 1px 2px rgba(0,0,0,0.8)" };
 const queueBoxMeta: React.CSSProperties = { fontSize: 10, opacity: 0.9, fontFamily: "ui-monospace, monospace", marginTop: 2 };
