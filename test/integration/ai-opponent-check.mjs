@@ -42,7 +42,7 @@ const oppAfter = await page.evaluate(() => {
 console.log("after 8s:", oppAfter);
 
 const aiActed = oppAfter.discard > oppStart.discard;
-const playerWasAffected = oppAfter.p0hp < 80 || oppAfter.p0block > 0;
+const playerWasAffected = oppAfter.p0hp < oppStart.hp || oppAfter.p0block > 0;
 console.log(`AI made at least one play: ${aiActed}`);
 console.log(`Player state shifted (hp drop or block gain): ${playerWasAffected}`);
 
@@ -76,7 +76,7 @@ if (errs.length) { console.log("\nERRORS:"); errs.forEach((e) => console.log("  
 // 'Passing' for spectate just means both AIs were actively playing — final
 // result is nice-to-have but not required for the smoke test (matches may
 // run long when greedyAttack mirrors itself).
-const bothPlaying = finalState.p0hp < 80 && finalState.p1hp < 80;
+const bothPlaying = finalState.p0hp < 200 && finalState.p1hp < 200;
 const pass = aiActed && playerWasAffected && bothPlaying;
 console.log(pass ? `\n✓ AI works (CPU acts vs human; AI-vs-AI both played, final p0=${finalState.p0hp.toFixed(0)} p1=${finalState.p1hp.toFixed(0)} result=${finalState.result})` : "\n✗ FAIL");
 await browser.close();

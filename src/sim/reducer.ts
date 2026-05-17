@@ -111,45 +111,47 @@ function tickBlockDecay(p: PlayerState, dt: number) {
   p.block = Math.max(0, p.block - BLOCK_DECAY_RATE * dt);
 }
 
-// ── Cast slot: start (from input) and resolve (from tick) ──
+// ── Cast queue: resolve head when its duration elapses, advance start time ──
 
 function tickCasting(s: GameState, now: number, bus: Bus) {
   for (const idx of [0, 1] as const) {
     const p = s.players[idx];
-    if (!p.casting) continue;
-    if (now - p.casting.startedAt < p.casting.duration) continue;
-    // Cast complete — resolve.
-    const cardId = p.casting.cardId;
-    const def = getCardDef(cardId);
-    p.casting = null;
-    if (!def) continue;
+    // Drain as many queue heads as have fully elapsed this frame.
+    while (p.queue.length > 0 && now - p.castStartedAt >= p.queue[0].duration) {
+      const entry = p.queue.shift()!;
+      // Advance by exactly the consumed duration so carry-over time rolls
+      // into the next entry (no time lost between back-to-back casts).
+      p.castStartedAt += entry.duration;
+      const def = getCardDef(entry.cardId);
+      if (!def) continue;
 
-    // Dispose: powers vanish from circulation; exhausting cards disappear
-    // permanently; everything else → discard pile.
-    let goToDiscard = PLAYED_TO_DISCARD;
-    let countsAsExhaust = false;
-    if (def.cardType === CardType.Power) { goToDiscard = false; }
-    if (def.exhausts || def.effect.kind === "Exhaust") { goToDiscard = false; countsAsExhaust = true; }
-    if (def.cardType === CardType.Skill && p.corruption) { goToDiscard = false; countsAsExhaust = true; }
-    if (goToDiscard) p.discard.push(cardId);
+      // Disposition: powers vanish, exhausters disappear, else → discard.
+      let goToDiscard = PLAYED_TO_DISCARD;
+      let countsAsExhaust = false;
+      if (def.cardType === CardType.Power) { goToDiscard = false; }
+      if (def.exhausts || def.effect.kind === "Exhaust") { goToDiscard = false; countsAsExhaust = true; }
+      if (def.cardType === CardType.Skill && p.corruption) { goToDiscard = false; countsAsExhaust = true; }
+      if (goToDiscard) p.discard.push(entry.cardId);
 
-    bus.cardPlayed.push({ player: idx, cardId });
-    if (countsAsExhaust) bus.exhausted.push({ player: idx, cardId });
+      bus.cardPlayed.push({ player: idx, cardId: entry.cardId });
+      if (countsAsExhaust) bus.exhausted.push({ player: idx, cardId: entry.cardId });
 
-    // Auto-refill: draw 1 new card so hand returns to its post-cast size.
-    bus.draw.push({ target: idx, count: 1 });
+      // Auto-refill: draw 1 to keep hand at its post-cast size.
+      bus.draw.push({ target: idx, count: 1 });
+    }
   }
 }
 
-// ── Input handling ──
+// ── Input handling: clicking a card adds it to the END of the queue ──
+//
+// You can keep clicking to queue more cards (committing to a multi-cast
+// plan). The opponent sees your queue too — that's the whole point of the
+// mechanic: visible commitment they can read and respond to.
 
 function applyInput(s: GameState, idx: 0 | 1, flags: number) {
   if (flags === 0) return;
   const p = s.players[idx];
-  // Already casting → ignore. Single slot.
-  if (p.casting) return;
 
-  // First matching card-flag wins.
   for (let i = 0; i < MAX_HAND_SIZE; i++) {
     const flag = cardFlag(i);
     if (flag === null) continue;
@@ -158,13 +160,17 @@ function applyInput(s: GameState, idx: 0 | 1, flags: number) {
     if (cardId === undefined) break;
     const def = getCardDef(cardId);
     if (!def) break;
-    if (def.cost >= 900) break; // status junk — unplayable, sits in hand
-    // Corruption: skills cost 0s (instant resolution next frame).
+    if (def.cost >= 900) break; // status junk — unplayable
+
     let duration = def.cost;
     if (p.corruption && def.cardType === CardType.Skill) duration = 0;
-    // Move card from hand → cast slot.
+
+    // Move card from hand → end of queue.
     p.hand.splice(i, 1);
-    p.casting = { cardId, startedAt: s.frame * DT, duration };
+    // If queue was empty, the new head starts NOW. Otherwise it'll start
+    // when previous entries complete (castStartedAt advances on each pop).
+    if (p.queue.length === 0) p.castStartedAt = s.frame * DT;
+    p.queue.push({ cardId, duration });
     break;
   }
 }

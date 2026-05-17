@@ -1,11 +1,10 @@
 import { CardId } from "./cards";
 import { Rng } from "./rng";
 
-// One slot per player. cardId = what's being cast, startedAt = sim seconds
-// when the cast began, duration = cast time in seconds (= card.cost).
-export interface CastSlot {
+// One queue entry. duration is captured at queue-time (corruption-discounted
+// skills etc.) so it can't shift while the card is waiting in line.
+export interface QueueEntry {
   cardId: CardId;
-  startedAt: number;
   duration: number;
 }
 
@@ -16,8 +15,13 @@ export interface PlayerState {
   hpMax: number;
   block: number;
   thorns: number;
-  // Cast slot — when non-null, this player cannot start another cast.
-  casting: CastSlot | null;
+  // Cast queue — head [0] is currently casting. Both peers see each other's
+  // queue (it's part of GameState, so reproducible from inputs + seed).
+  queue: QueueEntry[];
+  // Sim seconds when the current head started casting. Advances by exactly
+  // `duration` each time the head resolves (so any carry-over time rolls
+  // forward into the next entry instead of being lost).
+  castStartedAt: number;
   // Status durations (seconds remaining)
   strength: number;
   vulnerableSecs: number;
@@ -62,7 +66,8 @@ const DEFAULT_PLAYER = (
   hpMax,
   block: 0,
   thorns: 0,
-  casting: null,
+  queue: [],
+  castStartedAt: 0,
   strength: 0,
   vulnerableSecs: 0,
   weakSecs: 0,
@@ -106,7 +111,7 @@ export function snapshot(s: GameState): GameState {
 
 const clonePlayer = (p: PlayerState): PlayerState => ({
   ...p,
-  casting: p.casting ? { ...p.casting } : null,
+  queue: p.queue.map((q) => ({ ...q })),
   rage: p.rage ? { ...p.rage } : null,
   metallicize: p.metallicize ? { ...p.metallicize } : null,
   demonForm: p.demonForm ? { ...p.demonForm } : null,

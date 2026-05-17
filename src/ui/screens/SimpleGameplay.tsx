@@ -143,28 +143,51 @@ function BattleZone({ op, me, now }: { op: PlayerState; me: PlayerState; now: nu
 }
 
 function CastBar({ player, now, side, label }: { player: PlayerState; now: number; side: "top" | "bottom"; label: string }) {
-  const c = player.casting;
-  if (!c) {
+  if (player.queue.length === 0) {
     return (
       <div style={{ ...castRow, justifyContent: side === "top" ? "flex-end" : "flex-start" }}>
         <span style={castIdleText}>{label}: 待機中</span>
       </div>
     );
   }
-  const def = getCardDef(c.cardId);
-  const elapsed = now - c.startedAt;
-  const remaining = Math.max(0, c.duration - elapsed);
-  const pct = c.duration > 0 ? Math.min(1, elapsed / c.duration) : 1;
-  const color = def?.cardType === CardType.Attack ? "#e3553c" : def?.cardType === CardType.Power ? "#b465e0" : "#5fa0e0";
+  // Head is currently casting; rest are queued.
+  const head = player.queue[0];
+  const rest = player.queue.slice(1);
+  const elapsed = now - player.castStartedAt;
+  const headRemaining = Math.max(0, head.duration - elapsed);
+  const headPct = head.duration > 0 ? Math.min(1, elapsed / head.duration) : 1;
+  const queueTotal = headRemaining + rest.reduce((s, q) => s + q.duration, 0);
   return (
     <div style={{ ...castRow, justifyContent: side === "top" ? "flex-end" : "flex-start", flexDirection: side === "top" ? "row-reverse" : "row" }}>
       <div style={castLabel}>
-        <span style={castName}>{def?.name ?? "??"}</span>
-        <span style={castSub}>{label}</span>
+        <span style={castName}>{label}</span>
+        <span style={castSub}>{player.queue.length}枚 · 合計 {queueTotal.toFixed(1)}秒</span>
       </div>
-      <div style={castBarTrack}>
-        <div style={{ ...castBarFill, width: `${pct * 100}%`, background: color }} />
-        <span style={castTimeRemaining}>{remaining.toFixed(1)}秒</span>
+      <div style={queueRow}>
+        <QueueChip cardId={head.cardId} pct={headPct} remaining={headRemaining} duration={head.duration} isHead />
+        {rest.map((q, i) => (
+          <QueueChip key={i} cardId={q.cardId} pct={0} remaining={q.duration} duration={q.duration} />
+        ))}
+      </div>
+    </div>
+  );
+}
+
+function QueueChip({ cardId, pct, remaining, duration, isHead = false }: { cardId: number; pct: number; remaining: number; duration: number; isHead?: boolean }) {
+  const def = getCardDef(cardId);
+  const color = def?.cardType === CardType.Attack ? "#e3553c"
+    : def?.cardType === CardType.Power ? "#b465e0"
+    : "#5fa0e0";
+  return (
+    <div style={{ ...queueChip, opacity: isHead ? 1 : 0.7, borderColor: isHead ? color : "#444" }}>
+      <div style={{ ...queueChipFill, width: `${pct * 100}%`, background: color }} />
+      <div style={queueChipContent}>
+        <span style={queueChipName}>{def?.name ?? "??"}</span>
+        <span style={queueChipTime}>
+          {isHead
+            ? `${remaining.toFixed(1)}s / ${duration}s`
+            : `${duration}s 待機`}
+        </span>
       </div>
     </div>
   );
@@ -213,8 +236,8 @@ function SimpleCard({ cardId, idx, player }: { cardId: number; idx: number; play
   const [hover, setHover] = useState(false);
   if (!def) return null;
   const unplayable = def.cost >= 900;
-  const busy = !!player.casting;
-  const clickable = !busy && !unplayable;
+  // You can keep clicking to queue more casts; only status junk is unplayable.
+  const clickable = !unplayable;
 
   const onClick = () => {
     if (!clickable) return;
@@ -390,9 +413,17 @@ const castIdleText: React.CSSProperties = { fontSize: 11, opacity: 0.4, fontStyl
 const castLabel: React.CSSProperties = { display: "flex", flexDirection: "column", minWidth: 140 };
 const castName: React.CSSProperties = { fontWeight: 700, fontSize: 14, color: "white" };
 const castSub: React.CSSProperties = { fontSize: 10, opacity: 0.55 };
-const castBarTrack: React.CSSProperties = { position: "relative", flex: 1, height: 18, background: "#0c0c12", border: "1px solid #2a2a35", borderRadius: 6, overflow: "hidden", minWidth: 200 };
-const castBarFill: React.CSSProperties = { position: "absolute", inset: 0, right: "auto", height: "100%" };
-const castTimeRemaining: React.CSSProperties = { position: "absolute", right: 8, top: 1, fontSize: 11, fontFamily: "ui-monospace, monospace", color: "white", textShadow: "0 0 4px rgba(0,0,0,0.8)" };
+const queueRow: React.CSSProperties = { display: "flex", flex: 1, gap: 6, minWidth: 0, overflowX: "auto" };
+const queueChip: React.CSSProperties = {
+  position: "relative", minWidth: 110, maxWidth: 180, height: 38, padding: "4px 8px",
+  border: "1.5px solid #444", borderRadius: 6,
+  background: "#0c0c12", color: "white",
+  overflow: "hidden", flex: "0 0 auto",
+};
+const queueChipFill: React.CSSProperties = { position: "absolute", left: 0, top: 0, bottom: 0, opacity: 0.55 };
+const queueChipContent: React.CSSProperties = { position: "relative", display: "flex", flexDirection: "column", justifyContent: "center", height: "100%" };
+const queueChipName: React.CSSProperties = { fontWeight: 700, fontSize: 12, lineHeight: 1, textShadow: "0 1px 2px rgba(0,0,0,0.8)" };
+const queueChipTime: React.CSSProperties = { fontSize: 10, opacity: 0.85, fontFamily: "ui-monospace, monospace", marginTop: 2 };
 
 const blockShieldRow: React.CSSProperties = { display: "flex", alignItems: "center", gap: 10, minHeight: 32 };
 const blockShield: React.CSSProperties = {

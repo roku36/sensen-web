@@ -64,7 +64,8 @@ export function Hand({ player, side, interactive = side === "self" }: HandProps)
         // In the cast-time model, a card is "playable" (clickable to start a
         // cast) whenever its cost is finite AND the player is not already
         // casting something else.
-        const playable = !!def && def.cost < 900 && !player.casting;
+        // Clickable whenever hand has slots — queue can grow beyond 1.
+        const playable = !!def && def.cost < 900;
 
         return (
           <Card3d

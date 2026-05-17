@@ -70,34 +70,51 @@ describe("reducer determinism", () => {
     expect(c2).not.toBe(c1);
   });
 
-  it("cast resolves after cost seconds and deals declared damage", () => {
-    const deck = [CardId.Strike, CardId.Strike, CardId.Strike, CardId.Strike, CardId.Strike];
+  it("head of queue resolves after cost seconds and deals declared damage", () => {
+    const deck = Array(20).fill(CardId.Strike);
     const s = initGame({ matchSeed: 1n, hpMax: 80, deckP0: deck, deckP1: deck });
     const startHp = s.players[1].hp;
-    // Start cast on frame 0; Strike has 1s cost = 60 frames.
     step(s, cardFlag(0)!, 0);
-    expect(s.players[0].casting).not.toBeNull();
-    // Advance 60 frames — cast completes during the 60th step (tickCasting
-    // fires when elapsed >= duration). 65 frames buffers any rounding.
+    expect(s.players[0].queue.length).toBe(1);
     for (let f = 0; f < 65; f++) step(s, 0, 0);
-    expect(s.players[0].casting).toBeNull(); // slot is empty again
+    expect(s.players[0].queue.length).toBe(0);
     const dealt = startHp - s.players[1].hp;
     expect(dealt).toBeGreaterThanOrEqual(5.5);
     expect(dealt).toBeLessThanOrEqual(6.5);
-    // Hand auto-refills back to 5 after the resolve.
     expect(s.players[0].hand.length).toBe(5);
   });
 
-  it("clicking a card while already casting is ignored", () => {
-    const deck = [CardId.Strike, CardId.Strike, CardId.Strike, CardId.Strike, CardId.Strike];
+  it("clicking multiple cards APPENDS to the queue (this is the queue mechanic)", () => {
+    const deck = Array(20).fill(CardId.Strike);
     const s = initGame({ matchSeed: 1n, hpMax: 80, deckP0: deck, deckP1: deck });
-    step(s, cardFlag(0)!, 0); // start first cast
-    const handAfterStart = s.players[0].hand.length;
-    expect(s.players[0].casting).not.toBeNull();
-    // Try to start another mid-cast — should be a no-op.
-    step(s, cardFlag(1)!, 0);
-    expect(s.players[0].hand.length).toBe(handAfterStart); // no card removed
-    expect(s.players[0].casting!.cardId).toBe(CardId.Strike); // still first cast
+    // Queue three Strikes back-to-back in three consecutive frames.
+    step(s, cardFlag(0)!, 0);
+    step(s, cardFlag(0)!, 0);
+    step(s, cardFlag(0)!, 0);
+    expect(s.players[0].queue.length).toBe(3);
+    expect(s.players[0].hand.length).toBe(2); // 5 - 3 queued
+  });
+
+  it("queued casts resolve in order with carry-over time (no drift)", () => {
+    const deck = Array(20).fill(CardId.Strike);
+    const s = initGame({ matchSeed: 1n, hpMax: 80, deckP0: deck, deckP1: deck });
+    // Queue 3 Strikes (1s each). Total wait = 3s = 180 frames.
+    step(s, cardFlag(0)!, 0);
+    step(s, cardFlag(0)!, 0);
+    step(s, cardFlag(0)!, 0);
+    const startHp = s.players[1].hp;
+    // After 1s exactly → 1 should have resolved.
+    for (let f = 0; f < 65; f++) step(s, 0, 0);
+    expect(s.players[0].queue.length).toBe(2);
+    expect(startHp - s.players[1].hp).toBeGreaterThanOrEqual(5.5);
+    // After another 1s → 2 resolved total.
+    for (let f = 0; f < 60; f++) step(s, 0, 0);
+    expect(s.players[0].queue.length).toBe(1);
+    expect(startHp - s.players[1].hp).toBeGreaterThanOrEqual(11);
+    // After the third → queue empty, 3 strikes dealt.
+    for (let f = 0; f < 60; f++) step(s, 0, 0);
+    expect(s.players[0].queue.length).toBe(0);
+    expect(startHp - s.players[1].hp).toBeGreaterThanOrEqual(17);
   });
 
   it("played non-power cards go to discard on resolve", () => {
@@ -111,11 +128,11 @@ describe("reducer determinism", () => {
     expect(s.players[0].discard.length).toBe(beforeDiscard + 1);
   });
 
-  it("status cards (cost 999) cannot start a cast", () => {
+  it("status cards (cost 999) cannot be queued", () => {
     const deck = [CardId.Wound, CardId.Wound, CardId.Wound, CardId.Wound, CardId.Wound];
     const s = initGame({ matchSeed: 1n, hpMax: 80, deckP0: deck, deckP1: deck });
     step(s, cardFlag(0)!, 0);
-    expect(s.players[0].casting).toBeNull(); // ignored
+    expect(s.players[0].queue.length).toBe(0); // ignored
   });
 
   it("block decays linearly at BLOCK_DECAY_RATE", () => {

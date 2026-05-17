@@ -73,8 +73,8 @@ function makePeer(side: 0 | 1, deck: CardId[], matchSeed: bigint): SimulatedPeer
 function snapshotKeyFields(s: GameState) {
   return {
     frame: s.frame,
-    p0: { hp: s.players[0].hp, block: s.players[0].block, hand: s.players[0].hand.length, deck: s.players[0].deck.length, discard: s.players[0].discard.length, casting: s.players[0].casting?.cardId ?? null, str: s.players[0].strength },
-    p1: { hp: s.players[1].hp, block: s.players[1].block, hand: s.players[1].hand.length, deck: s.players[1].deck.length, discard: s.players[1].discard.length, casting: s.players[1].casting?.cardId ?? null, str: s.players[1].strength },
+    p0: { hp: s.players[0].hp, block: s.players[0].block, hand: s.players[0].hand.length, deck: s.players[0].deck.length, discard: s.players[0].discard.length, queue: s.players[0].queue.length, str: s.players[0].strength },
+    p1: { hp: s.players[1].hp, block: s.players[1].block, hand: s.players[1].hand.length, deck: s.players[1].deck.length, discard: s.players[1].discard.length, queue: s.players[1].queue.length, str: s.players[1].strength },
   };
 }
 

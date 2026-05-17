@@ -9,7 +9,10 @@
 // to plan your next move.
 
 // ── Vitals ──
-export const INITIAL_HP = 80;
+// 200 HP keeps match length roughly comparable to the old energy model.
+// (Under the old 0.4-energy/sec rule a cost-1 Strike cycled every ~2.5s;
+// under cast-time it cycles every 1s, so HP needed ~2.5× compensation.)
+export const INITIAL_HP = 200;
 export const MAX_HAND_SIZE = 10;
 export const INITIAL_HAND = 5;
 

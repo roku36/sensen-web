@@ -88,7 +88,10 @@ export const random: PolicyFactory = (seed = 1) => {
   const r = mulberry32(seed);
   return (state, side) => {
     const p = state.players[side];
-    if (p.casting) return 0;
+    // Lookahead: queue up to MAX_AI_QUEUE cards. With 1 you'd get
+    // single-slot behavior; 2 lets the AI commit to a short combo and
+    // makes the queue actually visible during play.
+    if (p.queue.length >= 2) return 0;
     const opts = playableIndices(p);
     if (opts.length === 0) return 0;
     return cardFlag(opts[Math.floor(r() * opts.length)]) ?? 0;
@@ -100,7 +103,10 @@ export const greedyAttack: PolicyFactory = (seed = 1) => {
   const r = mulberry32(seed);
   return (state, side) => {
     const p = state.players[side], o = state.players[(side ^ 1) as 0 | 1];
-    if (p.casting) return 0;
+    // Lookahead: queue up to MAX_AI_QUEUE cards. With 1 you'd get
+    // single-slot behavior; 2 lets the AI commit to a short combo and
+    // makes the queue actually visible during play.
+    if (p.queue.length >= 2) return 0;
     const opts = playableIndices(p);
     if (opts.length === 0) return 0;
     let bestI = opts[0], bestScore = -Infinity;
@@ -119,7 +125,10 @@ export const greedyDefense: PolicyFactory = (seed = 1) => {
   const r = mulberry32(seed);
   return (state, side) => {
     const p = state.players[side], o = state.players[(side ^ 1) as 0 | 1];
-    if (p.casting) return 0;
+    // Lookahead: queue up to MAX_AI_QUEUE cards. With 1 you'd get
+    // single-slot behavior; 2 lets the AI commit to a short combo and
+    // makes the queue actually visible during play.
+    if (p.queue.length >= 2) return 0;
     const opts = playableIndices(p);
     if (opts.length === 0) return 0;
     const wantBlock = p.hp / p.hpMax < 0.6 && p.block < 8;
@@ -141,7 +150,10 @@ export const heuristic: PolicyFactory = (seed = 1) => {
   const r = mulberry32(seed);
   return (state, side) => {
     const p = state.players[side], o = state.players[(side ^ 1) as 0 | 1];
-    if (p.casting) return 0;
+    // Lookahead: queue up to MAX_AI_QUEUE cards. With 1 you'd get
+    // single-slot behavior; 2 lets the AI commit to a short combo and
+    // makes the queue actually visible during play.
+    if (p.queue.length >= 2) return 0;
     const opts = playableIndices(p);
     if (opts.length === 0) return 0;
     const hpFrac = p.hp / p.hpMax;
