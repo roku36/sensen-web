@@ -69,19 +69,20 @@ export function runMatch(opts: MatchOptions): MatchResult {
 function detectPlay(
   s: GameState,
   side: 0 | 1,
-  before: CardId[],
+  before: (CardId | null)[],
   plays: { f: number; s: 0 | 1; c: CardId }[],
   count: [number, number],
 ) {
+  // Hand is fixed length 6 with null = empty. A play turns one non-null
+  // slot into null with no other slot changes; detect that transition.
   const after = s.players[side].hand;
-  if (after.length !== before.length - 1) return;
-  let removed: CardId | undefined;
   for (let j = 0; j < before.length; j++) {
-    if (after[j] !== before[j]) { removed = before[j]; break; }
+    if (before[j] !== null && after[j] === null && before[j] !== after[j]) {
+      plays.push({ f: s.frame, s: side, c: before[j] as CardId });
+      count[side]++;
+      return;
+    }
   }
-  if (removed === undefined) removed = before[before.length - 1];
-  plays.push({ f: s.frame, s: side, c: removed });
-  count[side]++;
 }
 
 export interface BatchSummary {

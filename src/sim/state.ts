@@ -1,6 +1,6 @@
 import { CardId } from "./cards";
 import { Rng } from "./rng";
-import { nextDrawDelaySec } from "./rules";
+import { MAX_HAND_SIZE } from "./rules";
 
 // One queue entry. duration is captured at queue-time (corruption-discounted
 // skills etc.) so it can't shift while the card is waiting in line.
@@ -16,6 +16,17 @@ export interface ResolvedEntry {
   duration: number;
   // Sim seconds when this card finished casting. Always <= current `frame * DT`.
   resolvedAt: number;
+}
+
+// A pending draw: at fillsAt (sim sec), the deck pops a card into hand[slotIndex].
+// Targets are LOCKED at Draw-press time — playing a card mid-wait creates a new
+// empty slot, but that slot does NOT become a target (it has no entry here).
+// startedAt is the press time (same for every entry in a Draw batch); UI uses
+// (fillsAt - startedAt) as a stable denominator for the fill bar.
+export interface PendingDraw {
+  slotIndex: number;
+  startedAt: number;
+  fillsAt: number;
 }
 
 export interface PlayerState {
@@ -34,15 +45,10 @@ export interface PlayerState {
   castStartedAt: number;
   // Bounded history of recently-resolved cards (head pops). Newest at the END.
   resolvedCards: ResolvedEntry[];
-  // Sim seconds when the next free draw should fire. Recomputed each draw as
-  // now + nextDrawDelaySec(hand.length). When hand is at MAX, this is paused
-  // (kept >= now so the timer doesn't bank).
-  nextDrawAt: number;
-  // The duration (in seconds) of the CURRENT draw timer, captured the moment
-  // it was scheduled. UI uses this as a stable denominator for the fill bar
-  // so the bar doesn't visibly jump when the player queues/plays a card
-  // (which shrinks the hand and would otherwise change the "expected" delay).
-  drawTimerTotal: number;
+  // Pending draws keyed by slot index. Empty when no Draw action is active.
+  // A slot referenced here is "reserved" — it visually shows a countdown and
+  // is not eligible to be refilled by other card-effect draws.
+  pendingDraws: PendingDraw[];
   // Status durations (seconds remaining)
   strength: number;
   vulnerableSecs: number;
@@ -63,7 +69,10 @@ export interface PlayerState {
   brutality: { selfPerSec: number; draw: number; interval: number; timer: number } | null;
   // Cards
   deck: CardId[];
-  hand: CardId[];
+  // Fixed-size 6-slot board (MAX_HAND_SIZE). null = empty (or reserved by a
+  // pendingDraw entry, which is tracked separately). Slot index is stable
+  // across plays — playing a card just sets hand[i] = null, never splices.
+  hand: (CardId | null)[];
   discard: CardId[];
   // Per-player RNG state for shuffling/drawing.
   rng: Rng;
@@ -90,9 +99,7 @@ const DEFAULT_PLAYER = (
   queue: [],
   castStartedAt: 0,
   resolvedCards: [],
-  // Will be reset after the initial deal in initGame to (handSize + 1).
-  nextDrawAt: nextDrawDelaySec(0),
-  drawTimerTotal: nextDrawDelaySec(0),
+  pendingDraws: [],
   strength: 0,
   vulnerableSecs: 0,
   weakSecs: 0,
@@ -110,7 +117,7 @@ const DEFAULT_PLAYER = (
   corruption: false,
   brutality: null,
   deck: [...initialDeck],
-  hand: [],
+  hand: Array.from({ length: MAX_HAND_SIZE }, () => null),
   discard: [],
   rng: { state: rngState },
 });
@@ -138,6 +145,7 @@ const clonePlayer = (p: PlayerState): PlayerState => ({
   ...p,
   queue: p.queue.map((q) => ({ ...q })),
   resolvedCards: p.resolvedCards.map((r) => ({ ...r })),
+  pendingDraws: p.pendingDraws.map((d) => ({ ...d })),
   rage: p.rage ? { ...p.rage } : null,
   metallicize: p.metallicize ? { ...p.metallicize } : null,
   demonForm: p.demonForm ? { ...p.demonForm } : null,

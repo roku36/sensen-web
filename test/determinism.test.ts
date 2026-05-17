@@ -16,6 +16,23 @@ const baseInit = () => ({
   deckP1: createTestDeck(),
 });
 
+// Count non-null entries in the fixed-size hand.
+function countHand(p: { hand: (number | null)[] }): number {
+  let n = 0;
+  for (const c of p.hand) if (c !== null) n++;
+  return n;
+}
+
+// Queue a Strike for `side` by finding any slot that still holds Strike.
+// Necessary because the fixed-slot hand turns each play into hand[i]=null
+// rather than splicing, so re-targeting slot 0 every press only works once.
+function queueAnyStrike(s: ReturnType<typeof initGame>, side: 0 | 1) {
+  const idx = s.players[side].hand.indexOf(CardId.Strike);
+  if (idx < 0) throw new Error("no Strike to queue");
+  const flag = cardFlag(idx)!;
+  return side === 0 ? step(s, flag, 0) : step(s, 0, flag);
+}
+
 describe("reducer determinism", () => {
   it("two fresh runs with the same inputs produce identical state", () => {
     const a = initGame(baseInit());
@@ -82,29 +99,26 @@ describe("reducer determinism", () => {
     const dealt = startHp - s.players[1].hp;
     expect(dealt).toBeGreaterThanOrEqual(5.5);
     expect(dealt).toBeLessThanOrEqual(6.5);
-    // After 185 frames (~3.08s) and a 5-card initial hand, the draw timer
-    // (which fires at handSize+1 sec) won't have ticked yet, so the hand
-    // is just the original 5 minus the played card.
-    expect(s.players[0].hand.length).toBe(4);
+    // Hand is fixed length 6 with null = empty. After playing one card,
+    // 4 slots still hold a card (original 5 dealt - 1 played).
+    expect(countHand(s.players[0])).toBe(4);
   });
 
   it("clicking multiple cards APPENDS to the queue (this is the queue mechanic)", () => {
     const deck = Array(20).fill(CardId.Strike);
     const s = initGame({ matchSeed: 1n, hpMax: 80, deckP0: deck, deckP1: deck });
-    step(s, cardFlag(0)!, 0);
-    step(s, cardFlag(0)!, 0);
-    step(s, cardFlag(0)!, 0);
+    // Slots are fixed: queueing slot 0 sets hand[0]=null. The next press
+    // must target a still-occupied slot.
+    queueAnyStrike(s, 0); queueAnyStrike(s, 0); queueAnyStrike(s, 0);
     expect(s.players[0].queue.length).toBe(3);
-    expect(s.players[0].hand.length).toBe(2);
+    expect(countHand(s.players[0])).toBe(2);
   });
 
   it("queued casts resolve in order with carry-over time (no drift)", () => {
     const deck = Array(20).fill(CardId.Strike);
     const s = initGame({ matchSeed: 1n, hpMax: 80, deckP0: deck, deckP1: deck });
     // 3 Strikes (3s each) = 9s = 540 frames.
-    step(s, cardFlag(0)!, 0);
-    step(s, cardFlag(0)!, 0);
-    step(s, cardFlag(0)!, 0);
+    queueAnyStrike(s, 0); queueAnyStrike(s, 0); queueAnyStrike(s, 0);
     const startHp = s.players[1].hp;
     for (let f = 0; f < 185; f++) step(s, 0, 0); // ~3s → first resolved
     expect(s.players[0].queue.length).toBe(2);

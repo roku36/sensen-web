@@ -47,6 +47,7 @@ export function Hand({ player, side, interactive = side === "self" }: HandProps)
   return (
     <group position={[0, pivotY, pivotZ]} rotation={[lean, side === "opponent" ? Math.PI : 0, 0]}>
       {cards.map((cardId, i) => {
+        if (cardId === null) return null; // empty slot — skip in 3D view
         const angleDeg = (i - center) * FAN_SPREAD_DEG;
         const a = angleDeg * DEG;
 

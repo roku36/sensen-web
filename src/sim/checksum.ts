@@ -41,8 +41,8 @@ function hashPlayer(p: PlayerState) {
   f(p.castStartedAt);
   u32(p.resolvedCards.length);
   for (const r of p.resolvedCards) { u32(r.cardId); f(r.duration); f(r.resolvedAt); }
-  f(p.nextDrawAt);
-  f(p.drawTimerTotal);
+  u32(p.pendingDraws.length);
+  for (const d of p.pendingDraws) { u32(d.slotIndex); f(d.startedAt); f(d.fillsAt); }
   f(p.strength); f(p.vulnerableSecs); f(p.weakSecs);
   opt(p.rage, (r) => { f(r.blockPerAttack); f(r.remaining); });
   opt(p.metallicize, (m) => { f(m.blockPerSec); });
@@ -58,7 +58,9 @@ function hashPlayer(p: PlayerState) {
   byte(p.corruption ? 1 : 0);
   opt(p.brutality, (b) => { f(b.selfPerSec); u32(b.draw); f(b.interval); f(b.timer); });
   u32(p.deck.length); for (const c of p.deck) u32(c);
-  u32(p.hand.length); for (const c of p.hand) u32(c);
+  // Hand is fixed length 6 with null = empty. Encode null as a sentinel.
+  u32(p.hand.length);
+  for (const c of p.hand) u32(c === null ? 0xffffffff : c);
   u32(p.discard.length); for (const c of p.discard) u32(c);
   u64(p.rng.state);
 }

@@ -1,7 +1,7 @@
 import { CardId } from "./cards";
 import { dealCards } from "./reducer";
 import { seedForHandle } from "./rng";
-import { INITIAL_HAND, nextDrawDelaySec } from "./rules";
+import { INITIAL_HAND } from "./rules";
 import { GameState, makePlayer } from "./state";
 
 export interface InitOptions {
@@ -18,11 +18,5 @@ export function initGame(opts: InitOptions): GameState {
   const s: GameState = { frame: 0, matchSeed: opts.matchSeed, players: [p0, p1], result: 0 };
   dealCards(p0, INITIAL_HAND);
   dealCards(p1, INITIAL_HAND);
-  // Anchor draw timer to the post-deal hand size (so we don't immediately
-  // overfill at frame 0). nextDrawAt is in sim seconds; frame 0 is t=0.
-  p0.drawTimerTotal = nextDrawDelaySec(p0.hand.length);
-  p0.nextDrawAt = p0.drawTimerTotal;
-  p1.drawTimerTotal = nextDrawDelaySec(p1.hand.length);
-  p1.nextDrawAt = p1.drawTimerTotal;
   return s;
 }

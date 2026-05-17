@@ -10,7 +10,7 @@ interface Snap {
   frame: number;
   hp: [number, number];
   block: [number, number];
-  hand: [number[], number[]];
+  hand: [(number | null)[], (number | null)[]];
 }
 
 export function FxObserver() {
@@ -42,34 +42,20 @@ export function FxObserver() {
           push({ kind: "hit", side: i, amount, t0: now });
         }
 
-        // Play-card: hand shrunk by exactly 1 (or unchanged length but
-        // contents shifted — happens when a played card returns to deck).
+        // Play-card: a fixed-slot hand transitions slot X from cardId → null
+        // when the player queues a card. Detect that exact transition.
         const before = p.hand[i];
         const after = snap.hand[i];
-        if (before.length === after.length + 1 || before.length === after.length) {
-          // Find the removed/changed card by walking until the first divergence.
-          let removed: { idx: number; cardId: number } | null = null;
-          for (let j = 0; j < before.length; j++) {
-            if (after[j] !== before[j]) {
-              removed = { idx: j, cardId: before[j] };
-              break;
-            }
-          }
-          // Even-length means a card was played (and possibly returned to deck);
-          // the diff above catches the removal, but if hand is unchanged we don't
-          // flag anything. If length dropped and we found no diff, the last card
-          // was the one removed.
-          if (!removed && before.length === after.length + 1) {
-            removed = { idx: before.length - 1, cardId: before[before.length - 1] };
-          }
-          if (removed && before.length !== after.length) {
+        for (let j = 0; j < before.length; j++) {
+          if (before[j] !== null && after[j] === null && before[j] !== after[j]) {
             push({
               kind: "play-card",
               side: i,
-              cardId: removed.cardId,
-              fromIdx: removed.idx,
+              cardId: before[j] as number,
+              fromIdx: j,
               t0: now,
             });
+            break;
           }
         }
       }

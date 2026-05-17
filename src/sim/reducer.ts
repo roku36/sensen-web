@@ -12,12 +12,12 @@ import {
   CardType,
   getCardDef,
 } from "./cards";
-import { cardFlag } from "./input";
+import { cardFlag, INPUT_DRAW } from "./input";
 import {
   BLOCK_DECAY_RATE,
+  DRAW_SEC_PER_CARD,
   DT,
   MAX_HAND_SIZE,
-  nextDrawDelaySec,
   PLAYED_TO_DISCARD,
   RESOLVED_HISTORY_MAX,
 } from "./rules";
@@ -156,35 +156,73 @@ function tickCasting(s: GameState, now: number, bus: Bus) {
 // full, draw 1 and re-arm with (handSize + 1) seconds. Hand size 6 → no draws
 // (the timer is pushed forward to "now" so it doesn't bank). Card-effect
 // draws (受け流し etc.) bypass this and just call drawCards directly.
-// Draw timer rules ("sensible spec"):
-//   - nextDrawAt / drawTimerTotal are ONLY rewritten when a draw fires
-//     (success or retry-at-MAX). Queuing/playing a card never resets them
-//     mid-cycle, so the UI water-fill bar advances monotonically.
-//   - When the timer fires and hand < MAX: draw one, schedule next at
-//     (now + (handSize + 1)).
-//   - When the timer fires and hand == MAX: skip the draw and retry in 1s;
-//     the next play will let the queued retry fire shortly after.
-function tickDrawTimer(s: GameState, now: number, bus: Bus) {
+// Draw-action ticker. For every pending entry whose fillsAt has elapsed,
+// pop a card from the deck into that slot. If the slot is somehow no
+// longer empty (e.g., a card-effect draw raced ahead — defensive only;
+// card-effect draws explicitly skip reserved slots), the card goes to the
+// next available empty slot, or to the discard if none.
+function tickPendingDraws(s: GameState, now: number, bus: Bus) {
   for (const idx of [0, 1] as const) {
     const p = s.players[idx];
-    let safety = 0;
-    while (now >= p.nextDrawAt && ++safety < 8) {
-      if (p.hand.length >= MAX_HAND_SIZE) {
-        // Hand full: try again in 1s. The slot UI is hidden at this size,
-        // so the temporary 1s denominator never shows.
-        p.nextDrawAt = now + 1;
-        p.drawTimerTotal = 1;
-        break;
+    if (p.pendingDraws.length === 0) continue;
+    // Drain entries in fillsAt order.
+    p.pendingDraws.sort((a, b) => a.fillsAt - b.fillsAt);
+    while (p.pendingDraws.length > 0 && p.pendingDraws[0].fillsAt <= now) {
+      const entry = p.pendingDraws.shift()!;
+      const c = drawOneFromDeck(p);
+      if (c === null) continue; // deck + discard both empty — silently drop
+      // Place into the reserved slot if still empty, else any empty slot.
+      let target = entry.slotIndex;
+      if (p.hand[target] !== null) target = firstEmptySlot(p);
+      if (target < 0) { p.discard.push(c); continue; }
+      p.hand[target] = c;
+      // Drawn-card triggers (Evolve / FireBreathing) still apply.
+      const def = getCardDef(c);
+      if (def && def.cardType === CardType.Status) {
+        if (p.evolve && p.evolve.drawOnStatus > 0) {
+          // Pull from deck into another empty slot, instantly.
+          drawCards(s, idx, p.evolve.drawOnStatus, bus);
+        }
+        if (p.fireBreathing && p.fireBreathing.damageOnStatusDraw > 0) {
+          bus.damage.push({
+            target: opp(idx),
+            amount: p.fireBreathing.damageOnStatusDraw,
+            source: idx,
+            kind: DamageKind.Power,
+          });
+        }
       }
-      const before = p.hand.length;
-      drawCards(s, idx, 1, bus);
-      const after = p.hand.length;
-      if (after === before) break; // deck + discard both empty
-      const delay = nextDrawDelaySec(after);
-      p.nextDrawAt += delay;
-      p.drawTimerTotal = delay;
     }
   }
+}
+
+// Apply a Draw action: snapshot every currently-empty, non-pending slot and
+// schedule them to fill sequentially (slot 1 at +1s, slot 2 at +2s, ...).
+// No-op if there are no eligible slots or if a draw is already in progress
+// (drawPending non-empty means an action is mid-flight; you can't restack).
+function applyDrawAction(p: PlayerState, now: number) {
+  if (p.pendingDraws.length > 0) return;
+  const reserved = new Set<number>(); // (none — pendingDraws is empty)
+  const eligible: number[] = [];
+  for (let i = 0; i < p.hand.length; i++) {
+    if (p.hand[i] === null && !reserved.has(i)) eligible.push(i);
+  }
+  if (eligible.length === 0) return;
+  for (let k = 0; k < eligible.length; k++) {
+    p.pendingDraws.push({
+      slotIndex: eligible[k],
+      startedAt: now,
+      fillsAt: now + DRAW_SEC_PER_CARD * (k + 1),
+    });
+  }
+}
+
+function firstEmptySlot(p: PlayerState): number {
+  const reserved = new Set<number>(p.pendingDraws.map((d) => d.slotIndex));
+  for (let i = 0; i < p.hand.length; i++) {
+    if (p.hand[i] === null && !reserved.has(i)) return i;
+  }
+  return -1;
 }
 
 // ── Input handling: clicking a card adds it to the END of the queue ──
@@ -215,12 +253,17 @@ function applyInput(s: GameState, idx: 0 | 1, flags: number) {
   const p = s.players[idx];
   const now = s.frame * DT;
 
+  // Draw button: snapshot all empty slots and reserve them for sequential fills.
+  if ((flags & INPUT_DRAW) !== 0) {
+    applyDrawAction(p, now);
+  }
+
   for (let i = 0; i < MAX_HAND_SIZE; i++) {
     const flag = cardFlag(i);
     if (flag === null) continue;
     if ((flags & flag) === 0) continue;
     const cardId = p.hand[i];
-    if (cardId === undefined) break;
+    if (cardId === null || cardId === undefined) break;
     const def = getCardDef(cardId);
     if (!def) break;
     if (def.cost >= 900) break; // status junk — unplayable
@@ -233,8 +276,9 @@ function applyInput(s: GameState, idx: 0 | 1, flags: number) {
     let duration = def.cost;
     if (p.corruption && def.cardType === CardType.Skill) duration = 0;
 
-    // Move card from hand → end of queue.
-    p.hand.splice(i, 1);
+    // Vacate the slot; index stays stable so pendingDraws still refer to
+    // the right positions.
+    p.hand[i] = null;
     if (p.queue.length === 0) p.castStartedAt = now;
     p.queue.push({ cardId, duration });
     break;
@@ -243,19 +287,17 @@ function applyInput(s: GameState, idx: 0 | 1, flags: number) {
 
 // ── Deck / hand / discard ──
 
+// Initial deal: fill empty slots starting from index 0. Used by initGame to
+// seed the opening hand (and only there — runtime fills go through the Draw
+// action / drawCards card effect).
 export function dealCards(p: PlayerState, count: number) {
-  let remaining = count;
-  while (remaining > 0) {
-    if (p.hand.length >= MAX_HAND_SIZE) break;
-    remaining--;
-    if (p.deck.length === 0 && p.discard.length > 0) {
-      p.deck.push(...p.discard);
-      p.discard.length = 0;
-      shuffleDeck(p);
-    }
-    const c = drawOne(p);
+  for (let n = 0; n < count; n++) {
+    const slot = nextOpenSlot(p);
+    if (slot < 0) break;
+    if (p.deck.length === 0 && p.discard.length > 0) reshuffleDiscardIntoDeck(p);
+    const c = drawOneFromDeck(p);
     if (c === null) break;
-    p.hand.push(c);
+    p.hand[slot] = c;
   }
 }
 
@@ -267,7 +309,15 @@ function shuffleDeck(p: PlayerState) {
   }
 }
 
-function drawOne(p: PlayerState): CardId | null {
+function reshuffleDiscardIntoDeck(p: PlayerState) {
+  if (p.discard.length === 0) return;
+  p.deck.push(...p.discard);
+  p.discard.length = 0;
+  shuffleDeck(p);
+}
+
+function drawOneFromDeck(p: PlayerState): CardId | null {
+  if (p.deck.length === 0 && p.discard.length > 0) reshuffleDiscardIntoDeck(p);
   if (p.deck.length === 0) return null;
   const idx = Number(rangeU64(p.rng, BigInt(p.deck.length)));
   const last = p.deck.length - 1;
@@ -277,20 +327,28 @@ function drawOne(p: PlayerState): CardId | null {
   return out;
 }
 
+// Lowest empty slot not reserved by a pendingDraw. Returns -1 if hand full.
+function nextOpenSlot(p: PlayerState): number {
+  const reserved = new Set<number>(p.pendingDraws.map((d) => d.slotIndex));
+  for (let i = 0; i < p.hand.length; i++) {
+    if (p.hand[i] === null && !reserved.has(i)) return i;
+  }
+  return -1;
+}
+
+// Card-effect draws (受け流し etc.). These bypass the Draw action's per-card
+// cost — they're earned by an effect, so they fill instantly. They go into
+// non-reserved empty slots, NEVER stealing a pendingDraw target.
 function drawCards(s: GameState, idx: 0 | 1, count: number, bus: Bus) {
   const p = s.players[idx];
   let remaining = count;
   while (remaining > 0) {
-    if (p.hand.length >= MAX_HAND_SIZE) break;
+    const slot = nextOpenSlot(p);
+    if (slot < 0) break;
     remaining--;
-    if (p.deck.length === 0 && p.discard.length > 0) {
-      p.deck.push(...p.discard);
-      p.discard.length = 0;
-      shuffleDeck(p);
-    }
-    const c = drawOne(p);
+    const c = drawOneFromDeck(p);
     if (c === null) break;
-    p.hand.push(c);
+    p.hand[slot] = c;
 
     const def = getCardDef(c);
     if (def && def.cardType === CardType.Status) {
@@ -560,9 +618,9 @@ export function step(s: GameState, p0Input: number, p1Input: number, dt: number 
   // 2. Cast slots: anything completing this frame resolves now.
   tickCasting(s, now, bus);
 
-  // 2b. Timer-based card draws (fire after resolves so the new hand size
-  // accounts for any post-cast hand changes from this frame).
-  tickDrawTimer(s, now, bus);
+  // 2b. Pending-draw fills (Draw-button action). Fires after resolves so
+  // a card resolving this frame can't race a same-frame draw target.
+  tickPendingDraws(s, now, bus);
 
   // 3. Inputs: start new casts (no-op if already casting).
   applyInput(s, 0, p0Input);

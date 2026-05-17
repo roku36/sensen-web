@@ -1,23 +1,27 @@
-// 2D HUD-only view of the game (cast-time model v2).
+// 2D HUD-only view of the cast-time game (v3 layout).
 //
-// Layout, top to bottom:
-//   - top bar
-//   - opponent status panel  (HP, status pills, piles)
-//   - opponent hand (face-down backs)
-//   - battle zone:
-//        opp casting:  [card name | ▓▓▓░░ | 0.3s remaining]
-//        🛡 opp block
-//        ─── divider ───
-//        🛡 my block
-//        my casting:   [card name | ▓░░░░ | 1.2s remaining]
-//   - my hand (face-up, click to start cast; dimmed while casting)
-//   - my status panel (HP, pills, piles)
+// Layout:
+//   ┌─────────────┬─────────────────────────────────┐
+//   │ topbar      │                                 │
+//   ├─────────────┼─────────────────────────────────┤
+//   │             │ opp hand row (6 fixed slots)    │
+//   │ left info   ├─────────────────────────────────┤
+//   │ ─ 相手 card │ timeline                        │
+//   │ ─ 自分 card │   - opp track / NOW / self      │
+//   │             ├─────────────────────────────────┤
+//   │             │ self hand row (6 fixed slots)   │
+//   │             ├─────────────────────────────────┤
+//   │             │ Draw button (6-card wide)       │
+//   └─────────────┴─────────────────────────────────┘
+//
+// Hand is FIXED at 6 slots. Empty slots stay as placeholders. Pressing the
+// Draw button reserves all empty slots and refills them one per second.
 
 import { useEffect, useRef, useState } from "react";
-import { CardEffect, CardType, getCardDef } from "../../sim/cards";
-import { cardFlag } from "../../sim/input";
+import { CardEffect, CardId, CardType, getCardDef } from "../../sim/cards";
+import { cardFlag, INPUT_DRAW } from "../../sim/input";
 import { queueRemainingTime } from "../../sim/reducer";
-import { DT, MAX_HAND_SIZE } from "../../sim/rules";
+import { DRAW_SEC_PER_CARD, DT, MAX_HAND_SIZE } from "../../sim/rules";
 import { PlayerState, ResolvedEntry } from "../../sim/state";
 
 // Queue rendering scale: 35 px per second of cast time so a cost-3 chip is
@@ -36,6 +40,29 @@ type Peek =
   | { kind: "deck"; side: 0 | 1 }
   | { kind: "discard"; side: 0 | 1 }
   | null;
+
+// ── Card geometry ──
+const CARD_W = 130;
+const CARD_H = 180;
+const CARD_GAP = 8;
+const HAND_ROW_WIDTH = CARD_W * MAX_HAND_SIZE + CARD_GAP * (MAX_HAND_SIZE - 1);
+
+// ── Opponent backs ──
+const BACK_W = 50;
+const BACK_H = 70;
+const BACK_GAP = 4;
+const OPP_HAND_WIDTH = BACK_W * MAX_HAND_SIZE + BACK_GAP * (MAX_HAND_SIZE - 1);
+
+// ── Timeline ──
+const HISTORY_SEC = 14;
+const EDGE_PAD = 20;
+const NOW_OFFSET = HISTORY_SEC * PX_PER_SEC + EDGE_PAD;
+const ROW_HEIGHT = 60;
+const CENTER_GUTTER = 30;
+const BOX_HEIGHT = 46;
+const MIN_TIMELINE_SEC = 30;
+const NOW_VIEWPORT_LEFT_PX = 80;
+const TIMELINE_HEIGHT = ROW_HEIGHT * 2 + CENTER_GUTTER;
 
 export function SimpleGameplay() {
   useKeyboardInput();
@@ -56,6 +83,7 @@ export function SimpleGameplay() {
   if (!game) return null;
   const me = game.players[localPlayer];
   const op = game.players[(localPlayer ^ 1) as 0 | 1];
+  const opSide = (localPlayer ^ 1) as 0 | 1;
   const now = game.frame * DT;
 
   return (
@@ -65,13 +93,19 @@ export function SimpleGameplay() {
         <span style={{ opacity: 0.6, fontSize: 12 }}>frame {game.frame} · 2D · cast-time model</span>
       </div>
 
-      <StatusPanel player={op} title={opponentTitle} mirrored side={(localPlayer ^ 1) as 0 | 1} onPeek={setPeek} />
-      <OpponentHand player={op} now={now} />
+      <div style={mainRow}>
+        <div style={infoColumn}>
+          <PlayerInfoCard player={op} title={opponentTitle} side={opSide} onPeek={setPeek} />
+          <PlayerInfoCard player={me} title={selfTitle} side={localPlayer} onPeek={setPeek} />
+        </div>
 
-      <BattleZone op={op} me={me} now={now} />
-
-      <SelfHand player={me} now={now} />
-      <StatusPanel player={me} title={selfTitle} side={localPlayer} onPeek={setPeek} />
+        <div style={rightStack}>
+          <OpponentHand player={op} now={now} />
+          <BattleZone op={op} me={me} now={now} />
+          <SelfHand player={me} now={now} />
+          <DrawButton player={me} />
+        </div>
+      </div>
 
       {peek?.kind === "deck" && (
         <PilePeek
@@ -97,73 +131,55 @@ export function SimpleGameplay() {
   );
 }
 
-// ── Status panel (no energy bar in cast model) ──
+// ── Player info card (left column). Both stacked vertically aligned with
+// the timeline tracks so HP/block/buffs are easy to scan against the
+// player's current queue activity.
 
-function StatusPanel({
-  player, title, mirrored = false, side, onPeek,
+function PlayerInfoCard({
+  player, title, side, onPeek,
 }: {
-  player: PlayerState; title: string; mirrored?: boolean;
-  side: 0 | 1; onPeek: (p: Peek) => void;
+  player: PlayerState; title: string; side: 0 | 1; onPeek: (p: Peek) => void;
 }) {
   const hpPct = player.hp / player.hpMax;
+  const handCount = countCards(player.hand);
   return (
-    <div style={{ ...panel, flexDirection: mirrored ? "row-reverse" : "row" }}>
-      <div style={{ flex: 1 }}>
-        <div style={panelLabel}>{title}</div>
-        <Bar pct={hpPct} color={hpPct > 0.4 ? "#34c759" : hpPct > 0.2 ? "#ffcc00" : "#ff3b30"}
-             label={`HP ${Math.round(player.hp)} / ${player.hpMax}`} />
-        <div style={pillRow}>
-          {player.thorns > 0 && <span style={pill("#ff9f43")}>棘 {Math.round(player.thorns)}</span>}
-          {player.strength !== 0 && <span style={pill("#ff6961")}>筋力 {player.strength > 0 ? "+" : ""}{player.strength}</span>}
-          {player.vulnerableSecs > 0 && <span style={pill("#ff8a00")}>脆弱 {player.vulnerableSecs.toFixed(1)}秒</span>}
-          {player.weakSecs > 0 && <span style={pill("#a899ff")}>弱体 {player.weakSecs.toFixed(1)}秒</span>}
-          {player.metallicize && <span style={pill("#9bb")}>金属化 +{player.metallicize.blockPerSec}/秒</span>}
-          {player.combust && <span style={pill("#ff5757")}>燃焼 {player.combust.enemyPerSec}/秒</span>}
-          {player.demonForm && <span style={pill("#c050ff")}>悪魔の姿 +{player.demonForm.strengthPerSec}筋力/秒</span>}
-          {player.barricade && <span style={pill("#80ffe0")}>防壁</span>}
-          {player.corruption && <span style={pill("#aa6688")}>腐敗</span>}
-        </div>
+    <div style={infoCard}>
+      <div style={infoCardTitle}>{title}</div>
+      <Bar pct={hpPct}
+           color={hpPct > 0.4 ? "#34c759" : hpPct > 0.2 ? "#ffcc00" : "#ff3b30"}
+           label={`HP ${Math.round(player.hp)} / ${player.hpMax}`} />
+      <div style={infoBlockRow}>
+        <BlockBadge value={player.block} />
+        {player.thorns > 0 && <span style={pill("#ff9f43")}>棘 {Math.round(player.thorns)}</span>}
+      </div>
+      <div style={pillRow}>
+        {player.strength !== 0 && <span style={pill("#ff6961")}>筋力 {player.strength > 0 ? "+" : ""}{player.strength}</span>}
+        {player.vulnerableSecs > 0 && <span style={pill("#ff8a00")}>脆弱 {player.vulnerableSecs.toFixed(1)}秒</span>}
+        {player.weakSecs > 0 && <span style={pill("#a899ff")}>弱体 {player.weakSecs.toFixed(1)}秒</span>}
+        {player.metallicize && <span style={pill("#9bb")}>金属化 +{player.metallicize.blockPerSec}/秒</span>}
+        {player.combust && <span style={pill("#ff5757")}>燃焼 {player.combust.enemyPerSec}/秒</span>}
+        {player.demonForm && <span style={pill("#c050ff")}>悪魔の姿 +{player.demonForm.strengthPerSec}筋力/秒</span>}
+        {player.barricade && <span style={pill("#80ffe0")}>防壁</span>}
+        {player.corruption && <span style={pill("#aa6688")}>腐敗</span>}
       </div>
       <div style={pileStack}>
         <Pile label="山札" n={player.deck.length} color="#5b9eff" onClick={() => onPeek({ kind: "deck", side })} />
         <Pile label="捨札" n={player.discard.length} color="#ff7a8a" onClick={() => onPeek({ kind: "discard", side })} />
-        <Pile label="手札" n={player.hand.length} color="#cccccc" />
+        <Pile label="手札" n={handCount} color="#cccccc" />
       </div>
     </div>
   );
 }
 
-// ── Battle zone: unified shared-time timeline ──
-//
-// Single scrollable container. Time runs LEFT → RIGHT. Vertical NOW line
-// (gold) at x = NOW_OFFSET. Opponent's queue boxes pinned to the TOP half;
-// my queue boxes pinned to the BOTTOM half. Same X axis → vertically
-// aligned column = simultaneous resolution. The whole thing scrolls
-// horizontally (mouse wheel or trackpad) — both rows move together because
-// they live in the same scroll viewport.
+function countCards(hand: (number | null)[]): number {
+  let n = 0;
+  for (const c of hand) if (c !== null) n++;
+  return n;
+}
 
-// Minimum future-side window. Set generously so the inner container is
-// usually wider than the viewport — that guarantees the wheel→horizontal
-// pan has something to scroll. The right side of the timeline becomes a
-// "look-ahead" lane the player can pan into.
-const MIN_TIMELINE_SEC = 30;
-// Visible "past" budget left of the NOW line, in seconds. Resolved chips
-// older than this aren't rendered (they'd be off-screen anyway). The inner
-// container is wide enough to fit this much past plus the queue future, and
-// the NOW line sits at a fixed inner X = HISTORY_SEC * PX_PER_SEC + EDGE_PAD.
-const HISTORY_SEC = 14;
-const EDGE_PAD = 20;
-const NOW_OFFSET = HISTORY_SEC * PX_PER_SEC + EDGE_PAD; // ≈ 510 px
-const ROW_HEIGHT = 60;          // each player's track height
-const CENTER_GUTTER = 30;       // gap between top and bottom tracks
-const BOX_HEIGHT = 46;
-// On first mount, scroll so NOW is ~80 px from the left edge of the
-// viewport. Past extends left (in-view), future extends right.
-const NOW_VIEWPORT_LEFT_PX = 80;
+// ── Battle zone: unified shared-time timeline ──
 
 function BattleZone({ op, me, now }: { op: PlayerState; me: PlayerState; now: number }) {
-  // Future = queue; Past = resolved history (positioned with NEGATIVE startRel
-  // so they live to the left of the NOW line).
   const opQueue = computeQueueBoxes(op, now);
   const meQueue = computeQueueBoxes(me, now);
   const opHist = computeHistoryBoxes(op.resolvedCards, now);
@@ -175,31 +191,21 @@ function BattleZone({ op, me, now }: { op: PlayerState; me: PlayerState; now: nu
     Math.ceil((meQueue[meQueue.length - 1]?.endRel ?? 0) + 2),
   );
   const innerWidth = NOW_OFFSET + maxSec * PX_PER_SEC + EDGE_PAD;
-  const totalHeight = ROW_HEIGHT * 2 + CENTER_GUTTER;
 
-  // Non-passive wheel listener so we can preventDefault and pan horizontally
-  // even on touchpads (React's synthetic onWheel attaches passively by
-  // default and silently drops scrollLeft updates in some Chrome versions).
   const scrollRef = useRef<HTMLDivElement | null>(null);
   useEffect(() => {
     const el = scrollRef.current;
     if (!el) return;
     const onWheel = (e: WheelEvent) => {
-      // Convert any wheel input (vertical OR horizontal) to horizontal pan.
-      // Inverted so wheel-up (negative deltaY) pans toward the FUTURE
-      // (right), wheel-down pans toward the PAST (left) — matches "drag
-      // the timeline with the wheel" intuition.
       const raw = Math.abs(e.deltaX) > Math.abs(e.deltaY) ? e.deltaX : e.deltaY;
       if (raw === 0) return;
-      if (el.scrollWidth <= el.clientWidth) return; // nothing to scroll
+      if (el.scrollWidth <= el.clientWidth) return;
       e.preventDefault();
       el.scrollLeft -= raw;
     };
     el.addEventListener("wheel", onWheel, { passive: false });
     return () => el.removeEventListener("wheel", onWheel);
   }, []);
-  // Anchor NOW near viewport's left edge on first paint. We only do this
-  // once so user scrolling isn't yanked back every frame.
   const didAnchor = useRef(false);
   useEffect(() => {
     if (didAnchor.current) return;
@@ -211,42 +217,29 @@ function BattleZone({ op, me, now }: { op: PlayerState; me: PlayerState; now: nu
 
   return (
     <div style={battleZone}>
-      <div style={timelineMetaRow}>
-        <PlayerMeta player={op} label="相手" boxes={opQueue} />
-        <PlayerMeta player={me} label="自分" boxes={meQueue} />
-      </div>
       <div style={scrollWrap} className="no-scrollbar" ref={scrollRef}>
-        <div style={{ ...timelineInner, width: innerWidth, height: totalHeight }}>
-          {/* Past time grid (negative ticks). */}
+        <div style={{ ...timelineInner, width: innerWidth, height: TIMELINE_HEIGHT }}>
           {Array.from({ length: HISTORY_SEC + 1 }).map((_, s) => (
-            <TimeTick key={`p${s}`} sec={-s} totalHeight={totalHeight} />
+            <TimeTick key={`p${s}`} sec={-s} totalHeight={TIMELINE_HEIGHT} />
           ))}
-          {/* Future time grid (positive ticks). */}
           {Array.from({ length: maxSec + 1 }).map((_, s) => (
-            <TimeTick key={`f${s}`} sec={s} totalHeight={totalHeight} />
+            <TimeTick key={`f${s}`} sec={s} totalHeight={TIMELINE_HEIGHT} />
           ))}
-          {/* Center divider that visually unifies the two tracks. */}
           <div style={{ ...centerDivider, top: ROW_HEIGHT }} />
           <div style={{ ...nowDivider, left: NOW_OFFSET - 18, top: ROW_HEIGHT + CENTER_GUTTER / 2 - 8 }}>NOW</div>
-          {/* NOW vertical line spans both tracks. */}
-          <div style={{ ...nowLine, left: NOW_OFFSET, height: totalHeight }} />
-          {/* Opponent history (top half, left of NOW, dimmed). */}
+          <div style={{ ...nowLine, left: NOW_OFFSET, height: TIMELINE_HEIGHT }} />
           {opHist.map((b, i) => (
             <QueueBox key={`oh${i}`} {...b} yTop={(ROW_HEIGHT - BOX_HEIGHT) / 2} />
           ))}
-          {/* Opponent queue (top half, right of NOW). */}
           {opQueue.map((b, i) => (
             <QueueBox key={`o${i}`} {...b} yTop={(ROW_HEIGHT - BOX_HEIGHT) / 2} />
           ))}
-          {/* Self history (bottom half, left of NOW, dimmed). */}
           {meHist.map((b, i) => (
             <QueueBox key={`mh${i}`} {...b} yTop={ROW_HEIGHT + CENTER_GUTTER + (ROW_HEIGHT - BOX_HEIGHT) / 2} />
           ))}
-          {/* Self queue (bottom half, right of NOW). */}
           {meQueue.map((b, i) => (
             <QueueBox key={`m${i}`} {...b} yTop={ROW_HEIGHT + CENTER_GUTTER + (ROW_HEIGHT - BOX_HEIGHT) / 2} />
           ))}
-          {/* Idle hints. */}
           {opQueue.length === 0 && <span style={{ ...idleHint, top: ROW_HEIGHT / 2 - 7 }}>相手キュー空</span>}
           {meQueue.length === 0 && <span style={{ ...idleHint, top: ROW_HEIGHT + CENTER_GUTTER + ROW_HEIGHT / 2 - 7 }}>自分キュー空</span>}
         </div>
@@ -282,33 +275,15 @@ function computeQueueBoxes(player: PlayerState, now: number): BoxLayout[] {
 function computeHistoryBoxes(resolved: ResolvedEntry[], now: number): BoxLayout[] {
   const out: BoxLayout[] = [];
   for (const r of resolved) {
-    const endRel = r.resolvedAt - now;           // ≤ 0
-    const startRel = endRel - r.duration;        // < endRel
-    if (endRel < -HISTORY_SEC) continue;         // off-screen left, skip
+    const endRel = r.resolvedAt - now;
+    const startRel = endRel - r.duration;
+    if (endRel < -HISTORY_SEC) continue;
     out.push({
-      cardId: r.cardId,
-      duration: r.duration,
-      startRel, endRel,
-      isHead: false,
-      resolved: true,
+      cardId: r.cardId, duration: r.duration,
+      startRel, endRel, isHead: false, resolved: true,
     });
   }
   return out;
-}
-
-function PlayerMeta({ player, label, boxes }: { player: PlayerState; label: string; boxes: BoxLayout[] }) {
-  const totalSec = boxes[boxes.length - 1]?.endRel ?? 0;
-  return (
-    <div style={timelineHeader}>
-      <span style={timelineLabel}>{label}</span>
-      <BlockBadge value={player.block} />
-      {boxes.length > 0 && (
-        <span style={timelineSub}>
-          {boxes.length}枚 · 合計 {totalSec.toFixed(1)}秒
-        </span>
-      )}
-    </div>
-  );
 }
 
 function TimeTick({ sec, totalHeight }: { sec: number; totalHeight: number }) {
@@ -331,7 +306,7 @@ function TimeTick({ sec, totalHeight }: { sec: number; totalHeight: number }) {
           color: isPast ? "rgba(255,255,255,0.25)" : "rgba(255,255,255,0.4)",
           fontFamily: "ui-monospace, monospace",
           pointerEvents: "none",
-        }}>{sec > 0 ? `${sec}s` : `${sec}s`}</div>
+        }}>{sec}s</div>
       )}
     </>
   );
@@ -342,8 +317,6 @@ function QueueBox({ cardId, duration, startRel, endRel, isHead, yTop, resolved }
   const baseColor = def?.cardType === CardType.Attack ? "#e3553c"
     : def?.cardType === CardType.Power ? "#b465e0"
     : "#5fa0e0";
-  // Resolved cards fade in saturation/opacity — same hue so eyes can track
-  // identity, but they're clearly "in the past".
   const color = resolved ? dim(baseColor, 0.45) : baseColor;
   const left = NOW_OFFSET + startRel * PX_PER_SEC;
   const w = duration * PX_PER_SEC;
@@ -357,7 +330,7 @@ function QueueBox({ cardId, duration, startRel, endRel, isHead, yTop, resolved }
         top: yTop,
         background: color,
         border: `2px solid ${glow ? "#fff" : color}`,
-        boxSizing: "border-box",       // prevents overlap between adjacent boxes
+        boxSizing: "border-box",
         boxShadow: glow
           ? `0 0 ${10 + 20 * glowIntensity}px rgba(255,255,200,${0.4 + 0.5 * glowIntensity})`
           : resolved ? "none" : "0 2px 6px rgba(0,0,0,0.4)",
@@ -381,7 +354,6 @@ function QueueBox({ cardId, duration, startRel, endRel, isHead, yTop, resolved }
   );
 }
 
-// Mix a hex color with black by factor 0..1 (0 = black, 1 = original).
 function dim(hex: string, k: number): string {
   const m = /^#([0-9a-f]{2})([0-9a-f]{2})([0-9a-f]{2})$/i.exec(hex);
   if (!m) return hex;
@@ -392,59 +364,99 @@ function dim(hex: string, k: number): string {
 }
 
 function BlockBadge({ value }: { value: number }) {
-  if (value <= 0) return null;
+  if (value <= 0) return <span style={{ ...blockBadge, opacity: 0.4 }}>🛡 0</span>;
   return <span style={blockBadge}>🛡 {Math.round(value)}</span>;
 }
 
-// ── Opponent hand: face-down backs + same draw-timer slot as self ──
+// ── Hands ──
+//
+// Fixed 6-slot row. Slot states:
+//   - card present → show card (front=face-up, opp=face-down back)
+//   - pending draw (slot is in pendingDraws) → show countdown chip
+//   - empty (no card, not pending) → show empty placeholder
+// The row width is locked so adding/removing cards never shifts neighbors.
+
+interface PendingInfo { startedAt: number; fillsAt: number; }
+function pendingForSlot(player: PlayerState, slotIndex: number): PendingInfo | null {
+  for (const d of player.pendingDraws) {
+    if (d.slotIndex === slotIndex) return { startedAt: d.startedAt, fillsAt: d.fillsAt };
+  }
+  return null;
+}
 
 function OpponentHand({ player, now }: { player: PlayerState; now: number }) {
-  const drawIn = Math.max(0, player.nextDrawAt - now);
-  const showSlot = player.hand.length < MAX_HAND_SIZE;
   return (
-    <div style={oppHandRow}>
-      {player.hand.map((_, i) => (
-        <div key={i} style={cardBack}><div style={cardBackSigil}>✦</div></div>
-      ))}
-      {showSlot && <NextCardSlot drawIn={drawIn} totalDelay={player.drawTimerTotal} backFacing />}
-      {player.hand.length === 0 && !showSlot && <div style={{ fontSize: 11, opacity: 0.4 }}>(相手の手札なし)</div>}
+    <div style={{ ...oppHandRow, width: OPP_HAND_WIDTH }}>
+      {Array.from({ length: MAX_HAND_SIZE }).map((_, i) => {
+        const card = player.hand[i];
+        const pending = pendingForSlot(player, i);
+        if (card !== null) {
+          return <div key={i} style={cardBack}><div style={cardBackSigil}>✦</div></div>;
+        }
+        if (pending !== null) {
+          return <PendingBack key={i} info={pending} now={now} />;
+        }
+        return <div key={i} style={emptyBack} />;
+      })}
     </div>
   );
 }
-
-// ── Self hand: 6-slot row with a face-down countdown slot for next draw ──
 
 function SelfHand({ player, now }: { player: PlayerState; now: number }) {
-  const drawIn = Math.max(0, player.nextDrawAt - now);
-  const showSlot = player.hand.length < MAX_HAND_SIZE;
   return (
-    <div style={handRow}>
-      {player.hand.map((cardId, i) => (
-        <SimpleCard key={i} cardId={cardId} idx={i} player={player} now={now} />
-      ))}
-      {showSlot && <NextCardSlot drawIn={drawIn} totalDelay={player.drawTimerTotal} />}
+    <div style={{ ...handRow, width: HAND_ROW_WIDTH }}>
+      {Array.from({ length: MAX_HAND_SIZE }).map((_, i) => {
+        const card = player.hand[i];
+        const pending = pendingForSlot(player, i);
+        if (card !== null) {
+          return <SimpleCard key={i} cardId={card} idx={i} player={player} now={now} />;
+        }
+        if (pending !== null) {
+          return <PendingSlot key={i} info={pending} now={now} />;
+        }
+        return <div key={i} style={emptySlot} />;
+      })}
     </div>
   );
 }
 
-// Empty slot showing a countdown until the next card is drawn. When drawIn
-// hits 0, the sim will replace this slot with a real card on the next frame.
-function NextCardSlot({ drawIn, totalDelay, backFacing = false }: { drawIn: number; totalDelay: number; backFacing?: boolean }) {
-  const fillPct = totalDelay > 0 ? 1 - drawIn / totalDelay : 1;
+// Self-side pending: shows "残り Ns" + a water-fill that uses
+// (fillsAt - startedAt) as a stable denominator regardless of other plays.
+function PendingSlot({ info, now }: { info: PendingInfo; now: number }) {
+  const total = Math.max(0.001, info.fillsAt - info.startedAt);
+  const elapsed = Math.max(0, now - info.startedAt);
+  const fillPct = Math.max(0, Math.min(1, elapsed / total));
+  const remaining = Math.max(0, info.fillsAt - now);
   return (
-    <div style={backFacing ? nextSlotBack : nextSlotFront}>
-      {/* Water-fill from the bottom representing time-to-draw. */}
+    <div style={pendingSlotFront}>
       <div style={{
         position: "absolute", left: 0, right: 0, bottom: 0,
-        height: `${Math.max(0, Math.min(100, fillPct * 100))}%`,
-        background: backFacing
-          ? "linear-gradient(180deg, rgba(122,93,184,0.35) 0%, rgba(122,93,184,0.55) 100%)"
-          : "linear-gradient(180deg, rgba(95,160,224,0.30) 0%, rgba(95,160,224,0.55) 100%)",
-        transition: "height 80ms linear",
-        pointerEvents: "none",
+        height: `${fillPct * 100}%`,
+        background: "linear-gradient(180deg, rgba(95,160,224,0.25) 0%, rgba(95,160,224,0.55) 100%)",
+        transition: "height 80ms linear", pointerEvents: "none",
       }} />
-      <div style={nextSlotLabel}>次の札</div>
-      <div style={nextSlotCountdown}>{drawIn.toFixed(1)}s</div>
+      <div style={pendingSlotLabel}>引いてる</div>
+      <div style={pendingSlotCountdown}>{remaining.toFixed(1)}s</div>
+    </div>
+  );
+}
+
+function PendingBack({ info, now }: { info: PendingInfo; now: number }) {
+  const total = Math.max(0.001, info.fillsAt - info.startedAt);
+  const elapsed = Math.max(0, now - info.startedAt);
+  const fillPct = Math.max(0, Math.min(1, elapsed / total));
+  const remaining = Math.max(0, info.fillsAt - now);
+  return (
+    <div style={pendingBack}>
+      <div style={{
+        position: "absolute", left: 0, right: 0, bottom: 0,
+        height: `${fillPct * 100}%`,
+        background: "linear-gradient(180deg, rgba(122,93,184,0.35) 0%, rgba(122,93,184,0.55) 100%)",
+        transition: "height 80ms linear", pointerEvents: "none",
+      }} />
+      <div style={{ fontSize: 11, fontWeight: 700, color: "#a899ff", textShadow: "0 1px 2px black", zIndex: 1 }}>
+        {remaining.toFixed(1)}s
+      </div>
     </div>
   );
 }
@@ -454,9 +466,6 @@ function SimpleCard({ cardId, idx, player, now }: { cardId: number; idx: number;
   const [hover, setHover] = useState(false);
   if (!def) return null;
   const unplayable = def.cost >= 900;
-  // Prereq gate: card requires this much already-queued time before it can
-  // be added. Show it greyed out (but still clickable to read the tooltip)
-  // until the queue has enough committed time.
   const queued = queueRemainingTime(player, now);
   const prereq = def.prereqQueueTime ?? 0;
   const prereqOk = prereq <= queued;
@@ -508,6 +517,53 @@ function SimpleCard({ cardId, idx, player, now }: { cardId: number; idx: number;
   );
 }
 
+// Wide Draw button under the hand. Width = full hand row. Disabled when
+// there's no empty (non-pending) slot to fill, OR a draw is already
+// in-flight (can't re-arm mid-cycle).
+function DrawButton({ player }: { player: PlayerState }) {
+  let emptyCount = 0;
+  for (let i = 0; i < player.hand.length; i++) {
+    if (player.hand[i] === null && pendingForSlot(player, i) === null) emptyCount++;
+  }
+  const drawing = player.pendingDraws.length > 0;
+  const enabled = emptyCount > 0 && !drawing;
+  const cost = emptyCount * DRAW_SEC_PER_CARD;
+
+  const onClick = () => {
+    if (!enabled) return;
+    getSession()?.pushLocalInput(INPUT_DRAW);
+  };
+
+  return (
+    <button
+      onClick={onClick}
+      disabled={!enabled}
+      style={{
+        ...drawButtonStyle,
+        width: HAND_ROW_WIDTH,
+        background: drawing
+          ? "rgba(95,160,224,0.18)"
+          : enabled ? "linear-gradient(180deg, #2c5b8e 0%, #1a3d6e 100%)" : "#1a1a22",
+        color: enabled ? "#fff" : "#666",
+        cursor: enabled ? "pointer" : "not-allowed",
+        borderColor: drawing ? "rgba(95,160,224,0.5)" : enabled ? "#3a7fbf" : "#2a2a35",
+      }}
+      title={drawing ? "引いてる中" : enabled ? `${emptyCount}枚 / ${cost}秒` : "引けるスロットなし"}
+    >
+      <span style={{ fontSize: 16, fontWeight: 700, letterSpacing: 2 }}>
+        ⇊ ドロー (D)
+      </span>
+      <span style={{ fontSize: 12, opacity: 0.85, marginLeft: 12, fontFamily: "ui-monospace, monospace" }}>
+        {drawing
+          ? `引いてる中… 残り ${player.pendingDraws.length}枚`
+          : enabled
+            ? `${emptyCount}枚 (合計 ${cost.toFixed(0)}s)`
+            : "(空きなし)"}
+      </span>
+    </button>
+  );
+}
+
 function Tooltip({ def }: { def: ReturnType<typeof getCardDef> }) {
   if (!def) return null;
   return (
@@ -544,13 +600,13 @@ function Pile({ label, n, color, onClick }: { label: string; n: number; color: s
       disabled={!onClick}
       style={{
         textAlign: "center", padding: "4px 8px", borderRadius: 6,
-        background: "#22222a", border: `1px solid ${color}33`, minWidth: 56,
+        background: "#22222a", border: `1px solid ${color}33`, minWidth: 50,
         cursor: onClick ? "pointer" : "default", color: "inherit",
       }}
       title={onClick ? "クリックで中身を見る" : undefined}
     >
       <div style={{ color, fontSize: 10, opacity: 0.7 }}>{label}</div>
-      <div style={{ color, fontSize: 18, fontWeight: 600 }}>{n}</div>
+      <div style={{ color, fontSize: 16, fontWeight: 600 }}>{n}</div>
     </button>
   );
 }
@@ -604,80 +660,76 @@ function typeColor(t: CardType, active: boolean): string {
 // ── styles ──
 
 const page: React.CSSProperties = {
-  position: "absolute", inset: 0, display: "flex", flexDirection: "column", padding: 14, gap: 10,
+  position: "absolute", inset: 0, display: "flex", flexDirection: "column",
+  padding: 14, gap: 10,
   background: "linear-gradient(180deg, #14141c 0%, #0a0a12 100%)",
   fontFamily: "ui-sans-serif, system-ui, sans-serif",
 };
 const topBar: React.CSSProperties = { display: "flex", justifyContent: "space-between", alignItems: "center" };
 const ghostBtn: React.CSSProperties = { background: "transparent", color: "#aaa", border: "1px solid #333", borderRadius: 6, padding: "4px 10px", cursor: "pointer", fontSize: 12 };
-const panel: React.CSSProperties = { display: "flex", padding: 10, background: "#181822", border: "1px solid #2a2a35", borderRadius: 10, gap: 16, alignItems: "center" };
-const panelLabel: React.CSSProperties = { fontSize: 12, opacity: 0.6, letterSpacing: 2, marginBottom: 4 };
-const pillRow: React.CSSProperties = { marginTop: 4, display: "flex", flexWrap: "wrap", gap: 4 };
-const pileStack: React.CSSProperties = { display: "flex", gap: 6, flexShrink: 0, alignItems: "stretch" };
+
+const mainRow: React.CSSProperties = {
+  display: "flex", gap: 12, flex: 1, minHeight: 0, alignItems: "flex-start",
+};
+const infoColumn: React.CSSProperties = {
+  display: "flex", flexDirection: "column", gap: 8,
+  width: 260, flexShrink: 0,
+};
+const infoCard: React.CSSProperties = {
+  padding: 10, background: "#181822", border: "1px solid #2a2a35", borderRadius: 10,
+  display: "flex", flexDirection: "column", gap: 6,
+};
+const infoCardTitle: React.CSSProperties = {
+  fontSize: 12, opacity: 0.75, letterSpacing: 1.5, fontWeight: 600, marginBottom: 2,
+};
+const infoBlockRow: React.CSSProperties = {
+  display: "flex", flexWrap: "wrap", gap: 6, alignItems: "center",
+};
+const rightStack: React.CSSProperties = {
+  display: "flex", flexDirection: "column", gap: 8, flex: 1, minWidth: 0,
+};
+
+const pillRow: React.CSSProperties = { display: "flex", flexWrap: "wrap", gap: 4 };
+const pileStack: React.CSSProperties = { display: "flex", gap: 6, marginTop: 4 };
 const barTrack: React.CSSProperties = { background: "#0c0c12", border: "1px solid #2a2a35", borderRadius: 4, overflow: "hidden" };
 const pill = (color: string): React.CSSProperties => ({ display: "inline-block", padding: "2px 8px", borderRadius: 999, background: `${color}22`, color, fontSize: 11, border: `1px solid ${color}55` });
 
-const oppHandRow: React.CSSProperties = { display: "flex", gap: 4, justifyContent: "center", minHeight: 72, alignItems: "center" };
+// Opponent hand row: fixed 6 backs, centered.
+const oppHandRow: React.CSSProperties = {
+  display: "flex", gap: BACK_GAP, height: BACK_H + 4, alignItems: "center",
+  marginLeft: "auto", marginRight: "auto",
+};
 const cardBack: React.CSSProperties = {
-  width: 50, height: 70, borderRadius: 6,
+  width: BACK_W, height: BACK_H, borderRadius: 6,
   background: "linear-gradient(135deg, #2a2438 0%, #15101e 100%)",
   border: "1px solid #4a3d6a",
   display: "flex", alignItems: "center", justifyContent: "center",
   boxShadow: "inset 0 0 8px rgba(160, 110, 255, 0.15), 0 2px 6px rgba(0,0,0,0.4)",
-};
-const cardBackSigil: React.CSSProperties = { color: "#7a5db8", opacity: 0.55, fontSize: 24 };
-
-// Empty hand slot waiting for the next draw. Matches the card silhouette so
-// the row visually keeps its 6-slot shape; a water-fill animates from the
-// bottom up as the timer counts down.
-const nextSlotFront: React.CSSProperties = {
-  position: "relative", overflow: "hidden",
-  width: 130, height: 180, borderRadius: 8,
-  background: "rgba(20, 28, 40, 0.55)",
-  border: "1px dashed rgba(95,160,224,0.45)",
-  display: "flex", flexDirection: "column", justifyContent: "flex-end",
-  alignItems: "center", padding: "6px 4px", color: "#bdd6f0",
   flexShrink: 0,
 };
-const nextSlotBack: React.CSSProperties = {
-  position: "relative", overflow: "hidden",
-  width: 50, height: 70, borderRadius: 6,
-  background: "rgba(30, 24, 44, 0.6)",
-  border: "1px dashed rgba(122,93,184,0.45)",
-  display: "flex", flexDirection: "column", justifyContent: "flex-end",
-  alignItems: "center", padding: "4px 2px", color: "#a899ff",
+const cardBackSigil: React.CSSProperties = { color: "#7a5db8", opacity: 0.55, fontSize: 22 };
+const emptyBack: React.CSSProperties = {
+  width: BACK_W, height: BACK_H, borderRadius: 6,
+  background: "rgba(20, 20, 28, 0.4)",
+  border: "1px dashed rgba(122,93,184,0.18)",
   flexShrink: 0,
 };
-const nextSlotLabel: React.CSSProperties = {
-  fontSize: 10, opacity: 0.7, marginBottom: 2, zIndex: 1, position: "relative",
-  textShadow: "0 1px 2px rgba(0,0,0,0.6)",
-};
-const nextSlotCountdown: React.CSSProperties = {
-  fontSize: 13, fontWeight: 700, fontFamily: "ui-monospace, monospace",
-  marginBottom: 4, zIndex: 1, position: "relative",
-  textShadow: "0 1px 2px rgba(0,0,0,0.6)",
+const pendingBack: React.CSSProperties = {
+  position: "relative", overflow: "hidden",
+  width: BACK_W, height: BACK_H, borderRadius: 6,
+  background: "rgba(30, 24, 44, 0.55)",
+  border: "1px dashed rgba(122,93,184,0.55)",
+  display: "flex", alignItems: "center", justifyContent: "center",
+  flexShrink: 0,
 };
 
 const battleZone: React.CSSProperties = {
-  display: "flex", flexDirection: "column", gap: 6, padding: "10px 12px",
+  display: "flex", flexDirection: "column",
   background: "rgba(40, 30, 60, 0.25)",
   border: "1px solid rgba(110, 80, 170, 0.35)",
   borderRadius: 10,
+  padding: 8,
 };
-const timelineMetaRow: React.CSSProperties = {
-  display: "flex", justifyContent: "space-between", gap: 12,
-  padding: "0 4px",
-};
-const timelineHeader: React.CSSProperties = {
-  display: "flex", alignItems: "center", gap: 8, padding: "2px 4px",
-  fontSize: 11, opacity: 0.85,
-};
-const timelineLabel: React.CSSProperties = { fontWeight: 700, letterSpacing: 1 };
-const timelineSub: React.CSSProperties = { fontSize: 10, opacity: 0.55, fontFamily: "ui-monospace, monospace" };
-// Scrollable viewport: clips the inner timeline and allows horizontal scroll.
-// The inner div is sized to fit the longest queue, and the wheel handler
-// translates vertical wheel deltas into horizontal scroll so trackpad users
-// don't need shift-wheel.
 const scrollWrap: React.CSSProperties = {
   position: "relative", width: "100%",
   overflowX: "auto", overflowY: "hidden",
@@ -685,18 +737,14 @@ const scrollWrap: React.CSSProperties = {
   borderRadius: 6,
   border: "1px solid rgba(255,255,255,0.05)",
 };
-const timelineInner: React.CSSProperties = {
-  position: "relative",
-  // height + width are set inline based on max queue size
-};
+const timelineInner: React.CSSProperties = { position: "relative" };
 const centerDivider: React.CSSProperties = {
   position: "absolute", left: 0, right: 0, height: CENTER_GUTTER,
   background: "linear-gradient(180deg, rgba(255,224,102,0) 0%, rgba(255,224,102,0.12) 50%, rgba(255,224,102,0) 100%)",
   pointerEvents: "none",
 };
 const nowDivider: React.CSSProperties = {
-  position: "absolute", left: NOW_OFFSET - 22, width: 36,
-  height: 16, lineHeight: "16px",
+  position: "absolute", width: 36, height: 16, lineHeight: "16px",
   fontSize: 9, color: "#1a1a22", letterSpacing: 2, fontWeight: 700,
   fontFamily: "ui-monospace, monospace", textAlign: "center",
   background: "#ffe066", borderRadius: 4,
@@ -723,9 +771,38 @@ const blockBadge: React.CSSProperties = {
   fontSize: 11, fontWeight: 600,
 };
 
-const handRow: React.CSSProperties = { display: "flex", gap: 8, justifyContent: "center", overflowX: "auto", paddingBottom: 4 };
+// Self hand row: fixed 6 cards/empties/pending.
+const handRow: React.CSSProperties = {
+  display: "flex", gap: CARD_GAP, height: CARD_H,
+  marginLeft: "auto", marginRight: "auto",
+};
+const emptySlot: React.CSSProperties = {
+  width: CARD_W, height: CARD_H, borderRadius: 8,
+  background: "rgba(20, 20, 28, 0.4)",
+  border: "1px dashed rgba(110, 110, 130, 0.25)",
+  flexShrink: 0,
+};
+const pendingSlotFront: React.CSSProperties = {
+  position: "relative", overflow: "hidden",
+  width: CARD_W, height: CARD_H, borderRadius: 8,
+  background: "rgba(20, 28, 40, 0.55)",
+  border: "1px dashed rgba(95,160,224,0.55)",
+  display: "flex", flexDirection: "column", justifyContent: "flex-end",
+  alignItems: "center", padding: "6px 4px", color: "#bdd6f0",
+  flexShrink: 0,
+};
+const pendingSlotLabel: React.CSSProperties = {
+  fontSize: 10, opacity: 0.7, marginBottom: 2, zIndex: 1, position: "relative",
+  textShadow: "0 1px 2px rgba(0,0,0,0.6)",
+};
+const pendingSlotCountdown: React.CSSProperties = {
+  fontSize: 13, fontWeight: 700, fontFamily: "ui-monospace, monospace",
+  marginBottom: 4, zIndex: 1, position: "relative",
+  textShadow: "0 1px 2px rgba(0,0,0,0.6)",
+};
+
 const cardStyle: React.CSSProperties = {
-  width: 130, height: 180, padding: 10, borderRadius: 8, border: "1px solid #00000040",
+  width: CARD_W, height: CARD_H, padding: 10, borderRadius: 8, border: "1px solid #00000040",
   display: "flex", flexDirection: "column", justifyContent: "space-between", color: "white",
   position: "relative", textAlign: "left", flexShrink: 0,
 };
@@ -740,6 +817,13 @@ const typeBadge: React.CSSProperties = {
 const cardHeader: React.CSSProperties = { fontWeight: 600, fontSize: 13, marginTop: 32, textShadow: "0 1px 2px black", zIndex: 2 };
 const cardEffect: React.CSSProperties = { fontSize: 11, opacity: 0.95, lineHeight: 1.3, marginTop: 4, zIndex: 2 };
 const cardKeyHint: React.CSSProperties = { position: "absolute", bottom: 6, right: 8, fontSize: 11, opacity: 0.6, fontFamily: "ui-monospace, monospace", zIndex: 2 };
+
+const drawButtonStyle: React.CSSProperties = {
+  marginLeft: "auto", marginRight: "auto",
+  height: 44, borderRadius: 8, border: "1px solid #3a7fbf",
+  display: "flex", alignItems: "center", justifyContent: "center",
+  gap: 8, fontFamily: "ui-sans-serif, system-ui, sans-serif",
+};
 
 const tooltipBox: React.CSSProperties = {
   position: "absolute", bottom: "100%", left: "50%", transform: "translateX(-50%)",

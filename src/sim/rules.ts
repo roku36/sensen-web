@@ -10,18 +10,16 @@
 
 // ── Vitals ──
 export const INITIAL_HP = 80;
-// Hand is capped at 6. We start dealt to 5 so the player has something to do
-// immediately; the timer below refills up to MAX_HAND_SIZE over time.
+// Hand is fixed at 6 slots. We start dealt to 5 so there's an immediately
+// available Draw target (slot 6) the player can practice with.
 export const MAX_HAND_SIZE = 6;
 export const INITIAL_HAND = 5;
 
-// ── Draw timer ──
-// Next card draws after (currentHandSize + 1) seconds. Empty hand = 1 sec.
-// Bigger hands draw slower so spending cards is what unlocks new options.
-export const NEXT_DRAW_BASE_SEC = 1;
-export function nextDrawDelaySec(handSize: number): number {
-  return NEXT_DRAW_BASE_SEC + handSize;
-}
+// ── Draw action ──
+// Pressing the Draw button reserves all currently-empty (non-pending) slots
+// and fills them one per second: slot i fills at now + (i+1) * DRAW_SEC_PER_CARD.
+// Drawing 3 cards = 3 sec total.
+export const DRAW_SEC_PER_CARD = 1;
 
 // How many recently-resolved cards to keep in the per-player history for the
 // timeline UI (so a card you just cast stays visible — dimmed — to the left

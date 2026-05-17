@@ -1,8 +1,9 @@
-// Visually verify:
-//   - resolved chip stays LEFT of NOW dimmed
-//   - next-card slot has a stable fill bar that doesn't reset on play
-//   - native scrollbar is hidden
-//   - wheel scroll direction is inverted (deltaY > 0 → scrollLeft decreases)
+// Visually verify the v3 layout:
+//   - left info column (相手 + 自分 stacked, vertically aligned with timeline)
+//   - fixed 6-slot opponent + self hands (placeholders stay put when cards leave)
+//   - wide Draw button under the hand (6-card width)
+//   - press Draw → pending slots show countdown
+//   - playing a card during the wait does NOT add that slot to the pending fills
 import { chromium } from "playwright";
 const wait = (ms) => new Promise((r) => setTimeout(r, ms));
 
@@ -17,82 +18,70 @@ await page.waitForFunction(() => window.__sensen != null);
 await page.click("button:has-text('2D Simple')");
 await page.selectOption("select", "passive");
 await page.click("button:has-text('CPU と対戦')");
-await page.waitForTimeout(600);
+await page.waitForTimeout(500);
 
-// Capture the draw-timer values at t≈0 (only initial draw happened).
-const tInitial = await page.evaluate(() => {
+await page.screenshot({ path: "/tmp/v3-initial.png" });
+console.log("saved /tmp/v3-initial.png");
+
+const initial = await page.evaluate(() => {
   const g = window.__sensen.getState();
   return {
-    hand: g.players[0].hand.length,
-    nextDrawAt: g.players[0].nextDrawAt,
-    drawTimerTotal: g.players[0].drawTimerTotal,
-    now: g.frame / 60,
+    p0Hand: g.players[0].hand,
+    p0Pending: g.players[0].pendingDraws,
   };
 });
-console.log("initial:", tInitial);
+console.log("initial p0:", JSON.stringify(initial, null, 2));
 
-// Wait 2s, then play a card, then immediately check that drawTimerTotal
-// hasn't changed (only nextDrawAt would shift if a draw fires).
-await wait(2000);
-await page.keyboard.press("1");
-await page.waitForTimeout(80);
+// Play 2 cards to create empty slots
+await page.keyboard.press("1"); await page.waitForTimeout(120);
+await page.keyboard.press("2"); await page.waitForTimeout(200);
 
-const tAfterPlay = await page.evaluate(() => {
+const afterPlay = await page.evaluate(() => {
+  const g = window.__sensen.getState();
+  return { hand: g.players[0].hand, pending: g.players[0].pendingDraws };
+});
+console.log("after 2 plays:", JSON.stringify(afterPlay, null, 2));
+
+await page.screenshot({ path: "/tmp/v3-played.png" });
+
+// Press Draw → schedules pending refills for all empty slots
+await page.keyboard.press("d");
+await page.waitForTimeout(200);
+
+const afterDraw = await page.evaluate(() => {
   const g = window.__sensen.getState();
   return {
-    hand: g.players[0].hand.length,
-    nextDrawAt: g.players[0].nextDrawAt,
-    drawTimerTotal: g.players[0].drawTimerTotal,
-    now: g.frame / 60,
-    queue: g.players[0].queue.length,
+    hand: g.players[0].hand,
+    pending: g.players[0].pendingDraws,
+    nowSec: g.frame / 60,
   };
 });
-console.log("after play:", tAfterPlay);
-console.log("drawTimerTotal unchanged on play?", tInitial.drawTimerTotal === tAfterPlay.drawTimerTotal);
-console.log("nextDrawAt unchanged on play?", tInitial.nextDrawAt === tAfterPlay.nextDrawAt);
+console.log("after Draw press:", JSON.stringify(afterDraw, null, 2));
 
-// Queue 2 more for visual.
-await page.keyboard.press("2");
-await page.waitForTimeout(120);
+await page.screenshot({ path: "/tmp/v3-drawing.png" });
+console.log("saved /tmp/v3-drawing.png");
+
+// During wait, play another card from a different slot — that slot should NOT
+// get added to pending.
 await page.keyboard.press("3");
-await page.waitForTimeout(300);
-await wait(3500);
-await page.screenshot({ path: "/tmp/tl-state.png" });
-
-// Hidden scrollbar check.
-const scrollbarHidden = await page.evaluate(() => {
-  const all = Array.from(document.querySelectorAll("div"));
-  const sw = all.find((d) => getComputedStyle(d).overflowX === "auto");
-  if (!sw) return { ok: false };
-  // Force a scroll then check the offset/client width parity (no chrome).
-  const cs = getComputedStyle(sw);
+await page.waitForTimeout(200);
+const duringWait = await page.evaluate(() => {
+  const g = window.__sensen.getState();
   return {
-    ok: true,
-    className: sw.className,
-    scrollbarWidth: cs.scrollbarWidth,
-    msOverflowStyle: cs.msOverflowStyle,
-    offsetHeight: sw.offsetHeight,
-    clientHeight: sw.clientHeight,
-    horizontalScrollbarHeight: sw.offsetHeight - sw.clientHeight, // 0 if hidden
+    hand: g.players[0].hand,
+    pending: g.players[0].pendingDraws,
+    nowSec: g.frame / 60,
   };
 });
-console.log("scrollbar:", scrollbarHidden);
+console.log("during wait, played slot 3:", JSON.stringify(duringWait, null, 2));
 
-// Wheel direction test: deltaY > 0 should DECREASE scrollLeft.
-const wheelTest = await page.evaluate(async () => {
-  const all = Array.from(document.querySelectorAll("div"));
-  const sw = all.find((d) => getComputedStyle(d).overflowX === "auto");
-  if (!sw) return { found: false };
-  // Set a known scroll start (middle).
-  sw.scrollLeft = 100;
-  await new Promise((r) => setTimeout(r, 50));
-  const before = sw.scrollLeft;
-  const ev = new WheelEvent("wheel", { deltaY: 80, bubbles: true, cancelable: true });
-  sw.dispatchEvent(ev);
-  await new Promise((r) => setTimeout(r, 50));
-  const after = sw.scrollLeft;
-  return { before, after, delta: after - before };
+// Wait for all pending to fill (max pending fillsAt - now).
+await wait(3000);
+const afterFills = await page.evaluate(() => {
+  const g = window.__sensen.getState();
+  return { hand: g.players[0].hand, pending: g.players[0].pendingDraws };
 });
-console.log("wheel test:", wheelTest);
+console.log("after fills:", JSON.stringify(afterFills, null, 2));
 
+await page.screenshot({ path: "/tmp/v3-filled.png" });
 await browser.close();

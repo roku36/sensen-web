@@ -8,7 +8,7 @@
 // Policies receive a seed for reproducibility (used by tie-breaks).
 
 import { CardEffect, getCardDef } from "../sim/cards";
-import { cardFlag } from "../sim/input";
+import { cardFlag, INPUT_DRAW } from "../sim/input";
 import { queueRemainingTime } from "../sim/reducer";
 import { DT } from "../sim/rules";
 import { GameState, PlayerState } from "../sim/state";
@@ -33,13 +33,30 @@ function playableIndices(p: PlayerState, now: number): number[] {
   const out: number[] = [];
   const queued = queueRemainingTime(p, now);
   for (let i = 0; i < p.hand.length; i++) {
-    const d = getCardDef(p.hand[i]);
+    const cardId = p.hand[i];
+    if (cardId === null) continue; // empty slot
+    const d = getCardDef(cardId);
     if (!d) continue;
     if (d.cost >= 900) continue; // status junk
     if ((d.prereqQueueTime ?? 0) > queued) continue; // not enough setup
     out.push(i);
   }
   return out;
+}
+
+// True if the AI should press Draw this frame. Triggers when the hand has
+// any empty (non-pending) slot AND no draw is currently in progress AND
+// the AI doesn't have a queueable card right now (so it doesn't pre-empt
+// a strong play). Cap so the AI doesn't spam — it's already 1-per-frame.
+function shouldDraw(p: PlayerState, playableCount: number): boolean {
+  if (p.pendingDraws.length > 0) return false;
+  let emptyCount = 0;
+  for (let i = 0; i < p.hand.length; i++) if (p.hand[i] === null) emptyCount++;
+  if (emptyCount === 0) return false;
+  // Strong incentive when hand is nearly empty; otherwise refill when no
+  // cards are playable (the queue is presumably full or current options
+  // don't meet prereqs).
+  return emptyCount >= 2 || playableCount === 0;
 }
 
 function damageScore(e: CardEffect, p: PlayerState, o: PlayerState): number {
@@ -88,15 +105,19 @@ function utilityScore(e: CardEffect): number {
 
 export const passive: PolicyFactory = () => () => 0;
 
+// Look up a card def from a (possibly empty) slot.
+const slotDef = (p: PlayerState, i: number) => {
+  const c = p.hand[i];
+  return c === null ? null : getCardDef(c);
+};
+
 export const random: PolicyFactory = (seed = 1) => {
   const r = mulberry32(seed);
   return (state, side) => {
     const p = state.players[side];
-    // Lookahead: queue up to MAX_AI_QUEUE cards. With 1 you'd get
-    // single-slot behavior; 2 lets the AI commit to a short combo and
-    // makes the queue actually visible during play.
     if (p.queue.length >= 2) return 0;
     const opts = playableIndices(p, state.frame * DT);
+    if (shouldDraw(p, opts.length)) return INPUT_DRAW;
     if (opts.length === 0) return 0;
     return cardFlag(opts[Math.floor(r() * opts.length)]) ?? 0;
   };
@@ -107,15 +128,13 @@ export const greedyAttack: PolicyFactory = (seed = 1) => {
   const r = mulberry32(seed);
   return (state, side) => {
     const p = state.players[side], o = state.players[(side ^ 1) as 0 | 1];
-    // Lookahead: queue up to MAX_AI_QUEUE cards. With 1 you'd get
-    // single-slot behavior; 2 lets the AI commit to a short combo and
-    // makes the queue actually visible during play.
     if (p.queue.length >= 2) return 0;
     const opts = playableIndices(p, state.frame * DT);
+    if (shouldDraw(p, opts.length)) return INPUT_DRAW;
     if (opts.length === 0) return 0;
     let bestI = opts[0], bestScore = -Infinity;
     for (const i of opts) {
-      const def = getCardDef(p.hand[i])!;
+      const def = slotDef(p, i)!;
       const t = Math.max(0.1, def.cost);
       const s = damageScore(def.effect, p, o) / t;
       if (s > bestScore || (s === bestScore && r() < 0.5)) { bestScore = s; bestI = i; }
@@ -129,16 +148,14 @@ export const greedyDefense: PolicyFactory = (seed = 1) => {
   const r = mulberry32(seed);
   return (state, side) => {
     const p = state.players[side], o = state.players[(side ^ 1) as 0 | 1];
-    // Lookahead: queue up to MAX_AI_QUEUE cards. With 1 you'd get
-    // single-slot behavior; 2 lets the AI commit to a short combo and
-    // makes the queue actually visible during play.
     if (p.queue.length >= 2) return 0;
     const opts = playableIndices(p, state.frame * DT);
+    if (shouldDraw(p, opts.length)) return INPUT_DRAW;
     if (opts.length === 0) return 0;
     const wantBlock = p.hp / p.hpMax < 0.6 && p.block < 8;
     let bestI = opts[0], bestScore = -Infinity;
     for (const i of opts) {
-      const def = getCardDef(p.hand[i])!;
+      const def = slotDef(p, i)!;
       const t = Math.max(0.1, def.cost);
       const s = wantBlock
         ? (blockScore(def.effect) * 2 + damageScore(def.effect, p, o)) / t
@@ -154,18 +171,16 @@ export const heuristic: PolicyFactory = (seed = 1) => {
   const r = mulberry32(seed);
   return (state, side) => {
     const p = state.players[side], o = state.players[(side ^ 1) as 0 | 1];
-    // Lookahead: queue up to MAX_AI_QUEUE cards. With 1 you'd get
-    // single-slot behavior; 2 lets the AI commit to a short combo and
-    // makes the queue actually visible during play.
     if (p.queue.length >= 2) return 0;
     const opts = playableIndices(p, state.frame * DT);
+    if (shouldDraw(p, opts.length)) return INPUT_DRAW;
     if (opts.length === 0) return 0;
     const hpFrac = p.hp / p.hpMax;
     const oppNearDead = o.hp <= 15;
     const inDanger = hpFrac < 0.35;
     let bestI = opts[0], bestScore = -Infinity;
     for (const i of opts) {
-      const def = getCardDef(p.hand[i])!;
+      const def = slotDef(p, i)!;
       const t = Math.max(0.1, def.cost);
       const dmg = damageScore(def.effect, p, o);
       const blk = blockScore(def.effect);
