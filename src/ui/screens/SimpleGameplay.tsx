@@ -133,85 +133,162 @@ function StatusPanel({
   );
 }
 
-// ── Battle zone: cast bars + blocks (the "what is happening" core) ──
+// ── Battle zone: shared timeline ──
+//
+// Time runs LEFT → RIGHT. The vertical "NOW" line is at x = NOW_OFFSET
+// pixels from the left of the timeline. Cards in each player's queue are
+// drawn as boxes anchored by their RESOLUTION TIME: a card resolving in 2s
+// has its right edge at NOW + 2s. Width = duration * PX_PER_SEC.
+//
+// As real time advances every frame, every box's right-edge x decreases →
+// boxes flow LEFT toward the NOW line. When a box's right edge crosses the
+// NOW line the card has just resolved (sim removes it from the queue and
+// applies its effect).
+//
+// Both players' queues share THE SAME X AXIS — opponent on top, me on
+// bottom — so vertically-aligned positions resolve simultaneously. Read
+// the opponent's queue to see what's coming and when.
+
+const TIMELINE_VISIBLE_SEC = 12;
+const NOW_OFFSET = 60; // px from container left edge — past time can clip out left
 
 function BattleZone({ op, me, now }: { op: PlayerState; me: PlayerState; now: number }) {
   return (
     <div style={battleZone}>
-      <CastBar player={op} now={now} side="top" label="相手のキャスト" />
-      <BlockRow value={op.block} side="top" label="相手のブロック" />
-      <div style={battleDivider} />
-      <BlockRow value={me.block} side="bottom" label="自分のブロック" />
-      <CastBar player={me} now={now} side="bottom" label="自分のキャスト" />
+      <TimelineRow player={op} now={now} side="top" label="相手" />
+      <TimelineDivider />
+      <TimelineRow player={me} now={now} side="bottom" label="自分" />
     </div>
   );
 }
 
-function CastBar({ player, now, side, label }: { player: PlayerState; now: number; side: "top" | "bottom"; label: string }) {
-  if (player.queue.length === 0) {
-    return (
-      <div style={{ ...castRow, justifyContent: side === "top" ? "flex-end" : "flex-start" }}>
-        <span style={castIdleText}>{label}: 待機中</span>
-      </div>
-    );
-  }
-  // Head is currently casting; rest are queued.
-  const head = player.queue[0];
-  const rest = player.queue.slice(1);
-  const elapsed = now - player.castStartedAt;
-  const headRemaining = Math.max(0, head.duration - elapsed);
-  const headPct = head.duration > 0 ? Math.min(1, elapsed / head.duration) : 1;
-  const queueTotal = headRemaining + rest.reduce((s, q) => s + q.duration, 0);
+function TimelineDivider() {
   return (
-    <div style={{ ...castRow, justifyContent: side === "top" ? "flex-end" : "flex-start", flexDirection: side === "top" ? "row-reverse" : "row" }}>
-      <div style={castLabel}>
-        <span style={castName}>{label}</span>
-        <span style={castSub}>{player.queue.length}枚 · 合計 {queueTotal.toFixed(1)}秒</span>
+    <div style={timelineDividerRow}>
+      <div style={dividerLine} />
+      <span style={dividerLabel}>NOW</span>
+      <div style={dividerLine} />
+    </div>
+  );
+}
+
+function TimelineRow({ player, now, side, label }: { player: PlayerState; now: number; side: "top" | "bottom"; label: string }) {
+  // Compute each queue entry's resolve-time relative to now.
+  let endRel = player.queue.length > 0
+    ? Math.max(0, player.queue[0].duration - (now - player.castStartedAt))
+    : 0;
+  const boxes = player.queue.map((q, i) => {
+    if (i > 0) endRel += q.duration;
+    return {
+      cardId: q.cardId,
+      duration: q.duration,
+      endRel,                          // sec from now until this card resolves
+      startRel: endRel - q.duration,   // sec from now until this card starts casting
+      isHead: i === 0,
+    };
+  });
+
+  return (
+    <div style={{ display: "flex", flexDirection: "column" }}>
+      <div style={timelineHeader}>
+        <span style={timelineLabel}>{label}</span>
+        <BlockBadge value={player.block} />
+        {player.queue.length > 0 && (
+          <span style={timelineSub}>
+            {player.queue.length}枚 · 合計 {boxes[boxes.length - 1].endRel.toFixed(1)}秒
+          </span>
+        )}
       </div>
-      <div style={queueRow}>
-        <QueueChip cardId={head.cardId} pct={headPct} remaining={headRemaining} duration={head.duration} isHead />
-        {rest.map((q, i) => (
-          <QueueChip key={i + 1} cardId={q.cardId} pct={0} remaining={q.duration} duration={q.duration} />
+      <div style={timelineTrack}>
+        <div style={{ ...nowLine, left: NOW_OFFSET }} />
+        {Array.from({ length: TIMELINE_VISIBLE_SEC }).map((_, s) => (
+          <TimeTick key={s} sec={s + 1} side={side} />
         ))}
+        {boxes.map((b, i) => (
+          <QueueBox
+            key={i}
+            cardId={b.cardId}
+            duration={b.duration}
+            startRel={b.startRel}
+            endRel={b.endRel}
+            isHead={b.isHead}
+            side={side}
+          />
+        ))}
+        {player.queue.length === 0 && (
+          <span style={idleHint}>(キュー空)</span>
+        )}
       </div>
     </div>
   );
 }
 
-function QueueChip({ cardId, pct, remaining, duration, isHead = false }: { cardId: number; pct: number; remaining: number; duration: number; isHead?: boolean }) {
+function TimeTick({ sec, side }: { sec: number; side: "top" | "bottom" }) {
+  const x = NOW_OFFSET + sec * PX_PER_SEC;
+  return (
+    <>
+      <div style={{ position: "absolute", left: x, top: 0, bottom: 0, width: 1, background: "rgba(255,255,255,0.06)" }} />
+      <div style={{
+        position: "absolute", left: x + 2,
+        [side === "top" ? "top" : "bottom"]: 1,
+        fontSize: 9, color: "rgba(255,255,255,0.35)", fontFamily: "ui-monospace, monospace",
+      }}>{sec}s</div>
+    </>
+  );
+}
+
+function QueueBox({ cardId, duration, startRel, endRel, isHead, side }: {
+  cardId: number; duration: number; startRel: number; endRel: number;
+  isHead: boolean; side: "top" | "bottom";
+}) {
   const def = getCardDef(cardId);
   const color = def?.cardType === CardType.Attack ? "#e3553c"
     : def?.cardType === CardType.Power ? "#b465e0"
     : "#5fa0e0";
-  // Width proportional to duration so the player can SEE how much time
-  // each queued card represents — a cost-6 chip is twice as wide as a
-  // cost-3, no math needed.
-  const w = Math.max(60, duration * PX_PER_SEC);
+  const left = NOW_OFFSET + startRel * PX_PER_SEC;
+  const w = duration * PX_PER_SEC;
+  // About-to-resolve glow: head with right edge within ~0.4s of NOW.
+  const glow = isHead && endRel < 0.4;
+  const glowIntensity = glow ? 1 - endRel / 0.4 : 0;
   return (
-    <div style={{ ...queueChip, width: w, opacity: isHead ? 1 : 0.78, borderColor: isHead ? color : "#444" }}>
-      <div style={{ ...queueChipFill, width: `${pct * 100}%`, background: color }} />
-      <div style={queueChipContent}>
-        <span style={queueChipName}>{def?.name ?? "??"}</span>
-        <span style={queueChipTime}>
-          {isHead
-            ? `${remaining.toFixed(1)}s / ${duration}s`
-            : `${duration}s 待機`}
-        </span>
+    <div
+      style={{
+        position: "absolute",
+        left, width: w, height: 40,
+        top: side === "top" ? 20 : 20,
+        background: color,
+        border: `2px solid ${glow ? "#fff" : color}`,
+        boxShadow: glow
+          ? `0 0 ${10 + 20 * glowIntensity}px rgba(255,255,200,${0.4 + 0.5 * glowIntensity})`
+          : "0 2px 6px rgba(0,0,0,0.4)",
+        borderRadius: 6,
+        padding: "3px 8px",
+        color: "white",
+        overflow: "hidden",
+        opacity: isHead ? 1 : 0.85,
+        // Right-align the text so it stays visible as the box slides past
+        // the NOW line (the "consumed" portion is on the left, which
+        // matches the visual metaphor — the past is gone, the future is
+        // what's right of NOW).
+        display: "flex",
+        flexDirection: "column",
+        justifyContent: "center",
+        alignItems: "flex-end",
+        textAlign: "right",
+      }}
+    >
+      <div style={queueBoxName}>{def?.name ?? "??"}</div>
+      <div style={queueBoxMeta}>
+        {isHead ? `あと ${Math.max(0, endRel).toFixed(1)}s` : `${duration}s`}
       </div>
     </div>
   );
 }
 
-function BlockRow({ value, side, label }: { value: number; side: "top" | "bottom"; label: string }) {
-  const hidden = value <= 0;
+function BlockBadge({ value }: { value: number }) {
+  if (value <= 0) return null;
   return (
-    <div style={{ ...blockShieldRow, justifyContent: side === "top" ? "flex-end" : "flex-start", opacity: hidden ? 0.35 : 1 }}>
-      <div style={{ ...blockShield, background: hidden ? "transparent" : "linear-gradient(180deg, #2d6cb8 0%, #1b4170 100%)" }}>
-        <span style={{ fontSize: 18 }}>🛡</span>
-        <span style={blockNum}>{Math.round(value)}</span>
-      </div>
-      <span style={blockLabel}>{label}</span>
-    </div>
+    <span style={blockBadge}>🛡 {Math.round(value)}</span>
   );
 }
 
@@ -419,40 +496,52 @@ const cardBack: React.CSSProperties = {
 const cardBackSigil: React.CSSProperties = { color: "#7a5db8", opacity: 0.55, fontSize: 24 };
 
 const battleZone: React.CSSProperties = {
-  display: "flex", flexDirection: "column", gap: 8, padding: "12px 16px",
+  display: "flex", flexDirection: "column", gap: 4, padding: "10px 12px",
   background: "rgba(40, 30, 60, 0.25)",
   border: "1px solid rgba(110, 80, 170, 0.35)",
   borderRadius: 10,
 };
-const battleDivider: React.CSSProperties = {
-  height: 1, background: "linear-gradient(90deg, transparent, rgba(180,140,255,0.45), transparent)",
+const timelineRow: React.CSSProperties = { display: "flex" };
+const timelineHeader: React.CSSProperties = {
+  display: "flex", alignItems: "center", gap: 8, padding: "2px 4px",
+  fontSize: 11, opacity: 0.85,
 };
-const castRow: React.CSSProperties = { display: "flex", alignItems: "center", gap: 14, minHeight: 36 };
-const castIdleText: React.CSSProperties = { fontSize: 11, opacity: 0.4, fontStyle: "italic" };
-const castLabel: React.CSSProperties = { display: "flex", flexDirection: "column", minWidth: 140 };
-const castName: React.CSSProperties = { fontWeight: 700, fontSize: 14, color: "white" };
-const castSub: React.CSSProperties = { fontSize: 10, opacity: 0.55 };
-const queueRow: React.CSSProperties = { display: "flex", flex: 1, gap: 6, minWidth: 0, overflowX: "auto" };
-const queueChip: React.CSSProperties = {
-  position: "relative", height: 38, padding: "4px 8px",
-  border: "1.5px solid #444", borderRadius: 6,
-  background: "#0c0c12", color: "white",
-  overflow: "hidden", flex: "0 0 auto",
+const timelineLabel: React.CSSProperties = { fontWeight: 700, letterSpacing: 1 };
+const timelineSub: React.CSSProperties = { fontSize: 10, opacity: 0.55, fontFamily: "ui-monospace, monospace" };
+const timelineTrack: React.CSSProperties = {
+  position: "relative", width: "100%", height: 80,
+  background: "rgba(0,0,0,0.25)",
+  borderRadius: 6,
+  overflow: "hidden",
 };
-const queueChipFill: React.CSSProperties = { position: "absolute", left: 0, top: 0, bottom: 0, opacity: 0.55 };
-const queueChipContent: React.CSSProperties = { position: "relative", display: "flex", flexDirection: "column", justifyContent: "center", height: "100%" };
-const queueChipName: React.CSSProperties = { fontWeight: 700, fontSize: 12, lineHeight: 1, textShadow: "0 1px 2px rgba(0,0,0,0.8)" };
-const queueChipTime: React.CSSProperties = { fontSize: 10, opacity: 0.85, fontFamily: "ui-monospace, monospace", marginTop: 2 };
-
-const blockShieldRow: React.CSSProperties = { display: "flex", alignItems: "center", gap: 10, minHeight: 32 };
-const blockShield: React.CSSProperties = {
-  display: "inline-flex", alignItems: "center", gap: 6, padding: "6px 14px",
-  borderRadius: 8, border: "1px solid rgba(95,160,224,0.7)",
-  minWidth: 70, justifyContent: "center",
-  boxShadow: "0 0 12px rgba(95,160,224,0.25)",
+const nowLine: React.CSSProperties = {
+  position: "absolute", top: 0, bottom: 0, width: 2,
+  background: "linear-gradient(180deg, #fff 0%, #ffe066 50%, #fff 100%)",
+  boxShadow: "0 0 8px rgba(255,224,102,0.6)",
+  zIndex: 1,
 };
-const blockNum: React.CSSProperties = { fontSize: 18, fontWeight: 700, color: "white" };
-const blockLabel: React.CSSProperties = { fontSize: 11, opacity: 0.75 };
+const idleHint: React.CSSProperties = {
+  position: "absolute", left: NOW_OFFSET + 8, top: 30,
+  fontSize: 11, opacity: 0.4, fontStyle: "italic",
+};
+const timelineDividerRow: React.CSSProperties = {
+  display: "flex", alignItems: "center", gap: 8, padding: "1px 0",
+};
+const dividerLine: React.CSSProperties = {
+  flex: 1, height: 1, background: "linear-gradient(90deg, transparent, rgba(255,224,102,0.5), transparent)",
+};
+const dividerLabel: React.CSSProperties = {
+  fontSize: 9, color: "#ffe066", letterSpacing: 2, opacity: 0.7, fontFamily: "ui-monospace, monospace",
+};
+const queueBoxName: React.CSSProperties = { fontWeight: 700, fontSize: 12, lineHeight: 1.1, textShadow: "0 1px 2px rgba(0,0,0,0.8)" };
+const queueBoxMeta: React.CSSProperties = { fontSize: 10, opacity: 0.9, fontFamily: "ui-monospace, monospace", marginTop: 2 };
+const blockBadge: React.CSSProperties = {
+  display: "inline-flex", alignItems: "center", gap: 4,
+  padding: "2px 8px", borderRadius: 999,
+  background: "rgba(95,160,224,0.2)", color: "#bdd6f0",
+  border: "1px solid rgba(95,160,224,0.5)",
+  fontSize: 11, fontWeight: 600,
+};
 
 const handRow: React.CSSProperties = { display: "flex", gap: 8, justifyContent: "center", overflowX: "auto", paddingBottom: 4 };
 const cardStyle: React.CSSProperties = {
