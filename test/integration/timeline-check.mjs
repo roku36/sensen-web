@@ -1,8 +1,8 @@
-// Visually verify the unified scrollable timeline:
-//   - 3+ queued cards stack horizontally (no overlap)
-//   - opp and self tracks share the same X axis
-//   - NOW line sits at the shared origin
-//   - wheel-scroll moves the inner container
+// Visually verify the unified scrollable timeline + draw timer + history:
+//   - 3 queued cards, then wait > 3s for first to resolve
+//   - resolved chip appears LEFT of NOW (dimmed, "発動済")
+//   - hand still has the next-card countdown slot
+//   - wheel-scroll updates scrollLeft on the inner container
 import { chromium } from "playwright";
 const wait = (ms) => new Promise((r) => setTimeout(r, ms));
 
@@ -15,39 +15,58 @@ page.on("console", (m) => { if (m.type() === "error") console.log("[ce]", m.text
 await page.goto("http://localhost:5173?simple");
 await page.waitForFunction(() => window.__sensen != null);
 await page.click("button:has-text('2D Simple')");
-await page.selectOption("select", "heuristic");
+await page.selectOption("select", "passive"); // disable AI so screenshot is stable
 await page.click("button:has-text('CPU と対戦')");
-await page.waitForTimeout(800);
+await page.waitForTimeout(600);
 
-// Queue 3 cards by pressing 1, 2, 3 (first three hand keys).
+// Queue 3 cards from the human side.
 await page.keyboard.press("1");
-await page.waitForTimeout(150);
+await page.waitForTimeout(120);
 await page.keyboard.press("2");
-await page.waitForTimeout(150);
+await page.waitForTimeout(120);
 await page.keyboard.press("3");
 await page.waitForTimeout(300);
 
-const queueState = await page.evaluate(() => {
+await page.screenshot({ path: "/tmp/timeline-queued.png" });
+console.log("saved /tmp/timeline-queued.png");
+
+// Wait for first card to resolve (3+ sec).
+await wait(3500);
+
+const state = await page.evaluate(() => {
   const g = window.__sensen.getState();
   return {
-    p0Queue: g.players[0].queue.map((q) => ({ id: q.cardId, dur: q.duration })),
-    p1Queue: g.players[1].queue.map((q) => ({ id: q.cardId, dur: q.duration })),
+    p0: {
+      hand: g.players[0].hand.length,
+      queue: g.players[0].queue.map((q) => ({ id: q.cardId, dur: q.duration })),
+      resolved: g.players[0].resolvedCards.length,
+      nextDrawAt: g.players[0].nextDrawAt,
+    },
     frame: g.frame,
+    nowSec: g.frame / 60,
   };
 });
-console.log("queues:", JSON.stringify(queueState, null, 2));
+console.log("after 3.5s:", JSON.stringify(state, null, 2));
 
-await page.screenshot({ path: "/tmp/timeline-unified.png", fullPage: false });
-console.log("saved /tmp/timeline-unified.png");
+await page.screenshot({ path: "/tmp/timeline-resolved.png" });
+console.log("saved /tmp/timeline-resolved.png");
 
-// Verify wheel scroll moves the inner container.
-const scrollBefore = await page.evaluate(() => {
-  const el = document.querySelector('[data-timeline-scroll]') || document.querySelectorAll('div').forEach;
-  // Find the scroll wrap by looking for overflow-x auto
+// Wheel scroll test: simulate a wheel event on the scrollWrap.
+const scrollResult = await page.evaluate(async () => {
   const all = Array.from(document.querySelectorAll("div"));
   const sw = all.find((d) => getComputedStyle(d).overflowX === "auto");
-  return sw ? { left: sw.scrollLeft, width: sw.scrollWidth, client: sw.clientWidth } : null;
+  if (!sw) return { found: false };
+  const before = sw.scrollLeft;
+  const ev = new WheelEvent("wheel", { deltaY: 200, bubbles: true, cancelable: true });
+  sw.dispatchEvent(ev);
+  await new Promise((r) => setTimeout(r, 50));
+  const after = sw.scrollLeft;
+  return {
+    found: true,
+    before, after, scrollWidth: sw.scrollWidth, clientWidth: sw.clientWidth,
+    canScroll: sw.scrollWidth > sw.clientWidth,
+  };
 });
-console.log("scroll wrap before:", scrollBefore);
+console.log("wheel scroll:", scrollResult);
 
 await browser.close();

@@ -17,7 +17,9 @@ import {
   BLOCK_DECAY_RATE,
   DT,
   MAX_HAND_SIZE,
+  nextDrawDelaySec,
   PLAYED_TO_DISCARD,
+  RESOLVED_HISTORY_MAX,
 } from "./rules";
 import { rangeU64 } from "./rng";
 import type { GameState, PlayerState } from "./state";
@@ -122,6 +124,16 @@ function tickCasting(s: GameState, now: number, bus: Bus) {
       // Advance by exactly the consumed duration so carry-over time rolls
       // into the next entry (no time lost between back-to-back casts).
       p.castStartedAt += entry.duration;
+      // Stamp it as resolved for the UI history. resolvedAt is the moment
+      // the card finished casting (the slot's old endTime).
+      p.resolvedCards.push({
+        cardId: entry.cardId,
+        duration: entry.duration,
+        resolvedAt: p.castStartedAt,
+      });
+      if (p.resolvedCards.length > RESOLVED_HISTORY_MAX) {
+        p.resolvedCards.splice(0, p.resolvedCards.length - RESOLVED_HISTORY_MAX);
+      }
       const def = getCardDef(entry.cardId);
       if (!def) continue;
 
@@ -135,9 +147,32 @@ function tickCasting(s: GameState, now: number, bus: Bus) {
 
       bus.cardPlayed.push({ player: idx, cardId: entry.cardId });
       if (countsAsExhaust) bus.exhausted.push({ player: idx, cardId: entry.cardId });
+      // (No auto-refill: the per-player draw timer handles refills.)
+    }
+  }
+}
 
-      // Auto-refill: draw 1 to keep hand at its post-cast size.
-      bus.draw.push({ target: idx, count: 1 });
+// Per-frame draw timer: when sim time crosses nextDrawAt and the hand isn't
+// full, draw 1 and re-arm with (handSize + 1) seconds. Hand size 6 → no draws
+// (the timer is pushed forward to "now" so it doesn't bank). Card-effect
+// draws (受け流し etc.) bypass this and just call drawCards directly.
+function tickDrawTimer(s: GameState, now: number, bus: Bus) {
+  for (const idx of [0, 1] as const) {
+    const p = s.players[idx];
+    if (p.hand.length >= MAX_HAND_SIZE) {
+      // Don't bank time while the hand is full; reset the timer to "now"
+      // so the next play starts a fresh countdown.
+      if (p.nextDrawAt < now) p.nextDrawAt = now;
+      continue;
+    }
+    // Safety: at most a few draws per frame (in case of dt > 1s ever).
+    let safety = 0;
+    while (p.hand.length < MAX_HAND_SIZE && now >= p.nextDrawAt && ++safety < 8) {
+      const before = p.hand.length;
+      drawCards(s, idx, 1, bus);
+      const after = p.hand.length;
+      if (after === before) break; // deck + discard both empty
+      p.nextDrawAt += nextDrawDelaySec(after);
     }
   }
 }
@@ -148,23 +183,21 @@ function tickCasting(s: GameState, now: number, bus: Bus) {
 // plan). The opponent sees your queue too — that's the whole point of the
 // mechanic: visible commitment they can read and respond to.
 
-// Total declared cost (in seconds) of cards currently in the player's queue.
-// Used to gate prereqQueueTime cards: a finisher with prereq=6 needs at
-// least 6 sec of other cards already in the queue before it can be added.
-//
-// We sum full durations (not remaining) per the user spec
-// (「現在積まれているカードのcost つまり時間の合計値」), so the prereq
-// stays stable as the head card progresses — once you've committed the
-// setup, the finisher remains queueable until those setup cards pop off.
-export function queueTotalCost(p: PlayerState): number {
-  let total = 0;
-  for (const q of p.queue) total += q.duration;
+// Actual remaining cast time (in seconds) for everything currently in the
+// queue. Head's remaining = duration - (now - castStartedAt); tail entries
+// contribute their full duration. Used to gate prereqQueueTime cards: a
+// finisher with prereq=6 needs at least 6 sec of pending work in the queue
+// at the moment of attempted play.
+export function queueRemainingTime(p: PlayerState, now: number): number {
+  if (p.queue.length === 0) return 0;
+  let total = Math.max(0, p.queue[0].duration - (now - p.castStartedAt));
+  for (let i = 1; i < p.queue.length; i++) total += p.queue[i].duration;
   return total;
 }
 
-/** @deprecated kept for backwards source compat; alias of queueTotalCost. */
-export function queueRemainingTime(p: PlayerState, _now: number): number {
-  return queueTotalCost(p);
+/** @deprecated retained for source compat; same as queueRemainingTime. */
+export function queueTotalCost(p: PlayerState, now: number = 0): number {
+  return queueRemainingTime(p, now);
 }
 
 function applyInput(s: GameState, idx: 0 | 1, flags: number) {
@@ -182,9 +215,10 @@ function applyInput(s: GameState, idx: 0 | 1, flags: number) {
     if (!def) break;
     if (def.cost >= 900) break; // status junk — unplayable
 
-    // Prereq gate: required queued cast time must already be committed.
+    // Prereq gate: required queued cast time must already be committed
+    // (actual REMAINING time — once setup cards finish, the prereq vanishes).
     const prereq = def.prereqQueueTime ?? 0;
-    if (prereq > 0 && queueTotalCost(p) < prereq) break;
+    if (prereq > 0 && queueRemainingTime(p, now) < prereq) break;
 
     let duration = def.cost;
     if (p.corruption && def.cardType === CardType.Skill) duration = 0;
@@ -515,6 +549,10 @@ export function step(s: GameState, p0Input: number, p1Input: number, dt: number 
 
   // 2. Cast slots: anything completing this frame resolves now.
   tickCasting(s, now, bus);
+
+  // 2b. Timer-based card draws (fire after resolves so the new hand size
+  // accounts for any post-cast hand changes from this frame).
+  tickDrawTimer(s, now, bus);
 
   // 3. Inputs: start new casts (no-op if already casting).
   applyInput(s, 0, p0Input);

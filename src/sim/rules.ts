@@ -10,8 +10,23 @@
 
 // ── Vitals ──
 export const INITIAL_HP = 80;
-export const MAX_HAND_SIZE = 10;
+// Hand is capped at 6. We start dealt to 5 so the player has something to do
+// immediately; the timer below refills up to MAX_HAND_SIZE over time.
+export const MAX_HAND_SIZE = 6;
 export const INITIAL_HAND = 5;
+
+// ── Draw timer ──
+// Next card draws after (currentHandSize + 1) seconds. Empty hand = 1 sec.
+// Bigger hands draw slower so spending cards is what unlocks new options.
+export const NEXT_DRAW_BASE_SEC = 1;
+export function nextDrawDelaySec(handSize: number): number {
+  return NEXT_DRAW_BASE_SEC + handSize;
+}
+
+// How many recently-resolved cards to keep in the per-player history for the
+// timeline UI (so a card you just cast stays visible — dimmed — to the left
+// of the NOW line). Bounded for deterministic checksums.
+export const RESOLVED_HISTORY_MAX = 8;
 
 // ── Block ──
 // Linear decay — 2 block per second.

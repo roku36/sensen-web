@@ -1,11 +1,21 @@
 import { CardId } from "./cards";
 import { Rng } from "./rng";
+import { nextDrawDelaySec } from "./rules";
 
 // One queue entry. duration is captured at queue-time (corruption-discounted
 // skills etc.) so it can't shift while the card is waiting in line.
 export interface QueueEntry {
   cardId: CardId;
   duration: number;
+}
+
+// A card that recently resolved. Kept around so the timeline can show it as
+// a dimmed chip drifting off to the left of the NOW line ("just played").
+export interface ResolvedEntry {
+  cardId: CardId;
+  duration: number;
+  // Sim seconds when this card finished casting. Always <= current `frame * DT`.
+  resolvedAt: number;
 }
 
 export interface PlayerState {
@@ -22,6 +32,12 @@ export interface PlayerState {
   // `duration` each time the head resolves (so any carry-over time rolls
   // forward into the next entry instead of being lost).
   castStartedAt: number;
+  // Bounded history of recently-resolved cards (head pops). Newest at the END.
+  resolvedCards: ResolvedEntry[];
+  // Sim seconds when the next free draw should fire. Recomputed each draw as
+  // now + nextDrawDelaySec(hand.length). When hand is at MAX, this is paused
+  // (kept >= now so the timer doesn't bank).
+  nextDrawAt: number;
   // Status durations (seconds remaining)
   strength: number;
   vulnerableSecs: number;
@@ -68,6 +84,9 @@ const DEFAULT_PLAYER = (
   thorns: 0,
   queue: [],
   castStartedAt: 0,
+  resolvedCards: [],
+  // Will be reset after the initial deal in initGame to (handSize + 1).
+  nextDrawAt: nextDrawDelaySec(0),
   strength: 0,
   vulnerableSecs: 0,
   weakSecs: 0,
@@ -112,6 +131,7 @@ export function snapshot(s: GameState): GameState {
 const clonePlayer = (p: PlayerState): PlayerState => ({
   ...p,
   queue: p.queue.map((q) => ({ ...q })),
+  resolvedCards: p.resolvedCards.map((r) => ({ ...r })),
   rage: p.rage ? { ...p.rage } : null,
   metallicize: p.metallicize ? { ...p.metallicize } : null,
   demonForm: p.demonForm ? { ...p.demonForm } : null,

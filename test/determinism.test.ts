@@ -82,7 +82,10 @@ describe("reducer determinism", () => {
     const dealt = startHp - s.players[1].hp;
     expect(dealt).toBeGreaterThanOrEqual(5.5);
     expect(dealt).toBeLessThanOrEqual(6.5);
-    expect(s.players[0].hand.length).toBe(5);
+    // After 185 frames (~3.08s) and a 5-card initial hand, the draw timer
+    // (which fires at handSize+1 sec) won't have ticked yet, so the hand
+    // is just the original 5 minus the played card.
+    expect(s.players[0].hand.length).toBe(4);
   });
 
   it("clicking multiple cards APPENDS to the queue (this is the queue mechanic)", () => {
@@ -127,21 +130,18 @@ describe("reducer determinism", () => {
     expect(s.players[0].queue.length).toBe(0);
     expect(s.players[0].hand.indexOf(CardId.Bludgeon)).toBeGreaterThanOrEqual(0);
 
-    // Queue 2 Strikes (cost 3 each = 6s of setup).
-    const strikeIdxs: number[] = [];
-    for (let i = 0; i < s.players[0].hand.length; i++) {
-      if (s.players[0].hand[i] === CardId.Strike) strikeIdxs.push(i);
+    // Queue 3 Strikes (cost 3 each = 9s of setup, well above Bludgeon's
+    // prereq of 6 even after a couple of frames of head decay).
+    for (let n = 0; n < 3; n++) {
+      const strikeIdx = s.players[0].hand.indexOf(CardId.Strike);
+      step(s, cardFlag(strikeIdx)!, 0);
     }
-    step(s, cardFlag(strikeIdxs[0])!, 0);
-    // Indices shift after splice — re-find a Strike.
-    const nextStrikeIdx = s.players[0].hand.indexOf(CardId.Strike);
-    step(s, cardFlag(nextStrikeIdx)!, 0);
-    expect(s.players[0].queue.length).toBe(2);
-    // queueRemainingTime should be ~6s; let's queue Bludgeon now.
+    expect(s.players[0].queue.length).toBe(3);
+    // queueRemainingTime should be ~9s; let's queue Bludgeon now.
     const bludIdxNow = s.players[0].hand.indexOf(CardId.Bludgeon);
     step(s, cardFlag(bludIdxNow)!, 0);
-    expect(s.players[0].queue.length).toBe(3); // Bludgeon accepted
-    expect(s.players[0].queue[2].cardId).toBe(CardId.Bludgeon);
+    expect(s.players[0].queue.length).toBe(4); // Bludgeon accepted
+    expect(s.players[0].queue[3].cardId).toBe(CardId.Bludgeon);
   });
 
   it("played non-power cards go to discard on resolve", () => {
