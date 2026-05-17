@@ -38,6 +38,11 @@ export interface PlayerState {
   // now + nextDrawDelaySec(hand.length). When hand is at MAX, this is paused
   // (kept >= now so the timer doesn't bank).
   nextDrawAt: number;
+  // The duration (in seconds) of the CURRENT draw timer, captured the moment
+  // it was scheduled. UI uses this as a stable denominator for the fill bar
+  // so the bar doesn't visibly jump when the player queues/plays a card
+  // (which shrinks the hand and would otherwise change the "expected" delay).
+  drawTimerTotal: number;
   // Status durations (seconds remaining)
   strength: number;
   vulnerableSecs: number;
@@ -87,6 +92,7 @@ const DEFAULT_PLAYER = (
   resolvedCards: [],
   // Will be reset after the initial deal in initGame to (handSize + 1).
   nextDrawAt: nextDrawDelaySec(0),
+  drawTimerTotal: nextDrawDelaySec(0),
   strength: 0,
   vulnerableSecs: 0,
   weakSecs: 0,

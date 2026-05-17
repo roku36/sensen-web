@@ -156,23 +156,33 @@ function tickCasting(s: GameState, now: number, bus: Bus) {
 // full, draw 1 and re-arm with (handSize + 1) seconds. Hand size 6 → no draws
 // (the timer is pushed forward to "now" so it doesn't bank). Card-effect
 // draws (受け流し etc.) bypass this and just call drawCards directly.
+// Draw timer rules ("sensible spec"):
+//   - nextDrawAt / drawTimerTotal are ONLY rewritten when a draw fires
+//     (success or retry-at-MAX). Queuing/playing a card never resets them
+//     mid-cycle, so the UI water-fill bar advances monotonically.
+//   - When the timer fires and hand < MAX: draw one, schedule next at
+//     (now + (handSize + 1)).
+//   - When the timer fires and hand == MAX: skip the draw and retry in 1s;
+//     the next play will let the queued retry fire shortly after.
 function tickDrawTimer(s: GameState, now: number, bus: Bus) {
   for (const idx of [0, 1] as const) {
     const p = s.players[idx];
-    if (p.hand.length >= MAX_HAND_SIZE) {
-      // Don't bank time while the hand is full; reset the timer to "now"
-      // so the next play starts a fresh countdown.
-      if (p.nextDrawAt < now) p.nextDrawAt = now;
-      continue;
-    }
-    // Safety: at most a few draws per frame (in case of dt > 1s ever).
     let safety = 0;
-    while (p.hand.length < MAX_HAND_SIZE && now >= p.nextDrawAt && ++safety < 8) {
+    while (now >= p.nextDrawAt && ++safety < 8) {
+      if (p.hand.length >= MAX_HAND_SIZE) {
+        // Hand full: try again in 1s. The slot UI is hidden at this size,
+        // so the temporary 1s denominator never shows.
+        p.nextDrawAt = now + 1;
+        p.drawTimerTotal = 1;
+        break;
+      }
       const before = p.hand.length;
       drawCards(s, idx, 1, bus);
       const after = p.hand.length;
       if (after === before) break; // deck + discard both empty
-      p.nextDrawAt += nextDrawDelaySec(after);
+      const delay = nextDrawDelaySec(after);
+      p.nextDrawAt += delay;
+      p.drawTimerTotal = delay;
     }
   }
 }

@@ -20,7 +20,9 @@ export function initGame(opts: InitOptions): GameState {
   dealCards(p1, INITIAL_HAND);
   // Anchor draw timer to the post-deal hand size (so we don't immediately
   // overfill at frame 0). nextDrawAt is in sim seconds; frame 0 is t=0.
-  p0.nextDrawAt = nextDrawDelaySec(p0.hand.length);
-  p1.nextDrawAt = nextDrawDelaySec(p1.hand.length);
+  p0.drawTimerTotal = nextDrawDelaySec(p0.hand.length);
+  p0.nextDrawAt = p0.drawTimerTotal;
+  p1.drawTimerTotal = nextDrawDelaySec(p1.hand.length);
+  p1.nextDrawAt = p1.drawTimerTotal;
   return s;
 }

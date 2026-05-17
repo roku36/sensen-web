@@ -17,7 +17,7 @@ import { useEffect, useRef, useState } from "react";
 import { CardEffect, CardType, getCardDef } from "../../sim/cards";
 import { cardFlag } from "../../sim/input";
 import { queueRemainingTime } from "../../sim/reducer";
-import { DT, MAX_HAND_SIZE, nextDrawDelaySec } from "../../sim/rules";
+import { DT, MAX_HAND_SIZE } from "../../sim/rules";
 import { PlayerState, ResolvedEntry } from "../../sim/state";
 
 // Queue rendering scale: 35 px per second of cast time so a cost-3 chip is
@@ -186,11 +186,14 @@ function BattleZone({ op, me, now }: { op: PlayerState; me: PlayerState; now: nu
     if (!el) return;
     const onWheel = (e: WheelEvent) => {
       // Convert any wheel input (vertical OR horizontal) to horizontal pan.
-      const delta = Math.abs(e.deltaX) > Math.abs(e.deltaY) ? e.deltaX : e.deltaY;
-      if (delta === 0) return;
+      // Inverted so wheel-up (negative deltaY) pans toward the FUTURE
+      // (right), wheel-down pans toward the PAST (left) — matches "drag
+      // the timeline with the wheel" intuition.
+      const raw = Math.abs(e.deltaX) > Math.abs(e.deltaY) ? e.deltaX : e.deltaY;
+      if (raw === 0) return;
       if (el.scrollWidth <= el.clientWidth) return; // nothing to scroll
       e.preventDefault();
-      el.scrollLeft += delta;
+      el.scrollLeft -= raw;
     };
     el.addEventListener("wheel", onWheel, { passive: false });
     return () => el.removeEventListener("wheel", onWheel);
@@ -212,7 +215,7 @@ function BattleZone({ op, me, now }: { op: PlayerState; me: PlayerState; now: nu
         <PlayerMeta player={op} label="相手" boxes={opQueue} />
         <PlayerMeta player={me} label="自分" boxes={meQueue} />
       </div>
-      <div style={scrollWrap} ref={scrollRef}>
+      <div style={scrollWrap} className="no-scrollbar" ref={scrollRef}>
         <div style={{ ...timelineInner, width: innerWidth, height: totalHeight }}>
           {/* Past time grid (negative ticks). */}
           {Array.from({ length: HISTORY_SEC + 1 }).map((_, s) => (
@@ -403,7 +406,7 @@ function OpponentHand({ player, now }: { player: PlayerState; now: number }) {
       {player.hand.map((_, i) => (
         <div key={i} style={cardBack}><div style={cardBackSigil}>✦</div></div>
       ))}
-      {showSlot && <NextCardSlot drawIn={drawIn} totalDelay={nextDrawDelaySec(player.hand.length)} backFacing />}
+      {showSlot && <NextCardSlot drawIn={drawIn} totalDelay={player.drawTimerTotal} backFacing />}
       {player.hand.length === 0 && !showSlot && <div style={{ fontSize: 11, opacity: 0.4 }}>(相手の手札なし)</div>}
     </div>
   );
@@ -419,7 +422,7 @@ function SelfHand({ player, now }: { player: PlayerState; now: number }) {
       {player.hand.map((cardId, i) => (
         <SimpleCard key={i} cardId={cardId} idx={i} player={player} now={now} />
       ))}
-      {showSlot && <NextCardSlot drawIn={drawIn} totalDelay={nextDrawDelaySec(player.hand.length)} />}
+      {showSlot && <NextCardSlot drawIn={drawIn} totalDelay={player.drawTimerTotal} />}
     </div>
   );
 }
