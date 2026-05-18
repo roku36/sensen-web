@@ -90,8 +90,16 @@ export class OfflineSession {
     this.acc += elapsed;
     const dt = 1 / 60;
     while (this.acc >= dt) {
-      // Local side: AI overrides keyboard input only if a selfPolicy is set
-      // (spectator mode). Otherwise we take queued human input.
+      // Once the match has resolved, the reducer just increments frame and
+      // returns. Keep the rAF loop alive so the UI can still render the
+      // final state, but DO NOT evaluate AI policies or record inputs —
+      // policies have no way to see s.result and would otherwise spam Draw
+      // (or whatever they last wanted) forever, bloating the replay with
+      // ghost inputs at one entry per frame.
+      if (this.state.result !== 0) {
+        this.acc -= dt;
+        continue;
+      }
       let local = this.pendingLocal;
       this.pendingLocal = 0;
       if (this.selfAi) {

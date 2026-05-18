@@ -171,20 +171,24 @@ export class Session {
     // distance to within MAX_ROLLBACK and prevents desync from skew alone.
     const STALL_THRESHOLD = 30; // ~500ms
     while (this.accumulator >= dt) {
+      // Stop driving sim work once the match is over — the reducer just
+      // increments frame on s.result !== 0, so AI/inputs would only pile
+      // up ghost recordings.
+      const current = this.engine.current();
+      if (current.result !== 0) {
+        this.accumulator -= dt;
+        continue;
+      }
       const ahead = this.engine.framesAhead();
       if (ahead > STALL_THRESHOLD) {
         // Drain time without advancing — peer needs to catch up first.
         this.accumulator -= dt;
         continue;
       }
-      // Broadcast THIS frame's local input (even if empty) so the remote peer
-      // gets a per-frame confirmation and never has to predict beyond
-      // INPUT_DELAY frames. This keeps lastConfirmedFrame current.
       const flags = this.pendingFlags;
       this.pendingFlags = 0;
       const { frame } = this.engine.pushLocalInput(flags);
       if (this.remote) this.mb.send(this.remote, encode({ kind: "input", frame, flags }));
-      // Record (own side only; peer's inputs flow through receiveRemoteInput).
       if (flags !== 0) this.recordedInputs.push({ f: frame, s: this.engine.localPlayer(), flags });
       this.engine.advance();
       this.accumulator -= dt;
