@@ -37,6 +37,11 @@ export const DRAW_SEN_PER_CARD = 1;
 // Bounded history of recently-resolved cards.
 export const RESOLVED_HISTORY_MAX = 8;
 
+// How far back (in seconds) to keep per-player block samples for the UI's
+// past visualization. Anything older gets pruned. Matches the timeline's
+// visible HISTORY budget so the past area always has data to draw.
+export const BLOCK_HISTORY_SEC = 18;
+
 // Second-player advantages.
 // The second-to-act player (handle 1) starts with this much block, and their
 // cast clock is offset by SECOND_PLAYER_OFFSET_SEN 閃 — first card resolves

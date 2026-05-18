@@ -49,6 +49,10 @@ export interface PlayerState {
   // Sim seconds at which block will tick down by 1 (if > 0). Reset to
   // (now + 1 閃) whenever block changes by gain or hit.
   nextBlockDecayAt: number;
+  // Historical (time, block) samples for the UI's past visualization. Only
+  // recorded on actual block changes; between samples block is step-constant.
+  // Bounded to the last BLOCK_HISTORY_SEC of activity.
+  blockHistory: { t: number; block: number }[];
   thorns: number;
   // Cast queue — head [0] is currently casting. Both peers see each other's
   // queue (it's part of GameState, so reproducible from inputs + seed).
@@ -113,6 +117,7 @@ const DEFAULT_PLAYER = (
   hpMax,
   block: 0,
   nextBlockDecayAt: Infinity,
+  blockHistory: [{ t: 0, block: 0 }],
   thorns: 0,
   queue: [],
   castStartedAt: 0,
@@ -164,6 +169,7 @@ const clonePlayer = (p: PlayerState): PlayerState => ({
   ...p,
   queue: p.queue.map((q) => q.kind === "draw" ? { ...q, drawSlots: q.drawSlots.slice() } : { ...q }),
   resolvedCards: p.resolvedCards.map((r) => ({ ...r })),
+  blockHistory: p.blockHistory.map((b) => ({ ...b })),
   reservation: { ...p.reservation },
   rage: p.rage ? { ...p.rage } : null,
   metallicize: p.metallicize ? { ...p.metallicize } : null,

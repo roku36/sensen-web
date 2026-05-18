@@ -1,4 +1,8 @@
-// Verify block prediction includes step-decay AFTER predicted gains.
+// v7: verify past block area is STABLE (uses blockHistory, not current value).
+//   - Queue defends, take screenshot
+//   - Wait, queue MORE defends, take another screenshot
+//   - The PAST portion of the block trajectory should look identical in both
+//     (only the future portion differs).
 import { chromium } from "playwright";
 const wait = (ms) => new Promise((r) => setTimeout(r, ms));
 
@@ -15,41 +19,31 @@ await page.selectOption("select", "passive");
 await page.click("button:has-text('CPU と対戦')");
 await page.waitForTimeout(400);
 
-// Queue a defense card if available so we can see future block gain + decay.
-const handDump = await page.evaluate(() => {
+// Press a couple of cards to seed activity
+await page.keyboard.press("1"); await page.waitForTimeout(150);
+await page.keyboard.press("2"); await page.waitForTimeout(150);
+
+// Wait for some history to accumulate
+await wait(4000);
+await page.screenshot({ path: "/tmp/v7-a.png" });
+
+// Queue more activity to alter the future
+await page.keyboard.press("3"); await page.waitForTimeout(100);
+await page.keyboard.press("4"); await page.waitForTimeout(100);
+await page.keyboard.press("5"); await page.waitForTimeout(300);
+
+await page.screenshot({ path: "/tmp/v7-b.png" });
+
+const debug = await page.evaluate(() => {
   const g = window.__sensen.getState();
   return {
-    hand: g.players[0].hand,
-    queue: g.players[0].queue,
-    p1block: g.players[1].block,
-  };
-});
-console.log("initial hand:", JSON.stringify(handDump, null, 2));
-
-// Try pressing each key to find a defense card
-for (let i = 1; i <= 5; i++) {
-  await page.keyboard.press(`${i}`);
-  await page.waitForTimeout(150);
-}
-await wait(500);
-
-const finalQueue = await page.evaluate(() => {
-  const g = window.__sensen.getState();
-  return {
-    queue: g.players[0].queue.map((q) => ({
-      kind: q.kind,
-      cardId: q.cardId,
-      slots: q.drawSlots,
-      dur: q.duration,
-    })),
-    block: g.players[0].block,
-    castStartedAt: g.players[0].castStartedAt,
-    nextDecay: g.players[0].nextBlockDecayAt,
+    p0Block: g.players[0].block,
+    p1Block: g.players[1].block,
+    p0History: g.players[0].blockHistory,
+    p1History: g.players[1].blockHistory,
     nowSec: g.frame / 60,
   };
 });
-console.log("after queuing 5:", JSON.stringify(finalQueue, null, 2));
+console.log("debug:", JSON.stringify(debug, null, 2));
 
-await page.screenshot({ path: "/tmp/v6-block-decay.png" });
-console.log("saved /tmp/v6-block-decay.png");
 await browser.close();

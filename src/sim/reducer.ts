@@ -19,6 +19,7 @@ import {
   INPUT_RESERVE_CARD_4, INPUT_RESERVE_CARD_5, INPUT_RESERVE_CARD_6,
 } from "./input";
 import {
+  BLOCK_HISTORY_SEC,
   DRAW_SEN_PER_CARD,
   DT,
   MAX_HAND_SIZE,
@@ -120,10 +121,33 @@ function tickPowers(s: GameState, dt: number, bus: Bus) {
 function tickBlockDecay(p: PlayerState, now: number) {
   if (p.barricade) return;
   while (p.block > 0 && now >= p.nextBlockDecayAt) {
+    const decayT = p.nextBlockDecayAt;
     p.block -= 1;
     p.nextBlockDecayAt += SEC_PER_SEN;
+    recordBlockChange(p, decayT);
   }
   if (p.block <= 0) p.nextBlockDecayAt = Infinity;
+}
+
+// Append (now, current block) to the per-player blockHistory ring. Used by
+// the UI to draw the PAST portion of the block trajectory — without this,
+// the past area would just be "flat at the current block value" and shift
+// every time block changed (the bug we're fixing).
+function recordBlockChange(p: PlayerState, now: number) {
+  const last = p.blockHistory[p.blockHistory.length - 1];
+  if (last && last.t === now) {
+    // Same-frame change: overwrite, don't stack duplicates.
+    last.block = p.block;
+    return;
+  }
+  if (last && last.block === p.block) return; // no-op write
+  p.blockHistory.push({ t: now, block: p.block });
+  const cutoff = now - BLOCK_HISTORY_SEC;
+  // Always keep at least one anchor entry that's <= cutoff (so the area
+  // from cutoff-to-NOW can be drawn from a known starting block).
+  while (p.blockHistory.length > 2 && p.blockHistory[1].t < cutoff) {
+    p.blockHistory.shift();
+  }
 }
 
 // Re-arm the block decay timer after a block change. Called from
@@ -674,10 +698,13 @@ function processCardPlayed(s: GameState, bus: Bus) {
 }
 
 function processBlockGains(s: GameState, bus: Bus) {
+  const now = s.frame * DT;
   while (bus.block.length > 0) {
     const m = bus.block.shift()!;
     const p = s.players[m.target];
-    p.block = Math.max(0, p.block + m.amount);
+    const before = p.block;
+    p.block = Math.max(0, Math.round(p.block + m.amount));
+    if (p.block !== before) recordBlockChange(p, now);
     if (p.juggernaut) {
       bus.damage.push({
         target: opp(m.target),
@@ -694,6 +721,7 @@ function processBlockGains(s: GameState, bus: Bus) {
 }
 
 function processDamage(s: GameState, bus: Bus) {
+  const now = s.frame * DT;
   while (bus.damage.length > 0) {
     const m = bus.damage.shift()!;
     const target = s.players[m.target];
@@ -702,7 +730,9 @@ function processDamage(s: GameState, bus: Bus) {
     const directHp = total * pierce;
     let blockable = total * (1 - pierce);
     const absorbed = Math.min(blockable, target.block);
-    target.block -= absorbed;
+    const beforeBlock = target.block;
+    target.block = Math.max(0, Math.round(target.block - absorbed));
+    if (target.block !== beforeBlock) recordBlockChange(target, now);
     blockable -= absorbed;
     const remaining = blockable + directHp;
     if (remaining > 0) target.hp = Math.max(0, target.hp - remaining);

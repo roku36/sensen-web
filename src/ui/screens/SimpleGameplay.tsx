@@ -286,8 +286,8 @@ function BattleZone({ op, me, now }: { op: PlayerState; me: PlayerState; now: nu
             width={innerWidth} height={BLOCK_BAND}
             style={{ position: "absolute", left: 0, top: BLOCK_TOP, pointerEvents: "none" }}
           >
-            <BlockArea trajectory={opBlock} side="opp" maxSec={maxSec} hidden={hideOppQueue} />
-            <BlockArea trajectory={meBlock} side="self" maxSec={maxSec} />
+            <BlockArea history={op.blockHistory} trajectory={opBlock} side="opp" nowSec={now} maxSec={maxSec} hidden={hideOppQueue} />
+            <BlockArea history={me.blockHistory} trajectory={meBlock} side="self" nowSec={now} maxSec={maxSec} />
             {!hideOppQueue && <BlockEventMarks events={opBlock.events} side="opp" />}
             <BlockEventMarks events={meBlock.events} side="self" />
           </svg>
@@ -600,41 +600,100 @@ function baseAttackDamage(e: CardEffect): number {
 
 // Render the filled block-area polygon for one side.
 //
-// New geometry: block stacks TOWARD the center axis. So for the opp side,
-// block 0 = at the top edge (BLOCK_TOP); larger block = closer to the
-// center line (BLOCK_HALF down from BLOCK_TOP). Self side mirrors.
-// height(b) is the EXPONENTIALLY-NARROWING height described above.
-function BlockArea({ trajectory, side, maxSec, hidden }: { trajectory: BlockTraj; side: "opp" | "self"; maxSec: number; hidden?: boolean }) {
-  const samples = trajectory.samples;
-  if (samples.length < 2) return null;
+// Geometry: block stacks TOWARD the center axis (opp from top edge, self
+// from bottom edge). height(b) is exponentially narrower at higher block
+// values.
+//
+// PAST samples (t < 0) come from the player's RECORDED blockHistory — these
+// are the actual historical values, NOT a projection from current block.
+// FUTURE samples (t >= 0) come from the trajectory prediction. The past
+// section never changes shape just because the prediction does.
+function BlockArea({
+  history, trajectory, side, nowSec, maxSec, hidden,
+}: {
+  history: { t: number; block: number }[];
+  trajectory: BlockTraj;
+  side: "opp" | "self";
+  nowSec: number;
+  maxSec: number;
+  hidden?: boolean;
+}) {
+  const futureSamples = trajectory.samples;
+  if (futureSamples.length < 1 && history.length === 0) return null;
+
   const color = side === "opp"
     ? (hidden ? "rgba(95, 160, 224, 0.12)" : "rgba(95, 160, 224, 0.45)")
     : (hidden ? "rgba(95, 200, 130, 0.12)" : "rgba(95, 200, 130, 0.45)");
   const stroke = side === "opp"
     ? (hidden ? "rgba(95, 160, 224, 0.25)" : "#5fa0e0")
     : (hidden ? "rgba(95, 200, 130, 0.25)" : "#5fc882");
-  // y for a block value. For opp side: block grows FROM the outer top edge
-  // INWARD toward center. anchor=0, then grows toward BLOCK_HALF.
   const yForBlock = (b: number) => {
     const h = blockHeight(b);
-    return side === "opp"
-      ? 0 + h          // start at top edge (y=0 in svg coords), descend toward center (y=BLOCK_HALF)
-      : BLOCK_BAND - h; // start at bottom edge, rise toward center
+    return side === "opp" ? 0 + h : BLOCK_BAND - h;
   };
-  const xForT = (t: number) => NOW_OFFSET + t * PX_PER_SEC;
-  const outerY = side === "opp" ? 0 : BLOCK_BAND; // anchor (top or bottom edge)
+  // x for a time RELATIVE to now (negative = past). Clamped at the left edge
+  // so very old samples don't render off-screen with bizarre points.
+  const xForRel = (relSec: number) =>
+    NOW_OFFSET + Math.max(-HISTORY_SEC, relSec) * PX_PER_SEC;
+  const outerY = side === "opp" ? 0 : BLOCK_BAND;
 
-  const leftPastX = NOW_OFFSET + (-HISTORY_SEC) * PX_PER_SEC;
-  const rightX = xForT(Math.min(maxSec, samples[samples.length - 1].t));
-  const points: string[] = [];
-  // Start along outer edge (past).
-  points.push(`${leftPastX},${outerY}`);
-  points.push(`${leftPastX},${yForBlock(samples[0].block)}`);
-  for (const s of samples) {
-    if (s.t > maxSec) break;
-    points.push(`${xForT(s.t)},${yForBlock(s.block)}`);
+  // Build the (relSec, block) samples by stitching history + future.
+  // History samples are STEP-CONSTANT between entries (block was X from
+  // entry.t until the next entry's t). Convert from absolute time to
+  // relative-to-now and clip to [-HISTORY_SEC, 0].
+  const rel: { t: number; block: number }[] = [];
+  for (let i = 0; i < history.length; i++) {
+    const h = history[i];
+    const r = h.t - nowSec;
+    if (r > 0) break; // history entry already in the future (shouldn't happen)
+    if (r < -HISTORY_SEC) {
+      // Sample is older than the visible window — but if the NEXT entry is
+      // still in window, we use this as the anchor on the left edge.
+      const next = history[i + 1];
+      if (!next || next.t - nowSec < -HISTORY_SEC) continue;
+      rel.push({ t: -HISTORY_SEC, block: h.block });
+      continue;
+    }
+    rel.push({ t: r, block: h.block });
   }
-  // Close along outer edge.
+  // Ensure we have a leading anchor at -HISTORY_SEC if no entry preceded it.
+  if (rel.length === 0 || rel[0].t > -HISTORY_SEC) {
+    const anchorBlock = rel.length > 0 ? rel[0].block : (futureSamples[0]?.block ?? 0);
+    rel.unshift({ t: -HISTORY_SEC, block: anchorBlock });
+  }
+  // The "current" sample (at t = 0) is the latest history value (= current
+  // block); the prediction starts there too.
+  const currentBlock = futureSamples.length > 0 ? futureSamples[0].block : rel[rel.length - 1].block;
+  // Add a t=0 sample if missing, so the past extends right up to NOW.
+  if (rel[rel.length - 1].t < 0) {
+    rel.push({ t: 0, block: currentBlock });
+  }
+  // Append future samples (excluding the leading t=0 to avoid a duplicate).
+  for (let i = 0; i < futureSamples.length; i++) {
+    const s = futureSamples[i];
+    if (s.t <= 0) continue;
+    if (s.t > maxSec) break;
+    rel.push({ t: s.t, block: s.block });
+  }
+
+  // Now emit a STEP-WISE polygon. Each transition is a horizontal segment
+  // (constant block until next sample) plus a vertical step at that sample.
+  const points: string[] = [];
+  const leftX = xForRel(rel[0].t);
+  const rightX = xForRel(rel[rel.length - 1].t);
+  points.push(`${leftX},${outerY}`);
+  for (let i = 0; i < rel.length; i++) {
+    const cur = rel[i];
+    const x = xForRel(cur.t);
+    // Step DOWN from previous block level (vertical move at this t),
+    // implicit on first iteration via the (leftX, outerY) starting point.
+    points.push(`${x},${yForBlock(cur.block)}`);
+    // Horizontal hold until the NEXT sample (if any).
+    if (i + 1 < rel.length) {
+      const nx = xForRel(rel[i + 1].t);
+      points.push(`${nx},${yForBlock(cur.block)}`);
+    }
+  }
   points.push(`${rightX},${outerY}`);
 
   return (

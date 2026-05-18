@@ -39,6 +39,8 @@ function hashPlayer(p: PlayerState) {
   // block is now an integer; encode directly. nextBlockDecayAt is fixed-pt.
   u32(p.block | 0);
   f(isFinite(p.nextBlockDecayAt) ? p.nextBlockDecayAt : 1e9);
+  u32(p.blockHistory.length);
+  for (const h of p.blockHistory) { f(h.t); u32(h.block | 0); }
   f(p.thorns);
   u32(p.queue.length);
   for (const q of p.queue) {

@@ -27,6 +27,7 @@ export function initGame(opts: InitOptions): GameState {
   // is offset 0.5 閃 into the future — when both players simultaneously
   // queue a 1-閃 card, p0 resolves at t=1閃, p1 resolves at t=1.5閃.
   p1.block = SECOND_PLAYER_INITIAL_BLOCK;
+  p1.blockHistory = [{ t: 0, block: SECOND_PLAYER_INITIAL_BLOCK }];
   p1.castStartedAt = senToSec(SECOND_PLAYER_OFFSET_SEN);
   return s;
 }
