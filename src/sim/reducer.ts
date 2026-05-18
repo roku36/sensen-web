@@ -12,14 +12,20 @@ import {
   CardType,
   getCardDef,
 } from "./cards";
-import { cardFlag, INPUT_DRAW } from "./input";
 import {
-  BLOCK_DECAY_RATE,
-  DRAW_SEC_PER_CARD,
+  cardFlag, INPUT_DRAW,
+  INPUT_RESERVE_DRAW,
+  INPUT_RESERVE_CARD_1, INPUT_RESERVE_CARD_2, INPUT_RESERVE_CARD_3,
+  INPUT_RESERVE_CARD_4, INPUT_RESERVE_CARD_5, INPUT_RESERVE_CARD_6,
+} from "./input";
+import {
+  DRAW_SEN_PER_CARD,
   DT,
   MAX_HAND_SIZE,
   PLAYED_TO_DISCARD,
   RESOLVED_HISTORY_MAX,
+  SEC_PER_SEN,
+  senToSec,
 } from "./rules";
 import { rangeU64 } from "./rng";
 import type { GameState, PlayerState } from "./state";
@@ -108,9 +114,26 @@ function tickPowers(s: GameState, dt: number, bus: Bus) {
   }
 }
 
-function tickBlockDecay(p: PlayerState, dt: number) {
-  if (p.barricade || p.block <= 0) return;
-  p.block = Math.max(0, p.block - BLOCK_DECAY_RATE * dt);
+// Block decays in DISCRETE 1-unit steps, one tick per 閃. nextBlockDecayAt is
+// the sim time at which the next decrement fires. When the block hits 0,
+// the timer is paused (set to Infinity) until a gain re-arms it.
+function tickBlockDecay(p: PlayerState, now: number) {
+  if (p.barricade) return;
+  while (p.block > 0 && now >= p.nextBlockDecayAt) {
+    p.block -= 1;
+    p.nextBlockDecayAt += SEC_PER_SEN;
+  }
+  if (p.block <= 0) p.nextBlockDecayAt = Infinity;
+}
+
+// Re-arm the block decay timer after a block change. Called from
+// processBlockGains for gains and from processDamage when block is reduced
+// but not zeroed.
+function armBlockDecay(p: PlayerState, now: number) {
+  if (p.block <= 0) { p.nextBlockDecayAt = Infinity; return; }
+  if (!isFinite(p.nextBlockDecayAt) || p.nextBlockDecayAt <= now) {
+    p.nextBlockDecayAt = now + SEC_PER_SEN;
+  }
 }
 
 // ── Cast queue: resolve head when its duration elapses, advance start time ──
@@ -124,7 +147,8 @@ function tickCasting(s: GameState, now: number, bus: Bus) {
       // cast lets the next reserved slot pop a card from the deck.
       if (entry.kind === "draw") {
         const elapsed = now - p.castStartedAt;
-        const targetFilled = Math.min(entry.drawSlots.length, Math.floor(elapsed));
+        // Each slot fills 1 閃 after the previous: slot k at (k+1)*SEC_PER_SEN.
+        const targetFilled = Math.min(entry.drawSlots.length, Math.floor(elapsed / SEC_PER_SEN));
         while (entry.drawFilledCount < targetFilled) {
           const slot = entry.drawSlots[entry.drawFilledCount];
           const c = drawOneFromDeck(p);
@@ -199,23 +223,24 @@ function tickCasting(s: GameState, now: number, bus: Bus) {
 // where N is the number of targets. Slots fill sequentially during the
 // entry's cast (handled in tickCasting). No-op if no eligible slots OR if
 // a draw is already queued (one Draw at a time per player).
-function applyDrawAction(p: PlayerState, now: number) {
+function applyDrawAction(p: PlayerState, now: number): boolean {
   // Refuse if there's already a draw entry in the queue.
-  for (const q of p.queue) if (q.kind === "draw") return;
+  for (const q of p.queue) if (q.kind === "draw") return false;
   const reserved = reservedSlotSet(p);
   const eligible: number[] = [];
   for (let i = 0; i < p.hand.length; i++) {
     if (p.hand[i] === null && !reserved.has(i)) eligible.push(i);
   }
-  if (eligible.length === 0) return;
-  const duration = eligible.length * DRAW_SEC_PER_CARD;
-  if (p.queue.length === 0) p.castStartedAt = now;
+  if (eligible.length === 0) return false;
+  const duration = senToSec(eligible.length * DRAW_SEN_PER_CARD);
+  if (p.queue.length === 0) p.castStartedAt = Math.max(p.castStartedAt, now);
   p.queue.push({
     kind: "draw",
     drawSlots: eligible,
     drawFilledCount: 0,
     duration,
   });
+  return true;
 }
 
 // Set of slot indices currently reserved by a queued draw entry.
@@ -253,40 +278,166 @@ export function queueTotalCost(p: PlayerState, now: number = 0): number {
   return queueRemainingTime(p, now);
 }
 
+// Try to queue the card in hand[slotIndex] immediately. Returns true on
+// success. Returns false if the slot is empty, the card is unplayable, or
+// the prereq isn't currently satisfied.
+function queueCardImmediate(p: PlayerState, slotIndex: number, now: number): boolean {
+  const cardId = p.hand[slotIndex];
+  if (cardId === null || cardId === undefined) return false;
+  const def = getCardDef(cardId);
+  if (!def) return false;
+  if (def.cost >= 900) return false;
+  const prereq = senToSec(def.prereqQueueTime ?? 0);
+  if (prereq > 0 && queueRemainingTime(p, now) < prereq) return false;
+  let duration = senToSec(def.cost);
+  if (p.corruption && def.cardType === CardType.Skill) duration = 0;
+  p.hand[slotIndex] = null;
+  if (p.queue.length === 0) p.castStartedAt = Math.max(p.castStartedAt, now);
+  p.queue.push({ kind: "card", cardId, duration });
+  return true;
+}
+
+const RESERVE_FLAGS = [
+  INPUT_RESERVE_CARD_1, INPUT_RESERVE_CARD_2, INPUT_RESERVE_CARD_3,
+  INPUT_RESERVE_CARD_4, INPUT_RESERVE_CARD_5, INPUT_RESERVE_CARD_6,
+];
+
 function applyInput(s: GameState, idx: 0 | 1, flags: number) {
   if (flags === 0) return;
   const p = s.players[idx];
   const now = s.frame * DT;
 
-  // Draw button: queue a draw entry with duration = N empty slots.
-  if ((flags & INPUT_DRAW) !== 0) {
-    applyDrawAction(p, now);
+  // Reservation inputs first — these don't immediately add to queue, just
+  // set the auto-play target. They still count as "the player has acted"
+  // for the opened-at gate.
+  if ((flags & INPUT_RESERVE_DRAW) !== 0) {
+    p.reservation = { kind: "draw" };
+    if (p.openedAt === null) p.openedAt = now;
+  }
+  for (let i = 0; i < 6; i++) {
+    if ((flags & RESERVE_FLAGS[i]) !== 0) {
+      p.reservation = { kind: "card", slotIndex: i };
+      if (p.openedAt === null) p.openedAt = now;
+    }
   }
 
+  // Draw button: queue a draw entry immediately.
+  if ((flags & INPUT_DRAW) !== 0) {
+    if (applyDrawAction(p, now)) {
+      if (p.openedAt === null) p.openedAt = now;
+    }
+  }
+
+  // Direct card play.
   for (let i = 0; i < MAX_HAND_SIZE; i++) {
     const flag = cardFlag(i);
     if (flag === null) continue;
     if ((flags & flag) === 0) continue;
-    const cardId = p.hand[i];
-    if (cardId === null || cardId === undefined) break;
-    const def = getCardDef(cardId);
-    if (!def) break;
-    if (def.cost >= 900) break; // status junk — unplayable
-
-    // Prereq gate: required queued cast time must already be committed
-    // (actual REMAINING time — once setup cards finish, the prereq vanishes).
-    const prereq = def.prereqQueueTime ?? 0;
-    if (prereq > 0 && queueRemainingTime(p, now) < prereq) break;
-
-    let duration = def.cost;
-    if (p.corruption && def.cardType === CardType.Skill) duration = 0;
-
-    // Vacate the slot; index stays stable.
-    p.hand[i] = null;
-    if (p.queue.length === 0) p.castStartedAt = now;
-    p.queue.push({ kind: "card", cardId, duration });
+    if (queueCardImmediate(p, i, now)) {
+      if (p.openedAt === null) p.openedAt = now;
+    }
     break;
   }
+}
+
+// Auto-fire reservation when the trigger condition is met:
+//   - reservation.kind === "draw": queue empty AND there's an empty slot
+//   - reservation.kind === "card" without prereq: queue empty
+//   - reservation.kind === "card" with prereq>0: queue remaining == prereq
+//   - reservation.kind === "default": treat as "draw if possible else
+//       leftmost playable card"
+// If the action succeeds, the reservation collapses back to "default" so the
+// next idle moment re-evaluates from scratch (the Draw default).
+function tickReservation(s: GameState, now: number) {
+  for (const idx of [0, 1] as const) {
+    const p = s.players[idx];
+    if (p.queue.length === 0) {
+      tryFireOnQueueEmpty(p, now);
+    } else if (p.reservation.kind === "card") {
+      const cardId = p.hand[p.reservation.slotIndex];
+      if (cardId !== null && cardId !== undefined) {
+        const def = getCardDef(cardId);
+        const prereqSec = def ? senToSec(def.prereqQueueTime ?? 0) : 0;
+        if (prereqSec > 0) {
+          // Fire when queue remaining ≈ prereq (within one frame's DT).
+          const remaining = queueRemainingTime(p, now);
+          if (remaining <= prereqSec + DT / 2 && remaining >= prereqSec - DT / 2) {
+            if (queueCardImmediate(p, p.reservation.slotIndex, now)) {
+              p.reservation = { kind: "default" };
+            }
+          }
+        }
+      }
+    }
+  }
+}
+
+function tryFireOnQueueEmpty(p: PlayerState, now: number) {
+  let action: "draw" | { kind: "card"; slot: number } | "none" = "none";
+  if (p.reservation.kind === "draw") {
+    action = "draw";
+  } else if (p.reservation.kind === "card") {
+    const cardId = p.hand[p.reservation.slotIndex];
+    if (cardId !== null && cardId !== undefined) {
+      const def = getCardDef(cardId);
+      if (def && def.cost < 900 && (def.prereqQueueTime ?? 0) === 0) {
+        action = { kind: "card", slot: p.reservation.slotIndex };
+      }
+    }
+  } else {
+    // Default: prefer Draw if there's an empty non-reserved slot, else the
+    // leftmost playable card with no prereq.
+    if (hasEmptyOpenSlot(p)) {
+      action = "draw";
+    } else {
+      const slot = leftmostPlayableSlot(p, now);
+      if (slot >= 0) action = { kind: "card", slot };
+    }
+  }
+  if (action === "draw") {
+    applyDrawAction(p, now);
+    if (p.reservation.kind === "draw") p.reservation = { kind: "default" };
+  } else if (action !== "none") {
+    if (queueCardImmediate(p, action.slot, now)) {
+      if (p.reservation.kind === "card") p.reservation = { kind: "default" };
+    }
+  }
+}
+
+function hasEmptyOpenSlot(p: PlayerState): boolean {
+  const reserved = reservedSlotSet(p);
+  for (let i = 0; i < p.hand.length; i++) {
+    if (p.hand[i] === null && !reserved.has(i)) return true;
+  }
+  return false;
+}
+
+function leftmostPlayableSlot(p: PlayerState, now: number): number {
+  for (let i = 0; i < p.hand.length; i++) {
+    const c = p.hand[i];
+    if (c === null || c === undefined) continue;
+    const def = getCardDef(c);
+    if (!def || def.cost >= 900) continue;
+    const prereq = senToSec(def.prereqQueueTime ?? 0);
+    if (prereq > 0 && queueRemainingTime(p, now) < prereq) continue;
+    return i;
+  }
+  return -1;
+}
+
+// Lose condition: hand is full of UNPLAYABLE cards (no empties, no slot
+// holds a card that could ever be played given current state). When this
+// happens we forfeit the match for that player.
+function isStuck(p: PlayerState): boolean {
+  if (p.queue.length > 0) return false; // queue still resolving
+  for (let i = 0; i < p.hand.length; i++) {
+    const c = p.hand[i];
+    if (c === null) return false; // empty slot → can Draw
+    const def = getCardDef(c);
+    if (!def) continue;
+    if (def.cost < 900) return false; // a playable card exists
+  }
+  return true;
 }
 
 // ── Deck / hand / discard ──
@@ -617,16 +768,20 @@ export function step(s: GameState, p0Input: number, p1Input: number, dt: number 
   // 1. Time-based ticks.
   for (const p of s.players) tickStatus(p, dt);
   tickPowers(s, dt, bus);
-  for (const p of s.players) tickBlockDecay(p, dt);
+  for (const p of s.players) tickBlockDecay(p, now);
 
   // 2. Cast slots: card casts resolve, draw-entry slots fill sequentially.
   tickCasting(s, now, bus);
 
-  // 3. Inputs: start new casts (no-op if already casting).
+  // 3. Inputs: explicit plays / reservations.
   applyInput(s, 0, p0Input);
   applyInput(s, 1, p1Input);
 
-  // 4. Drain effect / draw / damage chains until quiescent.
+  // 4. Reservation auto-fire: if a player's queue is empty (or the prereq
+  // condition for a card reservation is met), append the reserved action.
+  tickReservation(s, now);
+
+  // 5. Drain effect / draw / damage chains until quiescent.
   let safety = 0;
   while (
     bus.cardPlayed.length || bus.exhausted.length ||
@@ -642,9 +797,16 @@ export function step(s: GameState, p0Input: number, p1Input: number, dt: number 
     processHeal(s, bus);
     processDraw(s, bus);
   }
+  // Re-arm block decay for both players (idempotent if block unchanged).
+  for (const p of s.players) armBlockDecay(p, now);
 
-  // 5. Game over?
-  if (s.players[0].hp <= 0 && s.players[1].hp <= 0) s.result = 3;
+  // 6. Game over? HP zero OR hand stuck with no playable card and no empties.
+  const p0Stuck = isStuck(s.players[0]);
+  const p1Stuck = isStuck(s.players[1]);
+  if (p0Stuck && p1Stuck) s.result = 3;
+  else if (p0Stuck) s.result = 2;
+  else if (p1Stuck) s.result = 1;
+  else if (s.players[0].hp <= 0 && s.players[1].hp <= 0) s.result = 3;
   else if (s.players[0].hp <= 0) s.result = 2;
   else if (s.players[1].hp <= 0) s.result = 1;
 

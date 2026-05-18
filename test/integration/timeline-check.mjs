@@ -1,9 +1,10 @@
-// Verify v4 layout:
-//   - Draw becomes a queue entry (visible as a blue chip in the queue)
-//   - Pressing Draw queues an N-second entry; pending slots show countdown
-//   - Block band in the middle of the timeline with predicted trajectory
-//   - Defense card queued → block bumps UP at its resolve time (predicted)
-//   - Attack queued against us → block drops at its resolve time (predicted)
+// v5 visual check:
+//   - 閃 displayed everywhere
+//   - block: toward-center geometry, exponential narrowing
+//   - second player (handle 1) gets +3 block, 0.5閃 offset
+//   - opp queue hidden from p1 until they act
+//   - default reservation auto-fires (Draw or leftmost playable)
+//   - right-click sets card reservation, shows "予約中" badge
 import { chromium } from "playwright";
 const wait = (ms) => new Promise((r) => setTimeout(r, ms));
 
@@ -20,50 +21,69 @@ await page.selectOption("select", "passive");
 await page.click("button:has-text('CPU と対戦')");
 await page.waitForTimeout(500);
 
-await page.screenshot({ path: "/tmp/v4-initial.png" });
-
-// Play 2 cards to create empty slots.
-await page.keyboard.press("1"); await page.waitForTimeout(120);
-await page.keyboard.press("2"); await page.waitForTimeout(200);
-
-// Press Draw — should append a queue entry of N seconds (3 empties → 3s).
-await page.keyboard.press("d"); await page.waitForTimeout(300);
-
-const afterDraw = await page.evaluate(() => {
+// Capture initial state: p1 should have +3 block, 0.5閃 offset.
+const initial = await page.evaluate(() => {
   const g = window.__sensen.getState();
   return {
-    hand: g.players[0].hand,
+    p0: { block: g.players[0].block, castStartedAt: g.players[0].castStartedAt, openedAt: g.players[0].openedAt, reservation: g.players[0].reservation },
+    p1: { block: g.players[1].block, castStartedAt: g.players[1].castStartedAt, openedAt: g.players[1].openedAt, reservation: g.players[1].reservation },
+    localPlayer: window.__sensen.getState && (window.__sensen.localPlayer ?? "unknown"),
+  };
+});
+console.log("initial:", JSON.stringify(initial, null, 2));
+
+await page.screenshot({ path: "/tmp/v5-initial.png" });
+
+// Press a card (slot 0). Default reservation should fire Draw afterwards.
+await page.keyboard.press("1");
+await page.waitForTimeout(200);
+await page.screenshot({ path: "/tmp/v5-after-play.png" });
+
+const afterPlay = await page.evaluate(() => {
+  const g = window.__sensen.getState();
+  return {
     queue: g.players[0].queue.map((q) => q.kind === "draw"
-      ? { kind: "draw", duration: q.duration, slots: q.drawSlots, filled: q.drawFilledCount }
+      ? { kind: "draw", drawSlots: q.drawSlots, duration: q.duration }
       : { kind: "card", cardId: q.cardId, duration: q.duration }),
-    block: g.players[0].block,
-    nowSec: g.frame / 60,
+    reservation: g.players[0].reservation,
+    openedAt: g.players[0].openedAt,
   };
 });
-console.log("after Draw press:", JSON.stringify(afterDraw, null, 2));
+console.log("after play 1:", JSON.stringify(afterPlay, null, 2));
 
-await page.screenshot({ path: "/tmp/v4-draw-queued.png" });
-
-// Wait so the queue chips visibly progress + first slot fills.
-await wait(2500);
-const mid = await page.evaluate(() => {
+// Wait for card to resolve, then reservation auto-fires Draw.
+await wait(3500);
+const afterResolve = await page.evaluate(() => {
   const g = window.__sensen.getState();
   return {
-    hand: g.players[0].hand,
     queueLen: g.players[0].queue.length,
-    drawEntry: g.players[0].queue.find((q) => q.kind === "draw"),
+    queueKinds: g.players[0].queue.map((q) => q.kind),
+    hand: g.players[0].hand,
+    block: g.players[1].block,
   };
 });
-console.log("mid-draw (2.5s in):", JSON.stringify(mid, null, 2));
-await page.screenshot({ path: "/tmp/v4-draw-progress.png" });
+console.log("after Strike resolves + auto-Draw fires:", JSON.stringify(afterResolve, null, 2));
+await page.screenshot({ path: "/tmp/v5-after-resolve.png" });
 
-// Wait for full completion
-await wait(1500);
-const after = await page.evaluate(() => {
-  const g = window.__sensen.getState();
-  return { hand: g.players[0].hand, queueLen: g.players[0].queue.length };
+// Right-click a card to manually reserve it.
+const cardButtons = await page.$$("button[disabled='false'], button:not([disabled])");
+// Find a card-shaped button (160px wide-ish — easier: find by text containing 閃)
+await wait(500);
+const reservedSetup = await page.evaluate(() => {
+  const buttons = Array.from(document.querySelectorAll("button"));
+  const card = buttons.find((b) => b.textContent && b.textContent.includes("閃") && b.textContent.includes("攻撃"));
+  if (!card) return { found: false };
+  const ev = new MouseEvent("contextmenu", { bubbles: true, cancelable: true });
+  card.dispatchEvent(ev);
+  return { found: true, text: card.textContent?.slice(0, 30) };
 });
-console.log("after full draw:", JSON.stringify(after, null, 2));
-await page.screenshot({ path: "/tmp/v4-draw-done.png" });
+console.log("right-click setup:", reservedSetup);
+await wait(200);
+const reservedState = await page.evaluate(() => {
+  const g = window.__sensen.getState();
+  return { reservation: g.players[0].reservation };
+});
+console.log("after right-click:", reservedState);
 
+await page.screenshot({ path: "/tmp/v5-reserved.png" });
 await browser.close();

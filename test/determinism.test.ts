@@ -90,17 +90,18 @@ describe("reducer determinism", () => {
   it("head of queue resolves after cost seconds and deals declared damage", () => {
     const deck = Array(20).fill(CardId.Strike);
     const s = initGame({ matchSeed: 1n, hpMax: 80, deckP0: deck, deckP1: deck });
+    s.players[0].reservation = { kind: "card", slotIndex: 99 };
+    s.players[1].reservation = { kind: "card", slotIndex: 99 };
+    // Zero out the second-player bonus block so we measure raw Strike damage.
+    s.players[1].block = 0;
     const startHp = s.players[1].hp;
-    step(s, cardFlag(0)!, 0); // queue Strike (3 sec)
+    step(s, cardFlag(0)!, 0); // queue Strike (1 閃 = 3 sec)
     expect(s.players[0].queue.length).toBe(1);
-    // Need 3 sec = 180 frames, +5 buffer.
     for (let f = 0; f < 185; f++) step(s, 0, 0);
     expect(s.players[0].queue.length).toBe(0);
     const dealt = startHp - s.players[1].hp;
     expect(dealt).toBeGreaterThanOrEqual(5.5);
     expect(dealt).toBeLessThanOrEqual(6.5);
-    // Hand is fixed length 6 with null = empty. After playing one card,
-    // 4 slots still hold a card (original 5 dealt - 1 played).
     expect(countHand(s.players[0])).toBe(4);
   });
 
@@ -117,7 +118,10 @@ describe("reducer determinism", () => {
   it("queued casts resolve in order with carry-over time (no drift)", () => {
     const deck = Array(20).fill(CardId.Strike);
     const s = initGame({ matchSeed: 1n, hpMax: 80, deckP0: deck, deckP1: deck });
-    // 3 Strikes (3s each) = 9s = 540 frames.
+    s.players[0].reservation = { kind: "card", slotIndex: 99 };
+    s.players[1].reservation = { kind: "card", slotIndex: 99 };
+    s.players[1].block = 0;
+    // 3 Strikes (1 閃 each = 9 sec total).
     queueAnyStrike(s, 0); queueAnyStrike(s, 0); queueAnyStrike(s, 0);
     const startHp = s.players[1].hp;
     for (let f = 0; f < 185; f++) step(s, 0, 0); // ~3s → first resolved
@@ -132,10 +136,12 @@ describe("reducer determinism", () => {
   });
 
   it("prereqQueueTime blocks queueing a finisher unless setup is in place", () => {
-    // Hand: 4 Strikes + Bludgeon (prereq 6).
+    // Hand: 4 Strikes + Bludgeon (prereq 2 閃).
     const deck = [CardId.Strike, CardId.Strike, CardId.Strike, CardId.Strike, CardId.Bludgeon];
     const s = initGame({ matchSeed: 1n, hpMax: 80, deckP0: deck, deckP1: deck });
-    // Find Bludgeon's index in the dealt hand (deal order may vary).
+    // Disable auto-reservation so a rejected play doesn't auto-Draw.
+    s.players[0].reservation = { kind: "card", slotIndex: 99 };
+    s.players[1].reservation = { kind: "card", slotIndex: 99 };
     const bludIdx = s.players[0].hand.indexOf(CardId.Bludgeon);
     expect(bludIdx).toBeGreaterThanOrEqual(0);
 
@@ -144,17 +150,15 @@ describe("reducer determinism", () => {
     expect(s.players[0].queue.length).toBe(0);
     expect(s.players[0].hand.indexOf(CardId.Bludgeon)).toBeGreaterThanOrEqual(0);
 
-    // Queue 3 Strikes (cost 3 each = 9s of setup, well above Bludgeon's
-    // prereq of 6 even after a couple of frames of head decay).
+    // Queue 3 Strikes (1 閃 each = 3 閃 of setup, above Bludgeon's prereq 2).
     for (let n = 0; n < 3; n++) {
       const strikeIdx = s.players[0].hand.indexOf(CardId.Strike);
       step(s, cardFlag(strikeIdx)!, 0);
     }
     expect(s.players[0].queue.length).toBe(3);
-    // queueRemainingTime should be ~9s; let's queue Bludgeon now.
     const bludIdxNow = s.players[0].hand.indexOf(CardId.Bludgeon);
     step(s, cardFlag(bludIdxNow)!, 0);
-    expect(s.players[0].queue.length).toBe(4); // Bludgeon accepted
+    expect(s.players[0].queue.length).toBe(4);
     const last = s.players[0].queue[3];
     expect(last.kind === "card" && last.cardId === CardId.Bludgeon).toBe(true);
   });
@@ -172,22 +176,32 @@ describe("reducer determinism", () => {
   it("status cards (cost 999) cannot be queued", () => {
     const deck = [CardId.Wound, CardId.Wound, CardId.Wound, CardId.Wound, CardId.Wound];
     const s = initGame({ matchSeed: 1n, hpMax: 80, deckP0: deck, deckP1: deck });
+    // Disable auto-reservation; otherwise the default Draw fills the empty
+    // slot and the queue isn't 0.
+    s.players[0].reservation = { kind: "card", slotIndex: 99 };
+    s.players[1].reservation = { kind: "card", slotIndex: 99 };
     step(s, cardFlag(0)!, 0);
-    expect(s.players[0].queue.length).toBe(0); // ignored
+    expect(s.players[0].queue.length).toBe(0); // status card ignored
   });
 
-  it("block decays linearly at BLOCK_DECAY_RATE", () => {
+  it("block decays in 1-unit steps per 閃", () => {
     const deck = Array(20).fill(CardId.Defend);
     const s = initGame({ matchSeed: 1n, hpMax: 80, deckP0: deck, deckP1: deck });
-    step(s, cardFlag(0)!, 0); // start cast (3s)
+    // Disable auto-reservation so the queue stays empty after Defend resolves.
+    s.players[0].reservation = { kind: "card", slotIndex: 99 };
+    s.players[1].reservation = { kind: "card", slotIndex: 99 };
+    step(s, cardFlag(0)!, 0); // cast Defend (1 閃 = 180 frames)
     for (let f = 0; f < 185; f++) step(s, 0, 0); // resolve
     const b0 = s.players[0].block;
-    expect(b0).toBeGreaterThan(4); // Defend = block 5, just resolved → ~5
-    // Another full second of decay should drop ~2.
-    for (let f = 0; f < 60; f++) step(s, 0, 0);
-    const b1 = s.players[0].block;
-    expect(b0 - b1).toBeGreaterThan(1.5);
-    expect(b0 - b1).toBeLessThan(2.5);
+    expect(b0).toBe(5); // Defend gives block 5
+
+    // After 1 閃 (180 frames) since resolution → block should drop by 1.
+    for (let f = 0; f < 180; f++) step(s, 0, 0);
+    expect(s.players[0].block).toBe(4);
+
+    // After 2 more 閃 → block 2.
+    for (let f = 0; f < 360; f++) step(s, 0, 0);
+    expect(s.players[0].block).toBe(2);
   });
 
   it("streak bucket maps streaks to expected matchmaking groups", async () => {

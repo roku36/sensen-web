@@ -25,12 +25,30 @@ export interface ResolvedEntry {
   resolvedAt: number;
 }
 
+// What this player has queued to AUTO-PLAY when the queue empties (or, for
+// prereq-cards, when the queue total exactly meets the prereq). The Draw
+// button is the default reservation; right-clicking a card overrides it.
+//   kind="draw": queue a draw entry the next time the queue can accept one
+//     (= queue is empty AND there are empty hand slots).
+//   kind="card": queue this hand slot's card the next time the queue can
+//     accept it. For prereqQueueTime > 0, the trigger is "queue remaining
+//     time == prereqQueueTime"; otherwise it's "queue empty".
+//   kind="default": special marker meaning "compute on the fly" — Draw if
+//     there's anywhere to draw to, else the leftmost playable card.
+export type Reservation =
+  | { kind: "default" }
+  | { kind: "draw" }
+  | { kind: "card"; slotIndex: number };
+
 export interface PlayerState {
   handle: number;
-  // Vitals
+  // Vitals — block is an INTEGER (steps of 1).
   hp: number;
   hpMax: number;
   block: number;
+  // Sim seconds at which block will tick down by 1 (if > 0). Reset to
+  // (now + 1 閃) whenever block changes by gain or hit.
+  nextBlockDecayAt: number;
   thorns: number;
   // Cast queue — head [0] is currently casting. Both peers see each other's
   // queue (it's part of GameState, so reproducible from inputs + seed).
@@ -41,6 +59,13 @@ export interface PlayerState {
   castStartedAt: number;
   // Bounded history of recently-resolved cards (head pops). Newest at the END.
   resolvedCards: ResolvedEntry[];
+  // What this player will auto-play next. See Reservation above.
+  reservation: Reservation;
+  // Sim seconds at which this player first committed an action (queued a
+  // card OR pressed Draw OR set a manual reservation). null until they act.
+  // Used by the UI to hide the opponent's queue from a player who hasn't
+  // shown their hand yet — prevents the reflex-game problem.
+  openedAt: number | null;
   // Status durations (seconds remaining)
   strength: number;
   vulnerableSecs: number;
@@ -87,10 +112,13 @@ const DEFAULT_PLAYER = (
   hp: hpMax,
   hpMax,
   block: 0,
+  nextBlockDecayAt: Infinity,
   thorns: 0,
   queue: [],
   castStartedAt: 0,
   resolvedCards: [],
+  reservation: { kind: "default" },
+  openedAt: null,
   strength: 0,
   vulnerableSecs: 0,
   weakSecs: 0,
@@ -136,6 +164,7 @@ const clonePlayer = (p: PlayerState): PlayerState => ({
   ...p,
   queue: p.queue.map((q) => q.kind === "draw" ? { ...q, drawSlots: q.drawSlots.slice() } : { ...q }),
   resolvedCards: p.resolvedCards.map((r) => ({ ...r })),
+  reservation: { ...p.reservation },
   rage: p.rage ? { ...p.rage } : null,
   metallicize: p.metallicize ? { ...p.metallicize } : null,
   demonForm: p.demonForm ? { ...p.demonForm } : null,

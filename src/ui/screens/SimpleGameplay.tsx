@@ -20,9 +20,13 @@
 
 import { useEffect, useRef, useState } from "react";
 import { CardEffect, CardId, CardType, getCardDef } from "../../sim/cards";
-import { cardFlag, INPUT_DRAW } from "../../sim/input";
+import {
+  cardFlag, INPUT_DRAW, INPUT_RESERVE_DRAW, reserveCardFlag,
+} from "../../sim/input";
 import { queueRemainingTime, reservedSlotSet } from "../../sim/reducer";
-import { BLOCK_DECAY_RATE, DRAW_SEC_PER_CARD, DT, MAX_HAND_SIZE } from "../../sim/rules";
+import {
+  DRAW_SEN_PER_CARD, DT, MAX_HAND_SIZE, SEC_PER_SEN, secToSen,
+} from "../../sim/rules";
 import { PlayerState, QueueEntry, ResolvedEntry } from "../../sim/state";
 
 import { getActiveMode, getSession, useKeyboardInput } from "../hooks";
@@ -71,10 +75,24 @@ const BLOCK_CENTER = QUEUE_ROW + BLOCK_HALF;     // horizontal axis (block = 0)
 const BLOCK_BOTTOM = QUEUE_ROW + BLOCK_BAND;     // lower edge of self's block area
 const SELF_QUEUE_Y_TOP = QUEUE_ROW + BLOCK_BAND + (QUEUE_ROW - BOX_HEIGHT) / 2;
 
-// How much block 1 vertical pixel represents. Caps the visual scale at
-// ~BLOCK_HALF / PX_PER_BLOCK = 90/4 = 22.5 block before clipping.
-const PX_PER_BLOCK = 4;
-const BLOCK_CAP = BLOCK_HALF / PX_PER_BLOCK;
+// Block height mapping: EXPONENTIAL-NARROWER. The first few block units
+// take big visual chunks; high block values pack tightly so even 30+
+// fits. Asymptote at BLOCK_HALF. blockHeight(0) = 0.
+//
+//   h(b) = BLOCK_HALF * (1 - exp(-b / BLOCK_SCALE_K))
+//
+// With BLOCK_SCALE_K = 6 the first block unit uses ~15% of BLOCK_HALF,
+// block 10 reaches ~80%, block 30 essentially fills the half.
+const BLOCK_SCALE_K = 6;
+function blockHeight(b: number): number {
+  if (b <= 0) return 0;
+  return BLOCK_HALF * (1 - Math.exp(-b / BLOCK_SCALE_K));
+}
+// How much vertical space ONE block unit gets at the given current value
+// (used to position pierce marks just outside the current block tip).
+function blockUnitHeight(b: number): number {
+  return blockHeight(b + 1) - blockHeight(b);
+}
 
 export function SimpleGameplay() {
   useKeyboardInput();
@@ -187,6 +205,11 @@ function countCards(hand: (number | null)[]): number {
 // ── Battle zone: timeline with center block band ──
 
 function BattleZone({ op, me, now }: { op: PlayerState; me: PlayerState; now: number }) {
+  // Hide-opp-queue rule: second player (me.handle === 1) shouldn't see
+  // first player's queue until they've themselves committed something.
+  // Otherwise the 0.5閃 offset becomes pure reflex advantage.
+  const hideOppQueue = me.handle === 1 && me.openedAt === null;
+
   const opQueue = computeQueueLayout(op, now);
   const meQueue = computeQueueLayout(me, now);
   const opHist = computeHistoryBoxes(op.resolvedCards, now);
@@ -200,8 +223,14 @@ function BattleZone({ op, me, now }: { op: PlayerState; me: PlayerState; now: nu
   const innerWidth = NOW_OFFSET + maxSec * PX_PER_SEC + EDGE_PAD;
 
   // Block trajectories (current + predicted) for both players.
-  const opBlock = blockTrajectoryAt(op, me, now, maxSec);
-  const meBlock = blockTrajectoryAt(me, op, now, maxSec);
+  // When opp's queue is hidden, opp's block trajectory still shows the
+  // CURRENT value (everyone can see that) but no predicted hits/decays from
+  // the hidden cards. Easiest: pass an empty queue when hidden.
+  const opForBlock = hideOppQueue ? { ...op, queue: [] } : op;
+  const meForBlock = hideOppQueue ? { ...me, queue: me.queue.slice() } : me;
+  const opForMeBlock = hideOppQueue ? { ...op, queue: [] } : op;
+  const opBlock = blockTrajectoryAt(opForBlock, meForBlock, now, maxSec);
+  const meBlock = blockTrajectoryAt(me, opForMeBlock, now, maxSec);
 
   // Scroll setup.
   const scrollRef = useRef<HTMLDivElement | null>(null);
@@ -231,11 +260,11 @@ function BattleZone({ op, me, now }: { op: PlayerState; me: PlayerState; now: nu
     <div style={battleZone}>
       <div style={scrollWrap} className="no-scrollbar" ref={scrollRef}>
         <div style={{ ...timelineInner, width: innerWidth, height: TIMELINE_HEIGHT }}>
-          {Array.from({ length: HISTORY_SEC + 1 }).map((_, s) => (
-            <TimeTick key={`p${s}`} sec={-s} totalHeight={TIMELINE_HEIGHT} />
+          {Array.from({ length: Math.ceil(HISTORY_SEC / SEC_PER_SEN) + 1 }).map((_, s) => (
+            <TimeTick key={`p${s}`} sen={-s} totalHeight={TIMELINE_HEIGHT} />
           ))}
-          {Array.from({ length: maxSec + 1 }).map((_, s) => (
-            <TimeTick key={`f${s}`} sec={s} totalHeight={TIMELINE_HEIGHT} />
+          {Array.from({ length: Math.ceil(maxSec / SEC_PER_SEN) + 1 }).map((_, s) => (
+            <TimeTick key={`f${s}`} sen={s} totalHeight={TIMELINE_HEIGHT} />
           ))}
           {/* Block band background. */}
           <div style={{
@@ -257,20 +286,29 @@ function BattleZone({ op, me, now }: { op: PlayerState; me: PlayerState; now: nu
             width={innerWidth} height={BLOCK_BAND}
             style={{ position: "absolute", left: 0, top: BLOCK_TOP, pointerEvents: "none" }}
           >
-            <BlockArea trajectory={opBlock} side="opp" maxSec={maxSec} />
+            <BlockArea trajectory={opBlock} side="opp" maxSec={maxSec} hidden={hideOppQueue} />
             <BlockArea trajectory={meBlock} side="self" maxSec={maxSec} />
-            <BlockEventMarks events={opBlock.events} side="opp" />
+            {!hideOppQueue && <BlockEventMarks events={opBlock.events} side="opp" />}
             <BlockEventMarks events={meBlock.events} side="self" />
           </svg>
           <div style={{ ...nowDivider, left: NOW_OFFSET - 18, top: BLOCK_CENTER - 8 }}>NOW</div>
           <div style={{ ...nowLine, left: NOW_OFFSET, height: TIMELINE_HEIGHT }} />
-          {/* Queue chips. */}
-          {opHist.map((b, i) => (
+          {/* Queue chips. Opp queue + history are hidden until the local
+              second-player has committed something. */}
+          {!hideOppQueue && opHist.map((b, i) => (
             <QueueBox key={`oh${i}`} {...b} yTop={OPP_QUEUE_Y_TOP} />
           ))}
-          {opQueue.boxes.map((b, i) => (
+          {!hideOppQueue && opQueue.boxes.map((b, i) => (
             <QueueBox key={`o${i}`} {...b} yTop={OPP_QUEUE_Y_TOP} />
           ))}
+          {hideOppQueue && (
+            <div style={{
+              position: "absolute", left: NOW_OFFSET - 200, top: OPP_QUEUE_Y_TOP + 8,
+              width: 400, textAlign: "center",
+              fontSize: 11, color: "rgba(255,255,255,0.45)", fontStyle: "italic",
+              pointerEvents: "none",
+            }}>(後攻：自分が行動するまで相手のキューは隠されます)</div>
+          )}
           {meHist.map((b, i) => (
             <QueueBox key={`mh${i}`} {...b} yTop={SELF_QUEUE_Y_TOP} />
           ))}
@@ -336,11 +374,12 @@ function computeHistoryBoxes(resolved: ResolvedEntry[], now: number): BoxLayout[
   return out;
 }
 
-function TimeTick({ sec, totalHeight }: { sec: number; totalHeight: number }) {
-  const x = NOW_OFFSET + sec * PX_PER_SEC;
+// Ticks are now PER-閃 (1 tick = SEC_PER_SEN seconds = 1 閃).
+function TimeTick({ sen, totalHeight }: { sen: number; totalHeight: number }) {
+  const x = NOW_OFFSET + sen * SEC_PER_SEN * PX_PER_SEC;
   if (x < 0) return null;
-  const isMajor = sec % 5 === 0;
-  const isPast = sec < 0;
+  const isMajor = sen % 5 === 0;
+  const isPast = sen < 0;
   return (
     <>
       <div style={{
@@ -349,14 +388,14 @@ function TimeTick({ sec, totalHeight }: { sec: number; totalHeight: number }) {
           ? (isPast ? "rgba(255,255,255,0.08)" : "rgba(255,255,255,0.12)")
           : (isPast ? "rgba(255,255,255,0.03)" : "rgba(255,255,255,0.05)"),
       }} />
-      {sec !== 0 && (
+      {sen !== 0 && (
         <div style={{
           position: "absolute", left: x + 2, top: 4,
           fontSize: 9,
           color: isPast ? "rgba(255,255,255,0.25)" : "rgba(255,255,255,0.4)",
           fontFamily: "ui-monospace, monospace",
           pointerEvents: "none",
-        }}>{sec}s</div>
+        }}>{sen}閃</div>
       )}
     </>
   );
@@ -383,6 +422,7 @@ function QueueBox({ cardId, drawSlots, drawFilledCount, duration, startRel, endR
   } else {
     label = def?.name ?? "??";
   }
+  const durSen = Math.round(secToSen(duration) * 10) / 10; // 1.0 / 0.5 fine
 
   return (
     <div
@@ -411,8 +451,8 @@ function QueueBox({ cardId, drawSlots, drawFilledCount, duration, startRel, endR
       <div style={queueBoxName}>{label}</div>
       <div style={queueBoxMeta}>
         {resolved ? "発動済"
-          : isHead ? `あと ${Math.max(0, endRel).toFixed(1)}s`
-          : `${duration}s`}
+          : isHead ? `あと ${secToSen(Math.max(0, endRel)).toFixed(1)}閃`
+          : `${durSen}閃`}
       </div>
     </div>
   );
@@ -443,13 +483,20 @@ interface BlockEvent {
   amount: number;
   pre: number;
   post: number;
+  pierce: number;          // damage that bled through to HP (for outside-the-band mark)
 }
 interface BlockTraj { samples: BlockSample[]; events: BlockEvent[]; }
 
+// Block trajectory: step-decay (1 unit per 閃 = SEC_PER_SEN seconds), plus
+// own defense gains and opponent attack hits at the appropriate resolve
+// times. Models OVERKILL via the `pierce` field on events (excess damage
+// beyond block becomes a "pierce" amount the UI shows extending OUTSIDE
+// the block area).
 function blockTrajectoryAt(p: PlayerState, opp: PlayerState, now: number, horizonSec: number): BlockTraj {
-  const events: { t: number; kind: "gain" | "hit"; amount: number }[] = [];
+  // Project the next decay time as a series of 閃-aligned moments.
+  type RawEvent = { t: number; kind: "gain" | "hit" | "decay"; amount: number };
+  const events: RawEvent[] = [];
 
-  // Helper to enumerate cast resolutions in `state`'s queue as { t, def }.
   const enumerate = (state: PlayerState, onResolve: (t: number, ent: QueueEntry) => void) => {
     if (state.queue.length === 0) return;
     let t = Math.max(0, state.queue[0].duration - (now - state.castStartedAt));
@@ -460,7 +507,6 @@ function blockTrajectoryAt(p: PlayerState, opp: PlayerState, now: number, horizo
     }
   };
 
-  // p's own defenses → block gains.
   enumerate(p, (t, ent) => {
     if (ent.kind !== "card") return;
     const def = getCardDef(ent.cardId);
@@ -468,8 +514,6 @@ function blockTrajectoryAt(p: PlayerState, opp: PlayerState, now: number, horizo
     const blk = blockAmount(def.effect);
     if (blk > 0) events.push({ t, kind: "gain", amount: blk });
   });
-
-  // opp's attacks → block hits.
   enumerate(opp, (t, ent) => {
     if (ent.kind !== "card") return;
     const def = getCardDef(ent.cardId);
@@ -477,33 +521,39 @@ function blockTrajectoryAt(p: PlayerState, opp: PlayerState, now: number, horizo
     const dmg = baseAttackDamage(def.effect);
     if (dmg > 0) events.push({ t, kind: "hit", amount: dmg });
   });
+  // Project block-decay ticks based on current nextBlockDecayAt.
+  let nextDecayAt = p.nextBlockDecayAt - now;
+  while (isFinite(nextDecayAt) && nextDecayAt <= horizonSec) {
+    if (nextDecayAt > 0) events.push({ t: nextDecayAt, kind: "decay", amount: 1 });
+    nextDecayAt += SEC_PER_SEN;
+  }
 
   events.sort((a, b) => a.t - b.t);
 
   const samples: BlockSample[] = [];
   const eventDetails: BlockEvent[] = [];
   let block = p.block;
-  let lastT = 0;
   samples.push({ t: 0, block });
   for (const e of events) {
     if (e.t > horizonSec) break;
-    // Decay between lastT and e.t.
-    const dt = e.t - lastT;
-    const newBlock = Math.max(0, block - BLOCK_DECAY_RATE * dt);
-    if (dt > 0.001) samples.push({ t: e.t, block: newBlock });
-    block = newBlock;
-    const pre = block;
-    if (e.kind === "gain") block = Math.min(BLOCK_CAP * 2, block + e.amount);
-    else block = Math.max(0, block - e.amount);
+    // Block is step-constant between events.
     samples.push({ t: e.t, block });
-    eventDetails.push({ t: e.t, kind: e.kind, amount: e.amount, pre, post: block });
-    lastT = e.t;
+    const pre = block;
+    let pierce = 0;
+    if (e.kind === "gain") block = block + e.amount;
+    else if (e.kind === "hit") {
+      const absorbed = Math.min(block, e.amount);
+      pierce = e.amount - absorbed;
+      block = block - absorbed;
+    } else { // decay
+      block = Math.max(0, block - 1);
+    }
+    samples.push({ t: e.t, block });
+    if (e.kind !== "decay") {
+      eventDetails.push({ t: e.t, kind: e.kind, amount: e.amount, pre, post: block, pierce });
+    }
   }
-  // Final decay to horizon.
-  const dt = horizonSec - lastT;
-  if (dt > 0.001) {
-    samples.push({ t: horizonSec, block: Math.max(0, block - BLOCK_DECAY_RATE * dt) });
-  }
+  samples.push({ t: horizonSec, block });
   return { samples, events: eventDetails };
 }
 
@@ -525,78 +575,103 @@ function baseAttackDamage(e: CardEffect): number {
 }
 
 // Render the filled block-area polygon for one side.
-function BlockArea({ trajectory, side, maxSec }: { trajectory: BlockTraj; side: "opp" | "self"; maxSec: number }) {
+//
+// New geometry: block stacks TOWARD the center axis. So for the opp side,
+// block 0 = at the top edge (BLOCK_TOP); larger block = closer to the
+// center line (BLOCK_HALF down from BLOCK_TOP). Self side mirrors.
+// height(b) is the EXPONENTIALLY-NARROWING height described above.
+function BlockArea({ trajectory, side, maxSec, hidden }: { trajectory: BlockTraj; side: "opp" | "self"; maxSec: number; hidden?: boolean }) {
   const samples = trajectory.samples;
   if (samples.length < 2) return null;
   const color = side === "opp"
-    ? "rgba(95, 160, 224, 0.45)"   // opp = soft blue, filling upward
-    : "rgba(95, 200, 130, 0.45)";  // self = soft green, filling downward
-  const stroke = side === "opp" ? "#5fa0e0" : "#5fc882";
+    ? (hidden ? "rgba(95, 160, 224, 0.12)" : "rgba(95, 160, 224, 0.45)")
+    : (hidden ? "rgba(95, 200, 130, 0.12)" : "rgba(95, 200, 130, 0.45)");
+  const stroke = side === "opp"
+    ? (hidden ? "rgba(95, 160, 224, 0.25)" : "#5fa0e0")
+    : (hidden ? "rgba(95, 200, 130, 0.25)" : "#5fc882");
+  // y for a block value. For opp side: block grows FROM the outer top edge
+  // INWARD toward center. anchor=0, then grows toward BLOCK_HALF.
   const yForBlock = (b: number) => {
-    const clamped = Math.min(BLOCK_CAP, Math.max(0, b));
-    const h = clamped * PX_PER_BLOCK;
+    const h = blockHeight(b);
     return side === "opp"
-      ? BLOCK_HALF - h            // opp grows up from center
-      : BLOCK_HALF + h;           // self grows down from center
+      ? 0 + h          // start at top edge (y=0 in svg coords), descend toward center (y=BLOCK_HALF)
+      : BLOCK_BAND - h; // start at bottom edge, rise toward center
   };
   const xForT = (t: number) => NOW_OFFSET + t * PX_PER_SEC;
+  const outerY = side === "opp" ? 0 : BLOCK_BAND; // anchor (top or bottom edge)
 
-  // Polygon: start at (left of NOW, center), trace top of trajectory, then close along center.
-  // Include past block area too: fill from -HISTORY_SEC to NOW with the current block (flat).
   const leftPastX = NOW_OFFSET + (-HISTORY_SEC) * PX_PER_SEC;
   const rightX = xForT(Math.min(maxSec, samples[samples.length - 1].t));
   const points: string[] = [];
-  // Past area (flat at current block)
-  points.push(`${leftPastX},${BLOCK_HALF}`);
+  // Start along outer edge (past).
+  points.push(`${leftPastX},${outerY}`);
   points.push(`${leftPastX},${yForBlock(samples[0].block)}`);
-  // Then the predicted trajectory from t=0 forward.
   for (const s of samples) {
     if (s.t > maxSec) break;
     points.push(`${xForT(s.t)},${yForBlock(s.block)}`);
   }
-  // Close along center line.
-  points.push(`${rightX},${BLOCK_HALF}`);
+  // Close along outer edge.
+  points.push(`${rightX},${outerY}`);
 
   return (
     <>
       <polygon points={points.join(" ")} fill={color} stroke="none" />
       <polyline
         points={points.slice(1, -1).join(" ")}
-        fill="none" stroke={stroke} strokeWidth={1.5} opacity={0.85}
+        fill="none" stroke={stroke} strokeWidth={1.5} opacity={hidden ? 0.4 : 0.85}
       />
     </>
   );
 }
 
-// Small marks where attacks land / block jumps. Helps the player parse a
-// shape at a glance.
+// Event marks. Hits = red bars stacked from current block TIP toward the
+// outer edge; pierce (overkill) = extends BEYOND the outer edge, sticking
+// out to indicate damage that bled into HP.
 function BlockEventMarks({ events, side }: { events: BlockEvent[]; side: "opp" | "self" }) {
-  const yBase = BLOCK_HALF;
+  const outerY = side === "opp" ? 0 : BLOCK_BAND;
+  const yForBlock = (b: number) =>
+    side === "opp" ? outerY + blockHeight(b) : outerY - blockHeight(b);
+  // Pierce extends an extra fixed pixel per unit OUTSIDE the outer edge.
+  const PIERCE_PX_PER_UNIT = 1.5;
+  const PIERCE_MAX_EXTEND = 32;
+
   return (
     <>
       {events.map((e, i) => {
         const x = NOW_OFFSET + e.t * PX_PER_SEC;
-        const yPre = (() => {
-          const v = Math.min(BLOCK_CAP, e.pre) * PX_PER_BLOCK;
-          return side === "opp" ? yBase - v : yBase + v;
-        })();
-        const yPost = (() => {
-          const v = Math.min(BLOCK_CAP, e.post) * PX_PER_BLOCK;
-          return side === "opp" ? yBase - v : yBase + v;
-        })();
+        const yPre = yForBlock(e.pre);
+        const yPost = yForBlock(e.post);
         const color = e.kind === "hit" ? "#ff6b5a" : "#7fe3a4";
         const label = e.kind === "hit" ? `−${Math.round(e.amount)}` : `+${Math.round(e.amount)}`;
+        const pierce = e.pierce ?? 0;
+        const pierceLen = Math.min(PIERCE_MAX_EXTEND, pierce * PIERCE_PX_PER_UNIT);
         return (
           <g key={i}>
+            {/* Bar inside the block band (shows the slice of block consumed
+                / added). */}
             <line x1={x} y1={yPre} x2={x} y2={yPost} stroke={color} strokeWidth={2} opacity={0.85} />
+            {/* Pierce extends OUTSIDE the band (above top edge for opp,
+                below bottom edge for self). */}
+            {pierce > 0 && (
+              <line
+                x1={x} x2={x}
+                y1={outerY}
+                y2={side === "opp" ? outerY - pierceLen : outerY + pierceLen}
+                stroke="#ff3b30" strokeWidth={3} opacity={0.95}
+              />
+            )}
             <text
               x={x + 3}
-              y={side === "opp" ? Math.min(yPre, yPost) - 2 : Math.max(yPre, yPost) + 9}
+              y={side === "opp"
+                  ? (pierce > 0 ? outerY - pierceLen - 2 : Math.min(yPre, yPost) - 2)
+                  : (pierce > 0 ? outerY + pierceLen + 9 : Math.max(yPre, yPost) + 9)}
               fill={color}
               fontSize={9}
               fontFamily="ui-monospace, monospace"
-              opacity={0.9}
-            >{label}</text>
+              opacity={0.95}
+            >
+              {label}{pierce > 0 ? ` 貫${pierce}` : ""}
+            </text>
           </g>
         );
       })}
@@ -613,16 +688,14 @@ function BlockEventMarks({ events, side }: { events: BlockEvent[]; side: "opp" |
 function slotPendingInfo(player: PlayerState, slotIndex: number, now: number):
   { startedAt: number; fillsAt: number } | null {
   if (player.queue.length === 0) return null;
-  // Head: started at castStartedAt and is currently casting.
   const head = player.queue[0];
   if (head.kind === "draw") {
     const pos = head.drawSlots.indexOf(slotIndex);
     if (pos >= 0 && pos >= head.drawFilledCount) {
       const startedAt = player.castStartedAt;
-      return { startedAt, fillsAt: startedAt + (pos + 1) * DRAW_SEC_PER_CARD };
+      return { startedAt, fillsAt: startedAt + (pos + 1) * SEC_PER_SEN };
     }
   }
-  // Tail entries: each starts after all preceding entries finish.
   let tailStartAbs = player.castStartedAt + head.duration;
   for (let i = 1; i < player.queue.length; i++) {
     const ent = player.queue[i];
@@ -631,7 +704,7 @@ function slotPendingInfo(player: PlayerState, slotIndex: number, now: number):
       if (pos >= 0) {
         return {
           startedAt: tailStartAbs,
-          fillsAt: tailStartAbs + (pos + 1) * DRAW_SEC_PER_CARD,
+          fillsAt: tailStartAbs + (pos + 1) * SEC_PER_SEN,
         };
       }
     }
@@ -681,7 +754,7 @@ function PendingSlot({ info, now }: { info: { startedAt: number; fillsAt: number
   const total = Math.max(0.001, info.fillsAt - info.startedAt);
   const elapsed = Math.max(0, now - info.startedAt);
   const fillPct = Math.max(0, Math.min(1, elapsed / total));
-  const remaining = Math.max(0, info.fillsAt - now);
+  const remainingSen = Math.max(0, secToSen(info.fillsAt - now));
   return (
     <div style={pendingSlotFront}>
       <div style={{
@@ -691,7 +764,7 @@ function PendingSlot({ info, now }: { info: { startedAt: number; fillsAt: number
         transition: "height 80ms linear", pointerEvents: "none",
       }} />
       <div style={pendingSlotLabel}>引いてる</div>
-      <div style={pendingSlotCountdown}>{remaining.toFixed(1)}s</div>
+      <div style={pendingSlotCountdown}>{remainingSen.toFixed(1)}閃</div>
     </div>
   );
 }
@@ -700,7 +773,7 @@ function PendingBack({ info, now }: { info: { startedAt: number; fillsAt: number
   const total = Math.max(0.001, info.fillsAt - info.startedAt);
   const elapsed = Math.max(0, now - info.startedAt);
   const fillPct = Math.max(0, Math.min(1, elapsed / total));
-  const remaining = Math.max(0, info.fillsAt - now);
+  const remainingSen = Math.max(0, secToSen(info.fillsAt - now));
   return (
     <div style={pendingBack}>
       <div style={{
@@ -710,7 +783,7 @@ function PendingBack({ info, now }: { info: { startedAt: number; fillsAt: number
         transition: "height 80ms linear", pointerEvents: "none",
       }} />
       <div style={{ fontSize: 11, fontWeight: 700, color: "#a899ff", textShadow: "0 1px 2px black", zIndex: 1 }}>
-        {remaining.toFixed(1)}s
+        {remainingSen.toFixed(1)}閃
       </div>
     </div>
   );
@@ -721,14 +794,23 @@ function SimpleCard({ cardId, idx, player, now }: { cardId: number; idx: number;
   const [hover, setHover] = useState(false);
   if (!def) return null;
   const unplayable = def.cost >= 900;
-  const queued = queueRemainingTime(player, now);
-  const prereq = def.prereqQueueTime ?? 0;
-  const prereqOk = prereq <= queued;
+  // prereq is in 閃 in card def; queue remaining is in seconds.
+  const queuedSec = queueRemainingTime(player, now);
+  const prereqSen = def.prereqQueueTime ?? 0;
+  const prereqOk = prereqSen * SEC_PER_SEN <= queuedSec;
   const clickable = !unplayable && prereqOk;
+  // Is this slot the current manual reservation?
+  const reserved = player.reservation.kind === "card" && player.reservation.slotIndex === idx;
 
   const onClick = () => {
     if (!clickable) return;
     const flag = cardFlag(idx);
+    if (flag !== null) getSession()?.pushLocalInput(flag);
+  };
+  const onContextMenu = (e: React.MouseEvent) => {
+    e.preventDefault();
+    if (unplayable) return;
+    const flag = reserveCardFlag(idx);
     if (flag !== null) getSession()?.pushLocalInput(flag);
   };
 
@@ -736,24 +818,33 @@ function SimpleCard({ cardId, idx, player, now }: { cardId: number; idx: number;
     <div style={{ position: "relative" }} onMouseEnter={() => setHover(true)} onMouseLeave={() => setHover(false)}>
       <button
         onClick={onClick}
+        onContextMenu={onContextMenu}
         disabled={!clickable}
         style={{
           ...cardStyle,
           background: typeColor(def.cardType, clickable),
           cursor: clickable ? "pointer" : "not-allowed",
           boxShadow: clickable ? "0 4px 12px rgba(0,0,0,0.4)" : "none",
-          outline: def.exhausts ? "1px solid #ffaa55" : "none",
+          outline: reserved ? "2px solid #ffe066" : def.exhausts ? "1px solid #ffaa55" : "none",
           opacity: clickable ? 1 : 0.55,
         }}
       >
         {!clickable && (
           <div aria-hidden style={{ position: "absolute", inset: 0, background: "rgba(0,0,0,0.4)", pointerEvents: "none" }} />
         )}
+        {reserved && (
+          <div aria-hidden style={{
+            position: "absolute", top: -8, left: "50%", transform: "translateX(-50%)",
+            background: "#ffe066", color: "#1a1a22",
+            padding: "1px 6px", borderRadius: 4,
+            fontSize: 9, fontWeight: 700, letterSpacing: 1, zIndex: 3,
+          }}>予約中</div>
+        )}
         <div style={{ ...cardCostStyle, color: clickable ? "#ffe580" : "#cfd6e0" }}>
-          {unplayable ? "✗" : def.cost + "s"}
-          {prereq > 0 && (
+          {unplayable ? "✗" : def.cost + "閃"}
+          {prereqSen > 0 && (
             <span style={{ fontSize: 10, marginLeft: 4, color: prereqOk ? "#80ffa0" : "#ff9a40" }}>
-              要{prereq}s
+              要{prereqSen}閃
             </span>
           )}
         </div>
@@ -781,16 +872,24 @@ function DrawButton({ player }: { player: PlayerState }) {
   let drawing = false;
   for (const q of player.queue) if (q.kind === "draw") { drawing = true; break; }
   const enabled = emptyCount > 0 && !drawing;
-  const cost = emptyCount * DRAW_SEC_PER_CARD;
+  const costSen = emptyCount * DRAW_SEN_PER_CARD;
+  const isReservation =
+    player.reservation.kind === "draw"
+    || (player.reservation.kind === "default" && emptyCount > 0);
 
   const onClick = () => {
     if (!enabled) return;
     getSession()?.pushLocalInput(INPUT_DRAW);
   };
+  const onContextMenu = (e: React.MouseEvent) => {
+    e.preventDefault();
+    getSession()?.pushLocalInput(INPUT_RESERVE_DRAW);
+  };
 
   return (
     <button
       onClick={onClick}
+      onContextMenu={onContextMenu}
       disabled={!enabled}
       style={{
         ...drawButtonStyle,
@@ -800,13 +899,21 @@ function DrawButton({ player }: { player: PlayerState }) {
           : enabled ? "linear-gradient(180deg, #2c5b8e 0%, #1a3d6e 100%)" : "#1a1a22",
         color: enabled ? "#fff" : "#666",
         cursor: enabled ? "pointer" : "not-allowed",
-        borderColor: drawing ? "rgba(95,160,224,0.5)" : enabled ? "#3a7fbf" : "#2a2a35",
+        borderColor: isReservation ? "#ffe066" : drawing ? "rgba(95,160,224,0.5)" : enabled ? "#3a7fbf" : "#2a2a35",
+        outline: isReservation ? "2px solid #ffe066" : "none",
+        outlineOffset: -2,
       }}
-      title={drawing ? "ドロー中" : enabled ? `${emptyCount}枚 / ${cost}秒` : "空きなし"}
+      title={drawing ? "ドロー中" : enabled ? `${emptyCount}枚 / ${costSen}閃` : "空きなし"}
     >
+      {isReservation && (
+        <span style={{
+          background: "#ffe066", color: "#1a1a22", padding: "1px 6px",
+          borderRadius: 4, fontSize: 10, fontWeight: 700, letterSpacing: 1, marginRight: 8,
+        }}>予約中</span>
+      )}
       <span style={{ fontSize: 16, fontWeight: 700, letterSpacing: 2 }}>⇊ ドロー (D)</span>
       <span style={{ fontSize: 12, opacity: 0.85, marginLeft: 12, fontFamily: "ui-monospace, monospace" }}>
-        {drawing ? "キューに積まれている" : enabled ? `${emptyCount}枚 (合計 ${cost.toFixed(0)}s)` : "(空きなし)"}
+        {drawing ? "キューで実行中" : enabled ? `${emptyCount}枚 (合計 ${costSen}閃)` : "(空きなし)"}
       </span>
     </button>
   );
@@ -821,7 +928,8 @@ function Tooltip({ def }: { def: ReturnType<typeof getCardDef> }) {
         {def.cardType === CardType.Attack ? "攻撃"
           : def.cardType === CardType.Skill ? "技"
           : def.cardType === CardType.Power ? "パワー" : "状態"}
-        {" · "}キャスト {def.cost >= 900 ? "不可" : def.cost + "秒"}
+        {" · "}キャスト {def.cost >= 900 ? "不可" : def.cost + "閃"}
+        {(def.prereqQueueTime ?? 0) > 0 && ` · 要${def.prereqQueueTime}閃`}
         {def.exhausts && " · 1回限り(除外)"}
       </div>
       <div style={tooltipBody}>{def.description}</div>

@@ -15,20 +15,34 @@ export const INITIAL_HP = 80;
 export const MAX_HAND_SIZE = 6;
 export const INITIAL_HAND = 5;
 
-// ── Draw action ──
-// Pressing the Draw button reserves all currently-empty (non-pending) slots
-// and fills them one per second: slot i fills at now + (i+1) * DRAW_SEC_PER_CARD.
-// Drawing 3 cards = 3 sec total.
-export const DRAW_SEC_PER_CARD = 1;
-
-// How many recently-resolved cards to keep in the per-player history for the
-// timeline UI (so a card you just cast stays visible — dimmed — to the left
-// of the NOW line). Bounded for deterministic checksums.
-export const RESOLVED_HISTORY_MAX = 8;
+// ── 閃 (sen) unit ──
+// 1 閃 = SEC_PER_SEN seconds. All card costs, prereqs and the block decay
+// rate are expressed in INTEGER 閃 in card defs; the sim internally still
+// uses seconds (because frame DT = 1/60 sec). Convert with senToSec.
+export const SEC_PER_SEN = 3;
+export const senToSec = (sen: number) => sen * SEC_PER_SEN;
+export const secToSen = (sec: number) => sec / SEC_PER_SEN;
 
 // ── Block ──
-// Linear decay — 2 block per second.
-export const BLOCK_DECAY_RATE = 2.0;
+// Block decays in DISCRETE 1-unit steps, one tick per 閃 (= SEC_PER_SEN sec).
+// When block changes (gain or hit), the decay timer is reset to "1 閃 from
+// now" so a fresh stack always has a full 閃 before the first decrement.
+export const BLOCK_DECAY_SEN_PER_STEP = 1;
+
+// ── Draw action ──
+// Pressing the Draw button appends a draw entry to the queue with duration =
+// (count) × DRAW_SEN_PER_CARD 閃. Slot k fills castStartedAt + (k+1) 閃 in.
+export const DRAW_SEN_PER_CARD = 1;
+
+// Bounded history of recently-resolved cards.
+export const RESOLVED_HISTORY_MAX = 8;
+
+// Second-player advantages.
+// The second-to-act player (handle 1) starts with this much block, and their
+// cast clock is offset by SECOND_PLAYER_OFFSET_SEN 閃 — first card resolves
+// half-an-閃 later than otherwise.
+export const SECOND_PLAYER_INITIAL_BLOCK = 3;
+export const SECOND_PLAYER_OFFSET_SEN = 0.5;
 
 // ── Card return policy ──
 // Slay-style: played cards go to the discard pile after their cast resolves.

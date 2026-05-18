@@ -35,7 +35,11 @@ const opt = <T>(v: T | null, write: (v: T) => void) => { byte(v ? 1 : 0); if (v)
 
 function hashPlayer(p: PlayerState) {
   u32(p.handle);
-  f(p.hp); f(p.hpMax); f(p.block); f(p.thorns);
+  f(p.hp); f(p.hpMax);
+  // block is now an integer; encode directly. nextBlockDecayAt is fixed-pt.
+  u32(p.block | 0);
+  f(isFinite(p.nextBlockDecayAt) ? p.nextBlockDecayAt : 1e9);
+  f(p.thorns);
   u32(p.queue.length);
   for (const q of p.queue) {
     if (q.kind === "card") {
@@ -49,6 +53,13 @@ function hashPlayer(p: PlayerState) {
   f(p.castStartedAt);
   u32(p.resolvedCards.length);
   for (const r of p.resolvedCards) { u32(r.cardId); f(r.duration); f(r.resolvedAt); }
+  // Reservation kind + payload.
+  if (p.reservation.kind === "default") { byte(0); }
+  else if (p.reservation.kind === "draw") { byte(1); }
+  else { byte(2); u32(p.reservation.slotIndex); }
+  // openedAt — null is a sentinel ("hasn't acted yet").
+  byte(p.openedAt === null ? 0 : 1);
+  if (p.openedAt !== null) f(p.openedAt);
   f(p.strength); f(p.vulnerableSecs); f(p.weakSecs);
   opt(p.rage, (r) => { f(r.blockPerAttack); f(r.remaining); });
   opt(p.metallicize, (m) => { f(m.blockPerSec); });
