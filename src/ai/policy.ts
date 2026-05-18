@@ -45,17 +45,22 @@ function playableIndices(p: PlayerState, now: number): number[] {
 }
 
 // True if the AI should press Draw this frame. Triggers when the hand has
-// any empty (non-pending) slot AND no draw is currently in progress AND
-// the AI doesn't have a queueable card right now (so it doesn't pre-empt
-// a strong play). Cap so the AI doesn't spam — it's already 1-per-frame.
+// any empty non-reserved slot AND no draw is already queued AND the AI
+// doesn't have a queueable card right now (so it doesn't pre-empt a strong
+// play). Cap so the AI doesn't spam — it's already 1-per-frame.
 function shouldDraw(p: PlayerState, playableCount: number): boolean {
-  if (p.pendingDraws.length > 0) return false;
+  for (const q of p.queue) if (q.kind === "draw") return false;
+  const reserved = new Set<number>();
+  for (const q of p.queue) {
+    if (q.kind === "draw") {
+      for (let k = q.drawFilledCount; k < q.drawSlots.length; k++) reserved.add(q.drawSlots[k]);
+    }
+  }
   let emptyCount = 0;
-  for (let i = 0; i < p.hand.length; i++) if (p.hand[i] === null) emptyCount++;
+  for (let i = 0; i < p.hand.length; i++) {
+    if (p.hand[i] === null && !reserved.has(i)) emptyCount++;
+  }
   if (emptyCount === 0) return false;
-  // Strong incentive when hand is nearly empty; otherwise refill when no
-  // cards are playable (the queue is presumably full or current options
-  // don't meet prereqs).
   return emptyCount >= 2 || playableCount === 0;
 }
 

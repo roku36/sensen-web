@@ -1,32 +1,30 @@
-// 2D HUD-only view of the cast-time game (v3 layout).
+// 2D HUD view of the cast-time game (v4 layout).
 //
 // Layout:
-//   ┌─────────────┬─────────────────────────────────┐
-//   │ topbar      │                                 │
-//   ├─────────────┼─────────────────────────────────┤
-//   │             │ opp hand row (6 fixed slots)    │
-//   │ left info   ├─────────────────────────────────┤
-//   │ ─ 相手 card │ timeline                        │
-//   │ ─ 自分 card │   - opp track / NOW / self      │
-//   │             ├─────────────────────────────────┤
-//   │             │ self hand row (6 fixed slots)   │
-//   │             ├─────────────────────────────────┤
-//   │             │ Draw button (6-card wide)       │
-//   └─────────────┴─────────────────────────────────┘
-//
-// Hand is FIXED at 6 slots. Empty slots stay as placeholders. Pressing the
-// Draw button reserves all empty slots and refills them one per second.
+//   ┌──────────┬────────────────────────────────────────┐
+//   │ topbar                                            │
+//   ├──────────┼────────────────────────────────────────┤
+//   │          │ opp hand row (6 fixed slots)           │
+//   │ info col ├────────────────────────────────────────┤
+//   │  - 相手  │ TIMELINE (tall)                        │
+//   │   HP+buf │   ─ opp queue row                      │
+//   │  - 自分  │   ─ block band (opp block ↑ from mid,  │
+//   │   HP+buf │     self block ↓ from mid, predicted   │
+//   │          │     decay/gains/hits along the queue)  │
+//   │          │   ─ self queue row                     │
+//   │          ├────────────────────────────────────────┤
+//   │          │ self hand row (6 fixed slots)          │
+//   │          ├────────────────────────────────────────┤
+//   │          │ Draw button (6-card width)             │
+//   └──────────┴────────────────────────────────────────┘
 
 import { useEffect, useRef, useState } from "react";
 import { CardEffect, CardId, CardType, getCardDef } from "../../sim/cards";
 import { cardFlag, INPUT_DRAW } from "../../sim/input";
-import { queueRemainingTime } from "../../sim/reducer";
-import { DRAW_SEC_PER_CARD, DT, MAX_HAND_SIZE } from "../../sim/rules";
-import { PlayerState, ResolvedEntry } from "../../sim/state";
+import { queueRemainingTime, reservedSlotSet } from "../../sim/reducer";
+import { BLOCK_DECAY_RATE, DRAW_SEC_PER_CARD, DT, MAX_HAND_SIZE } from "../../sim/rules";
+import { PlayerState, QueueEntry, ResolvedEntry } from "../../sim/state";
 
-// Queue rendering scale: 35 px per second of cast time so a cost-3 chip is
-// 105 px, cost-6 is 210 px — the visual proportion to commitment is direct.
-const PX_PER_SEC = 35;
 import { getActiveMode, getSession, useKeyboardInput } from "../hooks";
 import { useStore } from "../store";
 import { PilePeek } from "./PilePeek";
@@ -41,33 +39,47 @@ type Peek =
   | { kind: "discard"; side: 0 | 1 }
   | null;
 
-// ── Card geometry ──
+// ── Layout constants ──
+const PX_PER_SEC = 35;
 const CARD_W = 130;
 const CARD_H = 180;
 const CARD_GAP = 8;
 const HAND_ROW_WIDTH = CARD_W * MAX_HAND_SIZE + CARD_GAP * (MAX_HAND_SIZE - 1);
 
-// ── Opponent backs ──
 const BACK_W = 50;
 const BACK_H = 70;
 const BACK_GAP = 4;
 const OPP_HAND_WIDTH = BACK_W * MAX_HAND_SIZE + BACK_GAP * (MAX_HAND_SIZE - 1);
 
-// ── Timeline ──
+// Timeline geometry. The block band sits between the two queue rows.
+// Opp block grows UPWARD from the center axis, self block grows DOWNWARD.
 const HISTORY_SEC = 14;
 const EDGE_PAD = 20;
-const NOW_OFFSET = HISTORY_SEC * PX_PER_SEC + EDGE_PAD;
-const ROW_HEIGHT = 60;
-const CENTER_GUTTER = 30;
-const BOX_HEIGHT = 46;
+const NOW_OFFSET = HISTORY_SEC * PX_PER_SEC + EDGE_PAD; // ≈ 510 px
+const QUEUE_ROW = 56;
+const BLOCK_BAND = 180;          // 90 px per side
+const BLOCK_HALF = BLOCK_BAND / 2;
+const BOX_HEIGHT = 44;
 const MIN_TIMELINE_SEC = 30;
 const NOW_VIEWPORT_LEFT_PX = 80;
-const TIMELINE_HEIGHT = ROW_HEIGHT * 2 + CENTER_GUTTER;
+const TIMELINE_HEIGHT = QUEUE_ROW * 2 + BLOCK_BAND;
+
+// Y coordinates within the inner timeline div.
+const OPP_QUEUE_Y_TOP = (QUEUE_ROW - BOX_HEIGHT) / 2;
+const BLOCK_TOP = QUEUE_ROW;                    // upper edge of opp's block area
+const BLOCK_CENTER = QUEUE_ROW + BLOCK_HALF;     // horizontal axis (block = 0)
+const BLOCK_BOTTOM = QUEUE_ROW + BLOCK_BAND;     // lower edge of self's block area
+const SELF_QUEUE_Y_TOP = QUEUE_ROW + BLOCK_BAND + (QUEUE_ROW - BOX_HEIGHT) / 2;
+
+// How much block 1 vertical pixel represents. Caps the visual scale at
+// ~BLOCK_HALF / PX_PER_BLOCK = 90/4 = 22.5 block before clipping.
+const PX_PER_BLOCK = 4;
+const BLOCK_CAP = BLOCK_HALF / PX_PER_BLOCK;
 
 export function SimpleGameplay() {
   useKeyboardInput();
   const game = useStore((s) => s.game);
-  useStore((s) => s.gameFrame); // re-render every sim step
+  useStore((s) => s.gameFrame);
   const localPlayer = useStore((s) => s.localPlayer);
   const setScreen = useStore((s) => s.setScreen);
   const aiName = useStore((s) => s.aiOpponentName);
@@ -131,9 +143,7 @@ export function SimpleGameplay() {
   );
 }
 
-// ── Player info card (left column). Both stacked vertically aligned with
-// the timeline tracks so HP/block/buffs are easy to scan against the
-// player's current queue activity.
+// ── Player info card. Block is NOT here anymore — it's a timeline. ──
 
 function PlayerInfoCard({
   player, title, side, onPeek,
@@ -148,11 +158,8 @@ function PlayerInfoCard({
       <Bar pct={hpPct}
            color={hpPct > 0.4 ? "#34c759" : hpPct > 0.2 ? "#ffcc00" : "#ff3b30"}
            label={`HP ${Math.round(player.hp)} / ${player.hpMax}`} />
-      <div style={infoBlockRow}>
-        <BlockBadge value={player.block} />
-        {player.thorns > 0 && <span style={pill("#ff9f43")}>棘 {Math.round(player.thorns)}</span>}
-      </div>
       <div style={pillRow}>
+        {player.thorns > 0 && <span style={pill("#ff9f43")}>棘 {Math.round(player.thorns)}</span>}
         {player.strength !== 0 && <span style={pill("#ff6961")}>筋力 {player.strength > 0 ? "+" : ""}{player.strength}</span>}
         {player.vulnerableSecs > 0 && <span style={pill("#ff8a00")}>脆弱 {player.vulnerableSecs.toFixed(1)}秒</span>}
         {player.weakSecs > 0 && <span style={pill("#a899ff")}>弱体 {player.weakSecs.toFixed(1)}秒</span>}
@@ -177,21 +184,26 @@ function countCards(hand: (number | null)[]): number {
   return n;
 }
 
-// ── Battle zone: unified shared-time timeline ──
+// ── Battle zone: timeline with center block band ──
 
 function BattleZone({ op, me, now }: { op: PlayerState; me: PlayerState; now: number }) {
-  const opQueue = computeQueueBoxes(op, now);
-  const meQueue = computeQueueBoxes(me, now);
+  const opQueue = computeQueueLayout(op, now);
+  const meQueue = computeQueueLayout(me, now);
   const opHist = computeHistoryBoxes(op.resolvedCards, now);
   const meHist = computeHistoryBoxes(me.resolvedCards, now);
 
   const maxSec = Math.max(
     MIN_TIMELINE_SEC,
-    Math.ceil((opQueue[opQueue.length - 1]?.endRel ?? 0) + 2),
-    Math.ceil((meQueue[meQueue.length - 1]?.endRel ?? 0) + 2),
+    Math.ceil(opQueue.totalSec + 2),
+    Math.ceil(meQueue.totalSec + 2),
   );
   const innerWidth = NOW_OFFSET + maxSec * PX_PER_SEC + EDGE_PAD;
 
+  // Block trajectories (current + predicted) for both players.
+  const opBlock = blockTrajectoryAt(op, me, now, maxSec);
+  const meBlock = blockTrajectoryAt(me, op, now, maxSec);
+
+  // Scroll setup.
   const scrollRef = useRef<HTMLDivElement | null>(null);
   useEffect(() => {
     const el = scrollRef.current;
@@ -225,31 +237,60 @@ function BattleZone({ op, me, now }: { op: PlayerState; me: PlayerState; now: nu
           {Array.from({ length: maxSec + 1 }).map((_, s) => (
             <TimeTick key={`f${s}`} sec={s} totalHeight={TIMELINE_HEIGHT} />
           ))}
-          <div style={{ ...centerDivider, top: ROW_HEIGHT }} />
-          <div style={{ ...nowDivider, left: NOW_OFFSET - 18, top: ROW_HEIGHT + CENTER_GUTTER / 2 - 8 }}>NOW</div>
+          {/* Block band background. */}
+          <div style={{
+            position: "absolute", left: 0, right: 0,
+            top: BLOCK_TOP, height: BLOCK_BAND,
+            background: "linear-gradient(180deg, rgba(95,160,224,0.05) 0%, rgba(255,224,102,0.10) 50%, rgba(95,160,224,0.05) 100%)",
+            pointerEvents: "none",
+          }} />
+          {/* Horizontal axis (block = 0). */}
+          <div style={{
+            position: "absolute", left: 0, right: 0,
+            top: BLOCK_CENTER, height: 1,
+            background: "rgba(255,224,102,0.55)",
+            boxShadow: "0 0 4px rgba(255,224,102,0.5)",
+            pointerEvents: "none",
+          }} />
+          {/* SVG block trajectories. innerWidth wide, BLOCK_BAND tall, shifted to start at BLOCK_TOP. */}
+          <svg
+            width={innerWidth} height={BLOCK_BAND}
+            style={{ position: "absolute", left: 0, top: BLOCK_TOP, pointerEvents: "none" }}
+          >
+            <BlockArea trajectory={opBlock} side="opp" maxSec={maxSec} />
+            <BlockArea trajectory={meBlock} side="self" maxSec={maxSec} />
+            <BlockEventMarks events={opBlock.events} side="opp" />
+            <BlockEventMarks events={meBlock.events} side="self" />
+          </svg>
+          <div style={{ ...nowDivider, left: NOW_OFFSET - 18, top: BLOCK_CENTER - 8 }}>NOW</div>
           <div style={{ ...nowLine, left: NOW_OFFSET, height: TIMELINE_HEIGHT }} />
+          {/* Queue chips. */}
           {opHist.map((b, i) => (
-            <QueueBox key={`oh${i}`} {...b} yTop={(ROW_HEIGHT - BOX_HEIGHT) / 2} />
+            <QueueBox key={`oh${i}`} {...b} yTop={OPP_QUEUE_Y_TOP} />
           ))}
-          {opQueue.map((b, i) => (
-            <QueueBox key={`o${i}`} {...b} yTop={(ROW_HEIGHT - BOX_HEIGHT) / 2} />
+          {opQueue.boxes.map((b, i) => (
+            <QueueBox key={`o${i}`} {...b} yTop={OPP_QUEUE_Y_TOP} />
           ))}
           {meHist.map((b, i) => (
-            <QueueBox key={`mh${i}`} {...b} yTop={ROW_HEIGHT + CENTER_GUTTER + (ROW_HEIGHT - BOX_HEIGHT) / 2} />
+            <QueueBox key={`mh${i}`} {...b} yTop={SELF_QUEUE_Y_TOP} />
           ))}
-          {meQueue.map((b, i) => (
-            <QueueBox key={`m${i}`} {...b} yTop={ROW_HEIGHT + CENTER_GUTTER + (ROW_HEIGHT - BOX_HEIGHT) / 2} />
+          {meQueue.boxes.map((b, i) => (
+            <QueueBox key={`m${i}`} {...b} yTop={SELF_QUEUE_Y_TOP} />
           ))}
-          {opQueue.length === 0 && <span style={{ ...idleHint, top: ROW_HEIGHT / 2 - 7 }}>相手キュー空</span>}
-          {meQueue.length === 0 && <span style={{ ...idleHint, top: ROW_HEIGHT + CENTER_GUTTER + ROW_HEIGHT / 2 - 7 }}>自分キュー空</span>}
+          {opQueue.boxes.length === 0 && <span style={{ ...idleHint, top: QUEUE_ROW / 2 - 7 }}>相手キュー空</span>}
+          {meQueue.boxes.length === 0 && <span style={{ ...idleHint, top: SELF_QUEUE_Y_TOP + BOX_HEIGHT / 2 - 7 }}>自分キュー空</span>}
         </div>
       </div>
     </div>
   );
 }
 
+// ── Queue / history box layout ──
+
 interface BoxLayout {
-  cardId: number;
+  cardId: number | null;     // null for draw entries
+  drawSlots?: number[] | null;
+  drawFilledCount?: number;
   duration: number;
   startRel: number;
   endRel: number;
@@ -257,19 +298,28 @@ interface BoxLayout {
   resolved?: boolean;
 }
 
-function computeQueueBoxes(player: PlayerState, now: number): BoxLayout[] {
-  if (player.queue.length === 0) return [];
+interface QueueLayout {
+  boxes: BoxLayout[];
+  totalSec: number;
+}
+
+function computeQueueLayout(player: PlayerState, now: number): QueueLayout {
+  if (player.queue.length === 0) return { boxes: [], totalSec: 0 };
   let endRel = Math.max(0, player.queue[0].duration - (now - player.castStartedAt));
-  return player.queue.map((q, i) => {
+  const boxes: BoxLayout[] = player.queue.map((q, i) => {
     if (i > 0) endRel += q.duration;
+    const isCard = q.kind === "card";
     return {
-      cardId: q.cardId,
+      cardId: isCard ? (q as { cardId: CardId }).cardId : null,
+      drawSlots: !isCard ? (q as { drawSlots: number[] }).drawSlots : null,
+      drawFilledCount: !isCard ? (q as { drawFilledCount: number }).drawFilledCount : undefined,
       duration: q.duration,
       endRel,
       startRel: endRel - q.duration,
       isHead: i === 0,
     };
   });
+  return { boxes, totalSec: endRel };
 }
 
 function computeHistoryBoxes(resolved: ResolvedEntry[], now: number): BoxLayout[] {
@@ -301,7 +351,7 @@ function TimeTick({ sec, totalHeight }: { sec: number; totalHeight: number }) {
       }} />
       {sec !== 0 && (
         <div style={{
-          position: "absolute", left: x + 2, top: totalHeight / 2 - 6,
+          position: "absolute", left: x + 2, top: 4,
           fontSize: 9,
           color: isPast ? "rgba(255,255,255,0.25)" : "rgba(255,255,255,0.4)",
           fontFamily: "ui-monospace, monospace",
@@ -312,9 +362,12 @@ function TimeTick({ sec, totalHeight }: { sec: number; totalHeight: number }) {
   );
 }
 
-function QueueBox({ cardId, duration, startRel, endRel, isHead, yTop, resolved }: BoxLayout & { yTop: number }) {
-  const def = getCardDef(cardId);
-  const baseColor = def?.cardType === CardType.Attack ? "#e3553c"
+function QueueBox({ cardId, drawSlots, drawFilledCount, duration, startRel, endRel, isHead, yTop, resolved }: BoxLayout & { yTop: number }) {
+  const isDraw = drawSlots != null;
+  const def = !isDraw && cardId != null ? getCardDef(cardId) : null;
+
+  const baseColor = isDraw ? "#2c5b8e"
+    : def?.cardType === CardType.Attack ? "#e3553c"
     : def?.cardType === CardType.Power ? "#b465e0"
     : "#5fa0e0";
   const color = resolved ? dim(baseColor, 0.45) : baseColor;
@@ -322,6 +375,15 @@ function QueueBox({ cardId, duration, startRel, endRel, isHead, yTop, resolved }
   const w = duration * PX_PER_SEC;
   const glow = !resolved && isHead && endRel < 0.4;
   const glowIntensity = glow ? 1 - endRel / 0.4 : 0;
+
+  let label: string;
+  if (isDraw) {
+    const remaining = (drawSlots!.length - (drawFilledCount ?? 0));
+    label = `ドロー ${remaining}枚`;
+  } else {
+    label = def?.name ?? "??";
+  }
+
   return (
     <div
       style={{
@@ -346,9 +408,11 @@ function QueueBox({ cardId, duration, startRel, endRel, isHead, yTop, resolved }
         textAlign: "right",
       }}
     >
-      <div style={queueBoxName}>{def?.name ?? "??"}</div>
+      <div style={queueBoxName}>{label}</div>
       <div style={queueBoxMeta}>
-        {resolved ? "発動済" : isHead ? `あと ${Math.max(0, endRel).toFixed(1)}s` : `${duration}s`}
+        {resolved ? "発動済"
+          : isHead ? `あと ${Math.max(0, endRel).toFixed(1)}s`
+          : `${duration}s`}
       </div>
     </div>
   );
@@ -363,24 +427,217 @@ function dim(hex: string, k: number): string {
   return `rgb(${r}, ${g}, ${b})`;
 }
 
-function BlockBadge({ value }: { value: number }) {
-  if (value <= 0) return <span style={{ ...blockBadge, opacity: 0.4 }}>🛡 0</span>;
-  return <span style={blockBadge}>🛡 {Math.round(value)}</span>;
+// ── Block prediction ──
+//
+// For player p (whose block we're predicting):
+//   - block decays at BLOCK_DECAY_RATE per second
+//   - p's OWN queued cards with Block effect ADD block at their resolve time
+//   - OPPONENT's queued ATTACK cards SUBTRACT damage at their resolve time
+//     (clipped at 0; we ignore overflow into HP for this view)
+// We sample at every event for an exact piecewise-linear trajectory.
+
+interface BlockSample { t: number; block: number; }   // t is relative to now
+interface BlockEvent {
+  t: number;
+  kind: "gain" | "hit";
+  amount: number;
+  pre: number;
+  post: number;
+}
+interface BlockTraj { samples: BlockSample[]; events: BlockEvent[]; }
+
+function blockTrajectoryAt(p: PlayerState, opp: PlayerState, now: number, horizonSec: number): BlockTraj {
+  const events: { t: number; kind: "gain" | "hit"; amount: number }[] = [];
+
+  // Helper to enumerate cast resolutions in `state`'s queue as { t, def }.
+  const enumerate = (state: PlayerState, onResolve: (t: number, ent: QueueEntry) => void) => {
+    if (state.queue.length === 0) return;
+    let t = Math.max(0, state.queue[0].duration - (now - state.castStartedAt));
+    onResolve(t, state.queue[0]);
+    for (let i = 1; i < state.queue.length; i++) {
+      t += state.queue[i].duration;
+      onResolve(t, state.queue[i]);
+    }
+  };
+
+  // p's own defenses → block gains.
+  enumerate(p, (t, ent) => {
+    if (ent.kind !== "card") return;
+    const def = getCardDef(ent.cardId);
+    if (!def) return;
+    const blk = blockAmount(def.effect);
+    if (blk > 0) events.push({ t, kind: "gain", amount: blk });
+  });
+
+  // opp's attacks → block hits.
+  enumerate(opp, (t, ent) => {
+    if (ent.kind !== "card") return;
+    const def = getCardDef(ent.cardId);
+    if (!def) return;
+    const dmg = baseAttackDamage(def.effect);
+    if (dmg > 0) events.push({ t, kind: "hit", amount: dmg });
+  });
+
+  events.sort((a, b) => a.t - b.t);
+
+  const samples: BlockSample[] = [];
+  const eventDetails: BlockEvent[] = [];
+  let block = p.block;
+  let lastT = 0;
+  samples.push({ t: 0, block });
+  for (const e of events) {
+    if (e.t > horizonSec) break;
+    // Decay between lastT and e.t.
+    const dt = e.t - lastT;
+    const newBlock = Math.max(0, block - BLOCK_DECAY_RATE * dt);
+    if (dt > 0.001) samples.push({ t: e.t, block: newBlock });
+    block = newBlock;
+    const pre = block;
+    if (e.kind === "gain") block = Math.min(BLOCK_CAP * 2, block + e.amount);
+    else block = Math.max(0, block - e.amount);
+    samples.push({ t: e.t, block });
+    eventDetails.push({ t: e.t, kind: e.kind, amount: e.amount, pre, post: block });
+    lastT = e.t;
+  }
+  // Final decay to horizon.
+  const dt = horizonSec - lastT;
+  if (dt > 0.001) {
+    samples.push({ t: horizonSec, block: Math.max(0, block - BLOCK_DECAY_RATE * dt) });
+  }
+  return { samples, events: eventDetails };
 }
 
-// ── Hands ──
-//
-// Fixed 6-slot row. Slot states:
-//   - card present → show card (front=face-up, opp=face-down back)
-//   - pending draw (slot is in pendingDraws) → show countdown chip
-//   - empty (no card, not pending) → show empty placeholder
-// The row width is locked so adding/removing cards never shifts neighbors.
-
-interface PendingInfo { startedAt: number; fillsAt: number; }
-function pendingForSlot(player: PlayerState, slotIndex: number): PendingInfo | null {
-  for (const d of player.pendingDraws) {
-    if (d.slotIndex === slotIndex) return { startedAt: d.startedAt, fillsAt: d.fillsAt };
+function blockAmount(e: CardEffect): number {
+  switch (e.kind) {
+    case "Block": return e.amount;
+    case "Combo": return e.effects.reduce((s, x) => s + blockAmount(x), 0);
+    default: return 0;
   }
+}
+
+function baseAttackDamage(e: CardEffect): number {
+  switch (e.kind) {
+    case "Damage": return e.amount;
+    case "MultiHit": return e.damage * e.hits;
+    case "Combo": return e.effects.reduce((s, x) => s + baseAttackDamage(x), 0);
+    default: return 0;
+  }
+}
+
+// Render the filled block-area polygon for one side.
+function BlockArea({ trajectory, side, maxSec }: { trajectory: BlockTraj; side: "opp" | "self"; maxSec: number }) {
+  const samples = trajectory.samples;
+  if (samples.length < 2) return null;
+  const color = side === "opp"
+    ? "rgba(95, 160, 224, 0.45)"   // opp = soft blue, filling upward
+    : "rgba(95, 200, 130, 0.45)";  // self = soft green, filling downward
+  const stroke = side === "opp" ? "#5fa0e0" : "#5fc882";
+  const yForBlock = (b: number) => {
+    const clamped = Math.min(BLOCK_CAP, Math.max(0, b));
+    const h = clamped * PX_PER_BLOCK;
+    return side === "opp"
+      ? BLOCK_HALF - h            // opp grows up from center
+      : BLOCK_HALF + h;           // self grows down from center
+  };
+  const xForT = (t: number) => NOW_OFFSET + t * PX_PER_SEC;
+
+  // Polygon: start at (left of NOW, center), trace top of trajectory, then close along center.
+  // Include past block area too: fill from -HISTORY_SEC to NOW with the current block (flat).
+  const leftPastX = NOW_OFFSET + (-HISTORY_SEC) * PX_PER_SEC;
+  const rightX = xForT(Math.min(maxSec, samples[samples.length - 1].t));
+  const points: string[] = [];
+  // Past area (flat at current block)
+  points.push(`${leftPastX},${BLOCK_HALF}`);
+  points.push(`${leftPastX},${yForBlock(samples[0].block)}`);
+  // Then the predicted trajectory from t=0 forward.
+  for (const s of samples) {
+    if (s.t > maxSec) break;
+    points.push(`${xForT(s.t)},${yForBlock(s.block)}`);
+  }
+  // Close along center line.
+  points.push(`${rightX},${BLOCK_HALF}`);
+
+  return (
+    <>
+      <polygon points={points.join(" ")} fill={color} stroke="none" />
+      <polyline
+        points={points.slice(1, -1).join(" ")}
+        fill="none" stroke={stroke} strokeWidth={1.5} opacity={0.85}
+      />
+    </>
+  );
+}
+
+// Small marks where attacks land / block jumps. Helps the player parse a
+// shape at a glance.
+function BlockEventMarks({ events, side }: { events: BlockEvent[]; side: "opp" | "self" }) {
+  const yBase = BLOCK_HALF;
+  return (
+    <>
+      {events.map((e, i) => {
+        const x = NOW_OFFSET + e.t * PX_PER_SEC;
+        const yPre = (() => {
+          const v = Math.min(BLOCK_CAP, e.pre) * PX_PER_BLOCK;
+          return side === "opp" ? yBase - v : yBase + v;
+        })();
+        const yPost = (() => {
+          const v = Math.min(BLOCK_CAP, e.post) * PX_PER_BLOCK;
+          return side === "opp" ? yBase - v : yBase + v;
+        })();
+        const color = e.kind === "hit" ? "#ff6b5a" : "#7fe3a4";
+        const label = e.kind === "hit" ? `−${Math.round(e.amount)}` : `+${Math.round(e.amount)}`;
+        return (
+          <g key={i}>
+            <line x1={x} y1={yPre} x2={x} y2={yPost} stroke={color} strokeWidth={2} opacity={0.85} />
+            <text
+              x={x + 3}
+              y={side === "opp" ? Math.min(yPre, yPost) - 2 : Math.max(yPre, yPost) + 9}
+              fill={color}
+              fontSize={9}
+              fontFamily="ui-monospace, monospace"
+              opacity={0.9}
+            >{label}</text>
+          </g>
+        );
+      })}
+    </>
+  );
+}
+
+// ── Hands (fixed 6 slots, reserved derived from queue) ──
+
+// Resolve a slot index to its pending-draw timing, if any. Walks the queue
+// and finds the (single) draw entry that targets this slot, accounting for
+// queue position: the head's draw fires at castStartedAt + offset, tail
+// entries' draws fire after the cumulative wait for prior entries.
+function slotPendingInfo(player: PlayerState, slotIndex: number, now: number):
+  { startedAt: number; fillsAt: number } | null {
+  if (player.queue.length === 0) return null;
+  // Head: started at castStartedAt and is currently casting.
+  const head = player.queue[0];
+  if (head.kind === "draw") {
+    const pos = head.drawSlots.indexOf(slotIndex);
+    if (pos >= 0 && pos >= head.drawFilledCount) {
+      const startedAt = player.castStartedAt;
+      return { startedAt, fillsAt: startedAt + (pos + 1) * DRAW_SEC_PER_CARD };
+    }
+  }
+  // Tail entries: each starts after all preceding entries finish.
+  let tailStartAbs = player.castStartedAt + head.duration;
+  for (let i = 1; i < player.queue.length; i++) {
+    const ent = player.queue[i];
+    if (ent.kind === "draw") {
+      const pos = ent.drawSlots.indexOf(slotIndex);
+      if (pos >= 0) {
+        return {
+          startedAt: tailStartAbs,
+          fillsAt: tailStartAbs + (pos + 1) * DRAW_SEC_PER_CARD,
+        };
+      }
+    }
+    tailStartAbs += ent.duration;
+  }
+  void now;
   return null;
 }
 
@@ -389,7 +646,7 @@ function OpponentHand({ player, now }: { player: PlayerState; now: number }) {
     <div style={{ ...oppHandRow, width: OPP_HAND_WIDTH }}>
       {Array.from({ length: MAX_HAND_SIZE }).map((_, i) => {
         const card = player.hand[i];
-        const pending = pendingForSlot(player, i);
+        const pending = slotPendingInfo(player, i, now);
         if (card !== null) {
           return <div key={i} style={cardBack}><div style={cardBackSigil}>✦</div></div>;
         }
@@ -407,7 +664,7 @@ function SelfHand({ player, now }: { player: PlayerState; now: number }) {
     <div style={{ ...handRow, width: HAND_ROW_WIDTH }}>
       {Array.from({ length: MAX_HAND_SIZE }).map((_, i) => {
         const card = player.hand[i];
-        const pending = pendingForSlot(player, i);
+        const pending = slotPendingInfo(player, i, now);
         if (card !== null) {
           return <SimpleCard key={i} cardId={card} idx={i} player={player} now={now} />;
         }
@@ -420,9 +677,7 @@ function SelfHand({ player, now }: { player: PlayerState; now: number }) {
   );
 }
 
-// Self-side pending: shows "残り Ns" + a water-fill that uses
-// (fillsAt - startedAt) as a stable denominator regardless of other plays.
-function PendingSlot({ info, now }: { info: PendingInfo; now: number }) {
+function PendingSlot({ info, now }: { info: { startedAt: number; fillsAt: number }; now: number }) {
   const total = Math.max(0.001, info.fillsAt - info.startedAt);
   const elapsed = Math.max(0, now - info.startedAt);
   const fillPct = Math.max(0, Math.min(1, elapsed / total));
@@ -441,7 +696,7 @@ function PendingSlot({ info, now }: { info: PendingInfo; now: number }) {
   );
 }
 
-function PendingBack({ info, now }: { info: PendingInfo; now: number }) {
+function PendingBack({ info, now }: { info: { startedAt: number; fillsAt: number }; now: number }) {
   const total = Math.max(0.001, info.fillsAt - info.startedAt);
   const elapsed = Math.max(0, now - info.startedAt);
   const fillPct = Math.max(0, Math.min(1, elapsed / total));
@@ -517,15 +772,14 @@ function SimpleCard({ cardId, idx, player, now }: { cardId: number; idx: number;
   );
 }
 
-// Wide Draw button under the hand. Width = full hand row. Disabled when
-// there's no empty (non-pending) slot to fill, OR a draw is already
-// in-flight (can't re-arm mid-cycle).
 function DrawButton({ player }: { player: PlayerState }) {
+  const reserved = reservedSlotSet(player);
   let emptyCount = 0;
   for (let i = 0; i < player.hand.length; i++) {
-    if (player.hand[i] === null && pendingForSlot(player, i) === null) emptyCount++;
+    if (player.hand[i] === null && !reserved.has(i)) emptyCount++;
   }
-  const drawing = player.pendingDraws.length > 0;
+  let drawing = false;
+  for (const q of player.queue) if (q.kind === "draw") { drawing = true; break; }
   const enabled = emptyCount > 0 && !drawing;
   const cost = emptyCount * DRAW_SEC_PER_CARD;
 
@@ -548,17 +802,11 @@ function DrawButton({ player }: { player: PlayerState }) {
         cursor: enabled ? "pointer" : "not-allowed",
         borderColor: drawing ? "rgba(95,160,224,0.5)" : enabled ? "#3a7fbf" : "#2a2a35",
       }}
-      title={drawing ? "引いてる中" : enabled ? `${emptyCount}枚 / ${cost}秒` : "引けるスロットなし"}
+      title={drawing ? "ドロー中" : enabled ? `${emptyCount}枚 / ${cost}秒` : "空きなし"}
     >
-      <span style={{ fontSize: 16, fontWeight: 700, letterSpacing: 2 }}>
-        ⇊ ドロー (D)
-      </span>
+      <span style={{ fontSize: 16, fontWeight: 700, letterSpacing: 2 }}>⇊ ドロー (D)</span>
       <span style={{ fontSize: 12, opacity: 0.85, marginLeft: 12, fontFamily: "ui-monospace, monospace" }}>
-        {drawing
-          ? `引いてる中… 残り ${player.pendingDraws.length}枚`
-          : enabled
-            ? `${emptyCount}枚 (合計 ${cost.toFixed(0)}s)`
-            : "(空きなし)"}
+        {drawing ? "キューに積まれている" : enabled ? `${emptyCount}枚 (合計 ${cost.toFixed(0)}s)` : "(空きなし)"}
       </span>
     </button>
   );
@@ -648,11 +896,11 @@ function effectText(e: CardEffect): string {
 }
 
 function typeColor(t: CardType, active: boolean): string {
-  const dim = active ? 1 : 0.55;
+  const d = active ? 1 : 0.55;
   switch (t) {
-    case CardType.Attack: return `rgba(${(193 * dim) | 0}, ${(45 * dim) | 0}, ${(45 * dim) | 0}, 1)`;
-    case CardType.Skill:  return `rgba(${(45 * dim) | 0}, ${(105 * dim) | 0}, ${(193 * dim) | 0}, 1)`;
-    case CardType.Power:  return `rgba(${(140 * dim) | 0}, ${(60 * dim) | 0}, ${(193 * dim) | 0}, 1)`;
+    case CardType.Attack: return `rgba(${(193 * d) | 0}, ${(45 * d) | 0}, ${(45 * d) | 0}, 1)`;
+    case CardType.Skill:  return `rgba(${(45 * d) | 0}, ${(105 * d) | 0}, ${(193 * d) | 0}, 1)`;
+    case CardType.Power:  return `rgba(${(140 * d) | 0}, ${(60 * d) | 0}, ${(193 * d) | 0}, 1)`;
     case CardType.Status: return "#444";
   }
 }
@@ -682,9 +930,6 @@ const infoCard: React.CSSProperties = {
 const infoCardTitle: React.CSSProperties = {
   fontSize: 12, opacity: 0.75, letterSpacing: 1.5, fontWeight: 600, marginBottom: 2,
 };
-const infoBlockRow: React.CSSProperties = {
-  display: "flex", flexWrap: "wrap", gap: 6, alignItems: "center",
-};
 const rightStack: React.CSSProperties = {
   display: "flex", flexDirection: "column", gap: 8, flex: 1, minWidth: 0,
 };
@@ -694,7 +939,6 @@ const pileStack: React.CSSProperties = { display: "flex", gap: 6, marginTop: 4 }
 const barTrack: React.CSSProperties = { background: "#0c0c12", border: "1px solid #2a2a35", borderRadius: 4, overflow: "hidden" };
 const pill = (color: string): React.CSSProperties => ({ display: "inline-block", padding: "2px 8px", borderRadius: 999, background: `${color}22`, color, fontSize: 11, border: `1px solid ${color}55` });
 
-// Opponent hand row: fixed 6 backs, centered.
 const oppHandRow: React.CSSProperties = {
   display: "flex", gap: BACK_GAP, height: BACK_H + 4, alignItems: "center",
   marginLeft: "auto", marginRight: "auto",
@@ -738,24 +982,19 @@ const scrollWrap: React.CSSProperties = {
   border: "1px solid rgba(255,255,255,0.05)",
 };
 const timelineInner: React.CSSProperties = { position: "relative" };
-const centerDivider: React.CSSProperties = {
-  position: "absolute", left: 0, right: 0, height: CENTER_GUTTER,
-  background: "linear-gradient(180deg, rgba(255,224,102,0) 0%, rgba(255,224,102,0.12) 50%, rgba(255,224,102,0) 100%)",
-  pointerEvents: "none",
-};
 const nowDivider: React.CSSProperties = {
   position: "absolute", width: 36, height: 16, lineHeight: "16px",
   fontSize: 9, color: "#1a1a22", letterSpacing: 2, fontWeight: 700,
   fontFamily: "ui-monospace, monospace", textAlign: "center",
   background: "#ffe066", borderRadius: 4,
-  pointerEvents: "none", zIndex: 3,
+  pointerEvents: "none", zIndex: 4,
   boxShadow: "0 0 6px rgba(255,224,102,0.55)",
 };
 const nowLine: React.CSSProperties = {
   position: "absolute", top: 0, width: 2,
   background: "linear-gradient(180deg, #fff 0%, #ffe066 50%, #fff 100%)",
   boxShadow: "0 0 8px rgba(255,224,102,0.6)",
-  zIndex: 2,
+  zIndex: 3,
 };
 const idleHint: React.CSSProperties = {
   position: "absolute", left: NOW_OFFSET + 8,
@@ -763,15 +1002,7 @@ const idleHint: React.CSSProperties = {
 };
 const queueBoxName: React.CSSProperties = { fontWeight: 700, fontSize: 12, lineHeight: 1.1, textShadow: "0 1px 2px rgba(0,0,0,0.8)" };
 const queueBoxMeta: React.CSSProperties = { fontSize: 10, opacity: 0.9, fontFamily: "ui-monospace, monospace", marginTop: 2 };
-const blockBadge: React.CSSProperties = {
-  display: "inline-flex", alignItems: "center", gap: 4,
-  padding: "2px 8px", borderRadius: 999,
-  background: "rgba(95,160,224,0.2)", color: "#bdd6f0",
-  border: "1px solid rgba(95,160,224,0.5)",
-  fontSize: 11, fontWeight: 600,
-};
 
-// Self hand row: fixed 6 cards/empties/pending.
 const handRow: React.CSSProperties = {
   display: "flex", gap: CARD_GAP, height: CARD_H,
   marginLeft: "auto", marginRight: "auto",

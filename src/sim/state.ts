@@ -2,12 +2,19 @@ import { CardId } from "./cards";
 import { Rng } from "./rng";
 import { MAX_HAND_SIZE } from "./rules";
 
-// One queue entry. duration is captured at queue-time (corruption-discounted
-// skills etc.) so it can't shift while the card is waiting in line.
-export interface QueueEntry {
-  cardId: CardId;
-  duration: number;
-}
+// A queue entry. Either a card cast OR a Draw action — both consume queue
+// time the same way (head waits `duration` seconds before "resolving").
+//
+//   kind="card": ordinary card cast. cardId set.
+//   kind="draw": refill action. drawSlots holds the snapshotted slot
+//     indices (LOCKED at press time — playing a card from another slot
+//     mid-cycle does not add that new empty to the targets). duration =
+//     drawSlots.length (1 sec per card). While this entry is the head,
+//     slots fill sequentially: drawSlots[k] is filled when the head's
+//     elapsed time crosses (k+1) seconds. drawFilledCount tracks progress.
+export type QueueEntry =
+  | { kind: "card"; cardId: CardId; duration: number }
+  | { kind: "draw"; drawSlots: number[]; drawFilledCount: number; duration: number };
 
 // A card that recently resolved. Kept around so the timeline can show it as
 // a dimmed chip drifting off to the left of the NOW line ("just played").
@@ -16,17 +23,6 @@ export interface ResolvedEntry {
   duration: number;
   // Sim seconds when this card finished casting. Always <= current `frame * DT`.
   resolvedAt: number;
-}
-
-// A pending draw: at fillsAt (sim sec), the deck pops a card into hand[slotIndex].
-// Targets are LOCKED at Draw-press time — playing a card mid-wait creates a new
-// empty slot, but that slot does NOT become a target (it has no entry here).
-// startedAt is the press time (same for every entry in a Draw batch); UI uses
-// (fillsAt - startedAt) as a stable denominator for the fill bar.
-export interface PendingDraw {
-  slotIndex: number;
-  startedAt: number;
-  fillsAt: number;
 }
 
 export interface PlayerState {
@@ -45,10 +41,6 @@ export interface PlayerState {
   castStartedAt: number;
   // Bounded history of recently-resolved cards (head pops). Newest at the END.
   resolvedCards: ResolvedEntry[];
-  // Pending draws keyed by slot index. Empty when no Draw action is active.
-  // A slot referenced here is "reserved" — it visually shows a countdown and
-  // is not eligible to be refilled by other card-effect draws.
-  pendingDraws: PendingDraw[];
   // Status durations (seconds remaining)
   strength: number;
   vulnerableSecs: number;
@@ -99,7 +91,6 @@ const DEFAULT_PLAYER = (
   queue: [],
   castStartedAt: 0,
   resolvedCards: [],
-  pendingDraws: [],
   strength: 0,
   vulnerableSecs: 0,
   weakSecs: 0,
@@ -143,9 +134,8 @@ export function snapshot(s: GameState): GameState {
 
 const clonePlayer = (p: PlayerState): PlayerState => ({
   ...p,
-  queue: p.queue.map((q) => ({ ...q })),
+  queue: p.queue.map((q) => q.kind === "draw" ? { ...q, drawSlots: q.drawSlots.slice() } : { ...q }),
   resolvedCards: p.resolvedCards.map((r) => ({ ...r })),
-  pendingDraws: p.pendingDraws.map((d) => ({ ...d })),
   rage: p.rage ? { ...p.rage } : null,
   metallicize: p.metallicize ? { ...p.metallicize } : null,
   demonForm: p.demonForm ? { ...p.demonForm } : null,

@@ -155,7 +155,8 @@ describe("reducer determinism", () => {
     const bludIdxNow = s.players[0].hand.indexOf(CardId.Bludgeon);
     step(s, cardFlag(bludIdxNow)!, 0);
     expect(s.players[0].queue.length).toBe(4); // Bludgeon accepted
-    expect(s.players[0].queue[3].cardId).toBe(CardId.Bludgeon);
+    const last = s.players[0].queue[3];
+    expect(last.kind === "card" && last.cardId === CardId.Bludgeon).toBe(true);
   });
 
   it("played non-power cards go to discard on resolve", () => {

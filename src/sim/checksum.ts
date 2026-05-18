@@ -37,12 +37,18 @@ function hashPlayer(p: PlayerState) {
   u32(p.handle);
   f(p.hp); f(p.hpMax); f(p.block); f(p.thorns);
   u32(p.queue.length);
-  for (const q of p.queue) { u32(q.cardId); f(q.duration); }
+  for (const q of p.queue) {
+    if (q.kind === "card") {
+      byte(0); u32(q.cardId); f(q.duration);
+    } else {
+      byte(1); f(q.duration); u32(q.drawFilledCount);
+      u32(q.drawSlots.length);
+      for (const s of q.drawSlots) u32(s);
+    }
+  }
   f(p.castStartedAt);
   u32(p.resolvedCards.length);
   for (const r of p.resolvedCards) { u32(r.cardId); f(r.duration); f(r.resolvedAt); }
-  u32(p.pendingDraws.length);
-  for (const d of p.pendingDraws) { u32(d.slotIndex); f(d.startedAt); f(d.fillsAt); }
   f(p.strength); f(p.vulnerableSecs); f(p.weakSecs);
   opt(p.rage, (r) => { f(r.blockPerAttack); f(r.remaining); });
   opt(p.metallicize, (m) => { f(m.blockPerSec); });
