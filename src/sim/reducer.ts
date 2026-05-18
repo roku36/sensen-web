@@ -94,9 +94,14 @@ function tickPowers(s: GameState, dt: number, bus: Bus) {
       if (p.combust.enemyPerSec > 0) {
         const o = s.players[opp(idx)];
         let rem = p.combust.enemyPerSec * dt;
-        const absorbed = Math.min(rem, o.block);
-        o.block = Math.max(0, o.block - absorbed);
-        rem -= absorbed;
+        // Block is integer — only absorb whole units. Fractional remainder
+        // bleeds into HP without flickering the block bar.
+        const absorbedInt = Math.min(Math.floor(rem), o.block);
+        if (absorbedInt > 0) {
+          o.block -= absorbedInt;
+          recordBlockChange(o, s.frame * DT);
+        }
+        rem -= absorbedInt;
         if (rem > 0) o.hp = Math.max(0, o.hp - rem);
       }
     }
@@ -121,10 +126,12 @@ function tickPowers(s: GameState, dt: number, bus: Bus) {
 function tickBlockDecay(p: PlayerState, now: number) {
   if (p.barricade) return;
   while (p.block > 0 && now >= p.nextBlockDecayAt) {
-    const decayT = p.nextBlockDecayAt;
     p.block -= 1;
     p.nextBlockDecayAt += SEC_PER_SEN;
-    recordBlockChange(p, decayT);
+    // Record at FRAME time (not the scheduled time) so all blockHistory
+    // entries share a single grid — consistent left-shift per render
+    // instead of timestamps drifting against the queue's own time axis.
+    recordBlockChange(p, now);
   }
   if (p.block <= 0) p.nextBlockDecayAt = Infinity;
 }
@@ -546,11 +553,14 @@ function drawCards(s: GameState, idx: 0 | 1, count: number, bus: Bus) {
 
 // ── Card effect resolution ──
 
+// Returns INTEGER damage. The ×0.75 / ×1.5 multipliers from weak/vuln are
+// rounded immediately so block (an integer) absorbs an integer number of
+// units — keeps every block update step-clean.
 function attackDamage(base: number, attacker: PlayerState, defender: PlayerState | null): number {
   let dmg = base + attacker.strength;
   if (attacker.weakSecs > 0) dmg *= 0.75;
   if (defender && defender.vulnerableSecs > 0) dmg *= 1.5;
-  return Math.max(0, dmg);
+  return Math.max(0, Math.round(dmg));
 }
 
 function applyEffect(

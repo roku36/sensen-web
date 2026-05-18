@@ -627,15 +627,20 @@ function BlockArea({
   const stroke = side === "opp"
     ? (hidden ? "rgba(95, 160, 224, 0.25)" : "#5fa0e0")
     : (hidden ? "rgba(95, 200, 130, 0.25)" : "#5fc882");
+  // Snap to integer pixels — without this, the polygon's X positions
+  // drift sub-pixel each frame (PX_PER_SEC * 1/60 ≈ 0.58 px/frame), and
+  // SVG anti-aliasing shimmers visibly along the edges. Block values are
+  // already integers from the sim, so Y is naturally crisp too.
   const yForBlock = (b: number) => {
     const h = blockHeight(b);
-    return side === "opp" ? 0 + h : BLOCK_BAND - h;
+    return Math.round(side === "opp" ? 0 + h : BLOCK_BAND - h);
   };
-  // x for a time RELATIVE to now (negative = past). Clamped at the left edge
-  // so very old samples don't render off-screen with bizarre points.
   const xForRel = (relSec: number) =>
-    NOW_OFFSET + Math.max(-HISTORY_SEC, relSec) * PX_PER_SEC;
+    Math.round(NOW_OFFSET + Math.max(-HISTORY_SEC, relSec) * PX_PER_SEC);
   const outerY = side === "opp" ? 0 : BLOCK_BAND;
+  // The past polygon shouldn't extend BEFORE the game started (t < -nowSec
+  // in relative coords). Past-clamp = max(-HISTORY_SEC, -nowSec).
+  const pastLimit = Math.max(-HISTORY_SEC, -nowSec);
 
   // Build the (relSec, block) samples by stitching history + future.
   // History samples are STEP-CONSTANT between entries (block was X from
@@ -646,20 +651,20 @@ function BlockArea({
     const h = history[i];
     const r = h.t - nowSec;
     if (r > 0) break; // history entry already in the future (shouldn't happen)
-    if (r < -HISTORY_SEC) {
-      // Sample is older than the visible window — but if the NEXT entry is
-      // still in window, we use this as the anchor on the left edge.
+    if (r < pastLimit) {
+      // Sample is older than the visible window. If the NEXT entry is
+      // within the window, this one's value is the anchor block — it was
+      // valid from this entry's time until the next entry's time.
       const next = history[i + 1];
-      if (!next || next.t - nowSec < -HISTORY_SEC) continue;
-      rel.push({ t: -HISTORY_SEC, block: h.block });
+      if (!next || next.t - nowSec < pastLimit) continue;
+      rel.push({ t: pastLimit, block: h.block });
       continue;
     }
     rel.push({ t: r, block: h.block });
   }
-  // Ensure we have a leading anchor at -HISTORY_SEC if no entry preceded it.
-  if (rel.length === 0 || rel[0].t > -HISTORY_SEC) {
+  if (rel.length === 0 || rel[0].t > pastLimit) {
     const anchorBlock = rel.length > 0 ? rel[0].block : (futureSamples[0]?.block ?? 0);
-    rel.unshift({ t: -HISTORY_SEC, block: anchorBlock });
+    rel.unshift({ t: pastLimit, block: anchorBlock });
   }
   // The "current" sample (at t = 0) is the latest history value (= current
   // block); the prediction starts there too.
@@ -698,10 +703,15 @@ function BlockArea({
 
   return (
     <>
-      <polygon points={points.join(" ")} fill={color} stroke="none" />
+      <polygon
+        points={points.join(" ")}
+        fill={color} stroke="none"
+        shapeRendering="crispEdges"
+      />
       <polyline
         points={points.slice(1, -1).join(" ")}
         fill="none" stroke={stroke} strokeWidth={1.5} opacity={hidden ? 0.4 : 0.85}
+        shapeRendering="crispEdges"
       />
     </>
   );
