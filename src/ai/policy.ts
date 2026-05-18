@@ -10,7 +10,7 @@
 import { CardEffect, getCardDef } from "../sim/cards";
 import { cardFlag, INPUT_DRAW } from "../sim/input";
 import { queueRemainingTime } from "../sim/reducer";
-import { DT } from "../sim/rules";
+import { DT, senToSec } from "../sim/rules";
 import { GameState, PlayerState } from "../sim/state";
 
 export type Policy = (state: GameState, side: 0 | 1) => number;
@@ -31,14 +31,16 @@ function mulberry32(seed: number) {
 
 function playableIndices(p: PlayerState, now: number): number[] {
   const out: number[] = [];
-  const queued = queueRemainingTime(p, now);
+  const queuedSec = queueRemainingTime(p, now); // SECONDS
   for (let i = 0; i < p.hand.length; i++) {
     const cardId = p.hand[i];
     if (cardId === null) continue; // empty slot
     const d = getCardDef(cardId);
     if (!d) continue;
     if (d.cost >= 900) continue; // status junk
-    if ((d.prereqQueueTime ?? 0) > queued) continue; // not enough setup
+    // prereqQueueTime is in 閃 — convert before comparing to seconds.
+    const prereqSec = senToSec(d.prereqQueueTime ?? 0);
+    if (prereqSec > queuedSec) continue; // not enough setup
     out.push(i);
   }
   return out;
