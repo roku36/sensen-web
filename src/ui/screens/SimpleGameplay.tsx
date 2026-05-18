@@ -493,9 +493,9 @@ interface BlockTraj { samples: BlockSample[]; events: BlockEvent[]; }
 // beyond block becomes a "pierce" amount the UI shows extending OUTSIDE
 // the block area).
 function blockTrajectoryAt(p: PlayerState, opp: PlayerState, now: number, horizonSec: number): BlockTraj {
-  // Project the next decay time as a series of 閃-aligned moments.
-  type RawEvent = { t: number; kind: "gain" | "hit" | "decay"; amount: number };
-  const events: RawEvent[] = [];
+  // Gain & hit events sorted by time (decay is simulated dynamically).
+  type ExtEvent = { t: number; kind: "gain" | "hit"; amount: number };
+  const externals: ExtEvent[] = [];
 
   const enumerate = (state: PlayerState, onResolve: (t: number, ent: QueueEntry) => void) => {
     if (state.queue.length === 0) return;
@@ -512,48 +512,72 @@ function blockTrajectoryAt(p: PlayerState, opp: PlayerState, now: number, horizo
     const def = getCardDef(ent.cardId);
     if (!def) return;
     const blk = blockAmount(def.effect);
-    if (blk > 0) events.push({ t, kind: "gain", amount: blk });
+    if (blk > 0) externals.push({ t, kind: "gain", amount: blk });
   });
   enumerate(opp, (t, ent) => {
     if (ent.kind !== "card") return;
     const def = getCardDef(ent.cardId);
     if (!def) return;
     const dmg = baseAttackDamage(def.effect);
-    if (dmg > 0) events.push({ t, kind: "hit", amount: dmg });
+    if (dmg > 0) externals.push({ t, kind: "hit", amount: dmg });
   });
-  // Project block-decay ticks based on current nextBlockDecayAt.
-  let nextDecayAt = p.nextBlockDecayAt - now;
-  while (isFinite(nextDecayAt) && nextDecayAt <= horizonSec) {
-    if (nextDecayAt > 0) events.push({ t: nextDecayAt, kind: "decay", amount: 1 });
-    nextDecayAt += SEC_PER_SEN;
-  }
-
-  events.sort((a, b) => a.t - b.t);
+  externals.sort((a, b) => a.t - b.t);
 
   const samples: BlockSample[] = [];
   const eventDetails: BlockEvent[] = [];
   let block = p.block;
+  // Decay timer in TRAJECTORY time (relative to now). +∞ if paused.
+  let nextDecay = isFinite(p.nextBlockDecayAt) ? p.nextBlockDecayAt - now : Infinity;
+  if (block <= 0) nextDecay = Infinity;
+
   samples.push({ t: 0, block });
-  for (const e of events) {
-    if (e.t > horizonSec) break;
-    // Block is step-constant between events.
-    samples.push({ t: e.t, block });
-    const pre = block;
-    let pierce = 0;
-    if (e.kind === "gain") block = block + e.amount;
-    else if (e.kind === "hit") {
-      const absorbed = Math.min(block, e.amount);
-      pierce = e.amount - absorbed;
-      block = block - absorbed;
-    } else { // decay
-      block = Math.max(0, block - 1);
+  let extIdx = 0;
+  let t = 0;
+  const STEP_LIMIT = 200; // safety
+  let safety = 0;
+  while (t < horizonSec && safety++ < STEP_LIMIT) {
+    const nextExt = extIdx < externals.length ? externals[extIdx].t : Infinity;
+    // Earliest upcoming event: a decay tick OR an external (gain/hit) OR the horizon.
+    const nextT = Math.min(nextDecay, nextExt, horizonSec);
+    // Block is step-constant from t..nextT — emit both endpoints so the
+    // polyline draws a flat segment, then a vertical step at nextT.
+    if (nextT > t) samples.push({ t: nextT, block });
+    if (nextT >= horizonSec) { t = horizonSec; break; }
+
+    if (nextDecay <= nextExt) {
+      // Decay tick fires first.
+      if (block > 0) {
+        block -= 1;
+        if (block <= 0) nextDecay = Infinity;
+        else nextDecay = nextT + SEC_PER_SEN;
+      } else {
+        nextDecay = Infinity;
+      }
+      samples.push({ t: nextT, block });
+    } else {
+      // External event.
+      const e = externals[extIdx++];
+      const pre = block;
+      let pierce = 0;
+      if (e.kind === "gain") {
+        const wasZero = block <= 0;
+        block += e.amount;
+        // Re-arm decay if it was paused OR already expired.
+        if (wasZero || !isFinite(nextDecay) || nextDecay <= nextT) {
+          nextDecay = nextT + SEC_PER_SEN;
+        }
+      } else {
+        const absorbed = Math.min(block, e.amount);
+        pierce = e.amount - absorbed;
+        block -= absorbed;
+        if (block <= 0) nextDecay = Infinity;
+      }
+      samples.push({ t: nextT, block });
+      eventDetails.push({ t: nextT, kind: e.kind, amount: e.amount, pre, post: block, pierce });
     }
-    samples.push({ t: e.t, block });
-    if (e.kind !== "decay") {
-      eventDetails.push({ t: e.t, kind: e.kind, amount: e.amount, pre, post: block, pierce });
-    }
+    t = nextT;
   }
-  samples.push({ t: horizonSec, block });
+  if (t < horizonSec) samples.push({ t: horizonSec, block });
   return { samples, events: eventDetails };
 }
 
