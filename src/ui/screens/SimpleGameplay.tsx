@@ -18,16 +18,17 @@
 //   │          │ Draw button (6-card width)             │
 //   └──────────┴────────────────────────────────────────┘
 
-import { useEffect, useRef, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import { CardEffect, CardId, CardType, getCardDef } from "../../sim/cards";
 import {
   cardFlag, INPUT_DRAW, INPUT_RESERVE_DRAW, reserveCardFlag,
 } from "../../sim/input";
+import { predictForward } from "../../sim/predict";
 import { queueRemainingTime, reservedSlotSet } from "../../sim/reducer";
 import {
   DRAW_SEN_PER_CARD, DT, MAX_HAND_SIZE, SEC_PER_SEN, secToSen,
 } from "../../sim/rules";
-import { PlayerState, QueueEntry, ResolvedEntry } from "../../sim/state";
+import { GameState, PlayerState, ResolvedEntry } from "../../sim/state";
 
 import { getActiveMode, getSession, useKeyboardInput } from "../hooks";
 import { useStore } from "../store";
@@ -131,7 +132,7 @@ export function SimpleGameplay() {
 
         <div style={rightStack}>
           <OpponentHand player={op} now={now} />
-          <BattleZone op={op} me={me} now={now} />
+          <BattleZone game={game} op={op} me={me} now={now} />
           <SelfHand player={me} now={now} />
           <DrawButton player={me} />
         </div>
@@ -204,7 +205,7 @@ function countCards(hand: (number | null)[]): number {
 
 // ── Battle zone: timeline with center block band ──
 
-function BattleZone({ op, me, now }: { op: PlayerState; me: PlayerState; now: number }) {
+function BattleZone({ game, op, me, now }: { game: GameState; op: PlayerState; me: PlayerState; now: number }) {
   // Hide-opp-queue rule: second player (me.handle === 1) shouldn't see
   // first player's queue until they've themselves committed something.
   // Otherwise the 0.5閃 offset becomes pure reflex advantage.
@@ -222,15 +223,35 @@ function BattleZone({ op, me, now }: { op: PlayerState; me: PlayerState; now: nu
   );
   const innerWidth = NOW_OFFSET + maxSec * PX_PER_SEC + EDGE_PAD;
 
-  // Block trajectories (current + predicted) for both players.
-  // When opp's queue is hidden, opp's block trajectory still shows the
-  // CURRENT value (everyone can see that) but no predicted hits/decays from
-  // the hidden cards. Easiest: pass an empty queue when hidden.
-  const opForBlock = hideOppQueue ? { ...op, queue: [] } : op;
-  const meForBlock = hideOppQueue ? { ...me, queue: me.queue.slice() } : me;
-  const opForMeBlock = hideOppQueue ? { ...op, queue: [] } : op;
-  const opBlock = blockTrajectoryAt(opForBlock, meForBlock, now, maxSec);
-  const meBlock = blockTrajectoryAt(me, opForMeBlock, now, maxSec);
+  // Predicted block trajectories — computed by RUNNING THE REAL SIM forward
+  // from a snapshot. No hand-rolled queue walking; every effect the
+  // reducer knows about (defense gains, attack hits, combust ticks,
+  // step-decay, auto-reservations, self-damage, etc.) is reflected.
+  //
+  // When the opp's queue is hidden, we strip it from the snapshot before
+  // simulating so the second player can't see-through to predictions of
+  // unrevealed cards. Memoized on game.frame so we resimulate at most once
+  // per sim step, not on every React render.
+  const pred = useMemo(() => {
+    if (!hideOppQueue) return predictForward(game, maxSec);
+    // Build a forecast input where opp's queue is empty (hidden).
+    const oppHandle = op.handle;
+    const masked: GameState = {
+      ...game,
+      players: [
+        game.players[0].handle === oppHandle
+          ? { ...game.players[0], queue: [] }
+          : game.players[0],
+        game.players[1].handle === oppHandle
+          ? { ...game.players[1], queue: [] }
+          : game.players[1],
+      ] as [PlayerState, PlayerState],
+    };
+    return predictForward(masked, maxSec);
+  }, [game.frame, maxSec, hideOppQueue, op.handle]);
+  // Pick out each side's trajectory by handle.
+  const opPred = op.handle === 0 ? pred.p0 : pred.p1;
+  const mePred = me.handle === 0 ? pred.p0 : pred.p1;
 
   // Scroll setup.
   const scrollRef = useRef<HTMLDivElement | null>(null);
@@ -286,10 +307,8 @@ function BattleZone({ op, me, now }: { op: PlayerState; me: PlayerState; now: nu
             width={innerWidth} height={BLOCK_BAND}
             style={{ position: "absolute", left: 0, top: BLOCK_TOP, pointerEvents: "none" }}
           >
-            <BlockArea history={op.blockHistory} trajectory={opBlock} side="opp" nowSec={now} maxSec={maxSec} hidden={hideOppQueue} />
-            <BlockArea history={me.blockHistory} trajectory={meBlock} side="self" nowSec={now} maxSec={maxSec} />
-            {!hideOppQueue && <BlockEventMarks events={opBlock.events} side="opp" />}
-            <BlockEventMarks events={meBlock.events} side="self" />
+            <BlockArea history={op.blockHistory} future={opPred} side="opp" nowSec={now} maxSec={maxSec} hidden={hideOppQueue} />
+            <BlockArea history={me.blockHistory} future={mePred} side="self" nowSec={now} maxSec={maxSec} />
           </svg>
           <div style={{ ...nowDivider, left: NOW_OFFSET - 18, top: BLOCK_CENTER - 8 }}>NOW</div>
           <div style={{ ...nowLine, left: NOW_OFFSET, height: TIMELINE_HEIGHT }} />
@@ -476,127 +495,8 @@ function dim(hex: string, k: number): string {
 //     (clipped at 0; we ignore overflow into HP for this view)
 // We sample at every event for an exact piecewise-linear trajectory.
 
-interface BlockSample { t: number; block: number; }   // t is relative to now
-interface BlockEvent {
-  t: number;
-  kind: "gain" | "hit";
-  amount: number;
-  pre: number;
-  post: number;
-  pierce: number;          // damage that bled through to HP (for outside-the-band mark)
-}
-interface BlockTraj { samples: BlockSample[]; events: BlockEvent[]; }
-
-// Block trajectory: step-decay (1 unit per 閃 = SEC_PER_SEN seconds), plus
-// own defense gains and opponent attack hits at the appropriate resolve
-// times. Models OVERKILL via the `pierce` field on events (excess damage
-// beyond block becomes a "pierce" amount the UI shows extending OUTSIDE
-// the block area).
-function blockTrajectoryAt(p: PlayerState, opp: PlayerState, now: number, horizonSec: number): BlockTraj {
-  // Gain & hit events sorted by time (decay is simulated dynamically).
-  type ExtEvent = { t: number; kind: "gain" | "hit"; amount: number };
-  const externals: ExtEvent[] = [];
-
-  const enumerate = (state: PlayerState, onResolve: (t: number, ent: QueueEntry) => void) => {
-    if (state.queue.length === 0) return;
-    let t = Math.max(0, state.queue[0].duration - (now - state.castStartedAt));
-    onResolve(t, state.queue[0]);
-    for (let i = 1; i < state.queue.length; i++) {
-      t += state.queue[i].duration;
-      onResolve(t, state.queue[i]);
-    }
-  };
-
-  enumerate(p, (t, ent) => {
-    if (ent.kind !== "card") return;
-    const def = getCardDef(ent.cardId);
-    if (!def) return;
-    const blk = blockAmount(def.effect);
-    if (blk > 0) externals.push({ t, kind: "gain", amount: blk });
-  });
-  enumerate(opp, (t, ent) => {
-    if (ent.kind !== "card") return;
-    const def = getCardDef(ent.cardId);
-    if (!def) return;
-    const dmg = baseAttackDamage(def.effect);
-    if (dmg > 0) externals.push({ t, kind: "hit", amount: dmg });
-  });
-  externals.sort((a, b) => a.t - b.t);
-
-  const samples: BlockSample[] = [];
-  const eventDetails: BlockEvent[] = [];
-  let block = p.block;
-  // Decay timer in TRAJECTORY time (relative to now). +∞ if paused.
-  let nextDecay = isFinite(p.nextBlockDecayAt) ? p.nextBlockDecayAt - now : Infinity;
-  if (block <= 0) nextDecay = Infinity;
-
-  samples.push({ t: 0, block });
-  let extIdx = 0;
-  let t = 0;
-  const STEP_LIMIT = 200; // safety
-  let safety = 0;
-  while (t < horizonSec && safety++ < STEP_LIMIT) {
-    const nextExt = extIdx < externals.length ? externals[extIdx].t : Infinity;
-    // Earliest upcoming event: a decay tick OR an external (gain/hit) OR the horizon.
-    const nextT = Math.min(nextDecay, nextExt, horizonSec);
-    // Block is step-constant from t..nextT — emit both endpoints so the
-    // polyline draws a flat segment, then a vertical step at nextT.
-    if (nextT > t) samples.push({ t: nextT, block });
-    if (nextT >= horizonSec) { t = horizonSec; break; }
-
-    if (nextDecay <= nextExt) {
-      // Decay tick fires first.
-      if (block > 0) {
-        block -= 1;
-        if (block <= 0) nextDecay = Infinity;
-        else nextDecay = nextT + SEC_PER_SEN;
-      } else {
-        nextDecay = Infinity;
-      }
-      samples.push({ t: nextT, block });
-    } else {
-      // External event.
-      const e = externals[extIdx++];
-      const pre = block;
-      let pierce = 0;
-      if (e.kind === "gain") {
-        const wasZero = block <= 0;
-        block += e.amount;
-        // Re-arm decay if it was paused OR already expired.
-        if (wasZero || !isFinite(nextDecay) || nextDecay <= nextT) {
-          nextDecay = nextT + SEC_PER_SEN;
-        }
-      } else {
-        const absorbed = Math.min(block, e.amount);
-        pierce = e.amount - absorbed;
-        block -= absorbed;
-        if (block <= 0) nextDecay = Infinity;
-      }
-      samples.push({ t: nextT, block });
-      eventDetails.push({ t: nextT, kind: e.kind, amount: e.amount, pre, post: block, pierce });
-    }
-    t = nextT;
-  }
-  if (t < horizonSec) samples.push({ t: horizonSec, block });
-  return { samples, events: eventDetails };
-}
-
-function blockAmount(e: CardEffect): number {
-  switch (e.kind) {
-    case "Block": return e.amount;
-    case "Combo": return e.effects.reduce((s, x) => s + blockAmount(x), 0);
-    default: return 0;
-  }
-}
-
-function baseAttackDamage(e: CardEffect): number {
-  switch (e.kind) {
-    case "Damage": return e.amount;
-    case "MultiHit": return e.damage * e.hits;
-    case "Combo": return e.effects.reduce((s, x) => s + baseAttackDamage(x), 0);
-    default: return 0;
-  }
-}
+// Block samples come from sim/predict — same type as PredictResult.p0/p1.
+interface BlockSample { t: number; block: number; }
 
 // Render the filled block-area polygon for one side.
 //
@@ -609,16 +509,16 @@ function baseAttackDamage(e: CardEffect): number {
 // FUTURE samples (t >= 0) come from the trajectory prediction. The past
 // section never changes shape just because the prediction does.
 function BlockArea({
-  history, trajectory, side, nowSec, maxSec, hidden,
+  history, future, side, nowSec, maxSec, hidden,
 }: {
   history: { t: number; block: number }[];
-  trajectory: BlockTraj;
+  future: BlockSample[];
   side: "opp" | "self";
   nowSec: number;
   maxSec: number;
   hidden?: boolean;
 }) {
-  const futureSamples = trajectory.samples;
+  const futureSamples = future;
   if (futureSamples.length < 1 && history.length === 0) return null;
 
   const color = side === "opp"
@@ -717,60 +617,10 @@ function BlockArea({
   );
 }
 
-// Event marks. Hits = red bars stacked from current block TIP toward the
-// outer edge; pierce (overkill) = extends BEYOND the outer edge, sticking
-// out to indicate damage that bled into HP.
-function BlockEventMarks({ events, side }: { events: BlockEvent[]; side: "opp" | "self" }) {
-  const outerY = side === "opp" ? 0 : BLOCK_BAND;
-  const yForBlock = (b: number) =>
-    side === "opp" ? outerY + blockHeight(b) : outerY - blockHeight(b);
-  // Pierce extends an extra fixed pixel per unit OUTSIDE the outer edge.
-  const PIERCE_PX_PER_UNIT = 1.5;
-  const PIERCE_MAX_EXTEND = 32;
-
-  return (
-    <>
-      {events.map((e, i) => {
-        const x = NOW_OFFSET + e.t * PX_PER_SEC;
-        const yPre = yForBlock(e.pre);
-        const yPost = yForBlock(e.post);
-        const color = e.kind === "hit" ? "#ff6b5a" : "#7fe3a4";
-        const label = e.kind === "hit" ? `−${Math.round(e.amount)}` : `+${Math.round(e.amount)}`;
-        const pierce = e.pierce ?? 0;
-        const pierceLen = Math.min(PIERCE_MAX_EXTEND, pierce * PIERCE_PX_PER_UNIT);
-        return (
-          <g key={i}>
-            {/* Bar inside the block band (shows the slice of block consumed
-                / added). */}
-            <line x1={x} y1={yPre} x2={x} y2={yPost} stroke={color} strokeWidth={2} opacity={0.85} />
-            {/* Pierce extends OUTSIDE the band (above top edge for opp,
-                below bottom edge for self). */}
-            {pierce > 0 && (
-              <line
-                x1={x} x2={x}
-                y1={outerY}
-                y2={side === "opp" ? outerY - pierceLen : outerY + pierceLen}
-                stroke="#ff3b30" strokeWidth={3} opacity={0.95}
-              />
-            )}
-            <text
-              x={x + 3}
-              y={side === "opp"
-                  ? (pierce > 0 ? outerY - pierceLen - 2 : Math.min(yPre, yPost) - 2)
-                  : (pierce > 0 ? outerY + pierceLen + 9 : Math.max(yPre, yPost) + 9)}
-              fill={color}
-              fontSize={9}
-              fontFamily="ui-monospace, monospace"
-              opacity={0.95}
-            >
-              {label}{pierce > 0 ? ` 貫${pierce}` : ""}
-            </text>
-          </g>
-        );
-      })}
-    </>
-  );
-}
+// Event marks (hit/pierce/gain labels) intentionally removed: with the
+// sim-based prediction the trajectory shape itself shows everything, and
+// re-deriving event semantics from outside the reducer would re-introduce
+// the same dual-source-of-truth problem we just got rid of.
 
 // ── Hands (fixed 6 slots, reserved derived from queue) ──
 
