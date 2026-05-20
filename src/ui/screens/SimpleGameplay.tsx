@@ -179,6 +179,7 @@ function PlayerInfoCard({
            label={`HP ${Math.round(player.hp)} / ${player.hpMax}`} />
       <div style={pillRow}>
         {player.thorns > 0 && <span style={pill("#ff9f43")}>棘 {Math.round(player.thorns)}</span>}
+        {player.poison > 0 && <span style={pill("#5fc870")}>毒 {player.poison}</span>}
         {player.strength !== 0 && <span style={pill("#ff6961")}>筋力 {player.strength > 0 ? "+" : ""}{player.strength}</span>}
         {player.vulnerableSecs > 0 && <span style={pill("#ff8a00")}>脆弱 {player.vulnerableSecs.toFixed(1)}秒</span>}
         {player.weakSecs > 0 && <span style={pill("#a899ff")}>弱体 {player.weakSecs.toFixed(1)}秒</span>}
@@ -250,8 +251,12 @@ function BattleZone({ game, op, me, now }: { game: GameState; op: PlayerState; m
     return predictForward(masked, maxSec);
   }, [game.frame, maxSec, hideOppQueue, op.handle]);
   // Pick out each side's trajectory by handle.
-  const opPred = op.handle === 0 ? pred.p0 : pred.p1;
-  const mePred = me.handle === 0 ? pred.p0 : pred.p1;
+  const opBlockPred = op.handle === 0 ? pred.p0Block : pred.p1Block;
+  const meBlockPred = me.handle === 0 ? pred.p0Block : pred.p1Block;
+  const opPoisonPred = op.handle === 0 ? pred.p0Poison : pred.p1Poison;
+  const mePoisonPred = me.handle === 0 ? pred.p0Poison : pred.p1Poison;
+  const opPierces = op.handle === 0 ? pred.p0Pierces : pred.p1Pierces;
+  const mePierces = me.handle === 0 ? pred.p0Pierces : pred.p1Pierces;
 
   // Scroll setup.
   const scrollRef = useRef<HTMLDivElement | null>(null);
@@ -307,8 +312,12 @@ function BattleZone({ game, op, me, now }: { game: GameState; op: PlayerState; m
             width={innerWidth} height={BLOCK_BAND}
             style={{ position: "absolute", left: 0, top: BLOCK_TOP, pointerEvents: "none" }}
           >
-            <BlockArea history={op.blockHistory} future={opPred} side="opp" nowSec={now} maxSec={maxSec} hidden={hideOppQueue} />
-            <BlockArea history={me.blockHistory} future={mePred} side="self" nowSec={now} maxSec={maxSec} />
+            <BlockArea history={op.blockHistory} future={opBlockPred} side="opp" nowSec={now} maxSec={maxSec} hidden={hideOppQueue} />
+            <BlockArea history={me.blockHistory} future={meBlockPred} side="self" nowSec={now} maxSec={maxSec} />
+            <PoisonArea currentPoison={op.poison} future={opPoisonPred} side="opp" maxSec={maxSec} hidden={hideOppQueue} />
+            <PoisonArea currentPoison={me.poison} future={mePoisonPred} side="self" maxSec={maxSec} />
+            {!hideOppQueue && <PierceMarks events={opPierces} side="opp" />}
+            <PierceMarks events={mePierces} side="self" />
           </svg>
           <div style={{ ...nowDivider, left: NOW_OFFSET - 18, top: BLOCK_CENTER - 8 }}>NOW</div>
           <div style={{ ...nowLine, left: NOW_OFFSET, height: TIMELINE_HEIGHT }} />
@@ -617,10 +626,98 @@ function BlockArea({
   );
 }
 
-// Event marks (hit/pierce/gain labels) intentionally removed: with the
-// sim-based prediction the trajectory shape itself shows everything, and
-// re-deriving event semantics from outside the reducer would re-introduce
-// the same dual-source-of-truth problem we just got rid of.
+// Poison area: GREEN band growing OUTWARD from the block band's outer
+// edge (opp grows up from y=0, self grows down from y=BLOCK_BAND). Same
+// pixel scale as a pierce mark so it reads as "incoming HP damage".
+const PIERCE_PX_PER_UNIT = 1.5;
+const PIERCE_MAX_EXTEND = 36;
+
+function PoisonArea({
+  currentPoison, future, side, maxSec, hidden,
+}: {
+  currentPoison: number;
+  future: { t: number; poison: number }[];
+  side: "opp" | "self";
+  maxSec: number;
+  hidden?: boolean;
+}) {
+  if (currentPoison <= 0 && future.every((s) => s.poison <= 0)) return null;
+  const color = hidden
+    ? "rgba(95, 200, 110, 0.18)"
+    : "rgba(95, 200, 110, 0.55)";
+  const stroke = hidden ? "rgba(95, 200, 110, 0.35)" : "#5fc870";
+  const outerY = side === "opp" ? 0 : BLOCK_BAND;
+  // Past portion: flat at currentPoison from history-left to NOW.
+  const xForT = (t: number) =>
+    Math.round(NOW_OFFSET + t * PX_PER_SEC);
+  const yForPoison = (p: number) => {
+    const h = Math.min(PIERCE_MAX_EXTEND, p * PIERCE_PX_PER_UNIT);
+    return Math.round(side === "opp" ? outerY - h : outerY + h);
+  };
+  const leftPastX = NOW_OFFSET + (-HISTORY_SEC) * PX_PER_SEC;
+  const points: string[] = [];
+  points.push(`${Math.round(leftPastX)},${outerY}`);
+  points.push(`${Math.round(leftPastX)},${yForPoison(currentPoison)}`);
+  points.push(`${NOW_OFFSET},${yForPoison(currentPoison)}`);
+  // Future samples: step polygon at each transition.
+  let last = currentPoison;
+  for (let i = 0; i < future.length; i++) {
+    const s = future[i];
+    if (s.t > maxSec) break;
+    if (s.t <= 0) continue;
+    if (s.poison !== last) {
+      points.push(`${xForT(s.t)},${yForPoison(last)}`);
+      points.push(`${xForT(s.t)},${yForPoison(s.poison)}`);
+      last = s.poison;
+    }
+  }
+  const rightX = xForT(maxSec);
+  points.push(`${rightX},${yForPoison(last)}`);
+  points.push(`${rightX},${outerY}`);
+  return (
+    <>
+      <polygon points={points.join(" ")} fill={color} stroke="none" shapeRendering="crispEdges" />
+      <polyline points={points.slice(1, -1).join(" ")} fill="none" stroke={stroke} strokeWidth={1.5} shapeRendering="crispEdges" opacity={hidden ? 0.5 : 0.9} />
+    </>
+  );
+}
+
+// Pierce marks: red bars + label "貫N" where an attack's HP-side damage
+// landed. Derived from the sim prediction (we ran the reducer forward,
+// recorded each frame's HP delta against block delta).
+function PierceMarks({
+  events, side,
+}: {
+  events: { t: number; hpLost: number }[];
+  side: "opp" | "self";
+}) {
+  if (events.length === 0) return null;
+  const outerY = side === "opp" ? 0 : BLOCK_BAND;
+  return (
+    <>
+      {events.map((e, i) => {
+        const x = Math.round(NOW_OFFSET + e.t * PX_PER_SEC);
+        const len = Math.min(PIERCE_MAX_EXTEND, e.hpLost * PIERCE_PX_PER_UNIT);
+        const y2 = side === "opp" ? outerY - len : outerY + len;
+        const labelY = side === "opp" ? y2 - 2 : y2 + 9;
+        return (
+          <g key={i}>
+            <line
+              x1={x} y1={outerY} x2={x} y2={y2}
+              stroke="#ff5252" strokeWidth={3} opacity={0.95}
+              shapeRendering="crispEdges"
+            />
+            <text
+              x={x + 3} y={labelY}
+              fill="#ff5252" fontSize={9}
+              fontFamily="ui-monospace, monospace" opacity={0.95}
+            >貫{Math.round(e.hpLost)}</text>
+          </g>
+        );
+      })}
+    </>
+  );
+}
 
 // ── Hands (fixed 6 slots, reserved derived from queue) ──
 
@@ -742,8 +839,12 @@ function SimpleCard({ cardId, idx, player, now }: { cardId: number; idx: number;
   const prereqSen = def.prereqQueueTime ?? 0;
   const prereqOk = prereqSen * SEC_PER_SEN <= queuedSec;
   const clickable = !unplayable && prereqOk;
-  // Is this slot the current manual reservation?
-  const reserved = player.reservation.kind === "card" && player.reservation.slotIndex === idx;
+  // Reservation order: 1-based index in the manual reservations list, or 0
+  // if not reserved. Shown as a yellow numbered badge on the card so the
+  // player can see the planned play sequence.
+  const reservationIdx = player.reservations.indexOf(idx);
+  const reserved = reservationIdx >= 0;
+  const reservationOrder = reservationIdx + 1;
 
   const onClick = () => {
     if (!clickable) return;
@@ -777,11 +878,12 @@ function SimpleCard({ cardId, idx, player, now }: { cardId: number; idx: number;
         )}
         {reserved && (
           <div aria-hidden style={{
-            position: "absolute", top: -8, left: "50%", transform: "translateX(-50%)",
+            position: "absolute", top: -10, left: "50%", transform: "translateX(-50%)",
             background: "#ffe066", color: "#1a1a22",
-            padding: "1px 6px", borderRadius: 4,
-            fontSize: 9, fontWeight: 700, letterSpacing: 1, zIndex: 3,
-          }}>予約中</div>
+            padding: "2px 8px", borderRadius: 999,
+            fontSize: 11, fontWeight: 700, letterSpacing: 1, zIndex: 3,
+            boxShadow: "0 0 6px rgba(255, 224, 102, 0.6)",
+          }}>{reservationOrder}</div>
         )}
         <div style={{ ...cardCostStyle, color: clickable ? "#ffe580" : "#cfd6e0" }}>
           {unplayable ? "✗" : def.cost + "閃"}
@@ -816,9 +918,10 @@ function DrawButton({ player }: { player: PlayerState }) {
   for (const q of player.queue) if (q.kind === "draw") { drawing = true; break; }
   const enabled = emptyCount > 0 && !drawing;
   const costSen = emptyCount * DRAW_SEN_PER_CARD;
-  const isReservation =
-    player.reservation.kind === "draw"
-    || (player.reservation.kind === "default" && emptyCount > 0);
+  // Draw is the DEFAULT forced reservation — shown only when the manual
+  // reservation list is empty. Right-clicking the Draw button (or pressing
+  // Space) clears the manual list.
+  const isReservation = player.reservations.length === 0 && emptyCount > 0;
 
   const onClick = () => {
     if (!enabled) return;
@@ -942,6 +1045,8 @@ function effectText(e: CardEffect): string {
     case "Brutality": return `毎秒自分${e.selfDmgPerSec}+${e.drawInterval}秒ごと${e.draw}枚`;
     case "Exhaust": return `効果なし(除外)`;
     case "AddStatus": return `状態カードを追加`;
+    case "Poison": return `相手に毒${e.amount}`;
+    case "Counter": return `発動中、被ダメージの2倍を反射`;
     case "Combo": return e.effects.map(effectText).join(" + ");
   }
 }

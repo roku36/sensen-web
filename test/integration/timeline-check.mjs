@@ -1,8 +1,7 @@
-// v7: verify past block area is STABLE (uses blockHistory, not current value).
-//   - Queue defends, take screenshot
-//   - Wait, queue MORE defends, take another screenshot
-//   - The PAST portion of the block trajectory should look identical in both
-//     (only the future portion differs).
+// v8 visual smoke test: poison area, pierce marks, multi-reservation
+//   - Queue Defend → block immediate (cast-start)
+//   - Right-click 2 cards in order → numbered badges 1, 2
+//   - Press space → manual reservations cleared
 import { chromium } from "playwright";
 const wait = (ms) => new Promise((r) => setTimeout(r, ms));
 
@@ -17,33 +16,47 @@ await page.waitForFunction(() => window.__sensen != null);
 await page.click("button:has-text('2D Simple')");
 await page.selectOption("select", "passive");
 await page.click("button:has-text('CPU と対戦')");
-await page.waitForTimeout(400);
+await page.waitForTimeout(500);
 
-// Press a couple of cards to seed activity
-await page.keyboard.press("1"); await page.waitForTimeout(150);
-await page.keyboard.press("2"); await page.waitForTimeout(150);
+await page.screenshot({ path: "/tmp/v8-initial.png" });
 
-// Wait for some history to accumulate
-await wait(4000);
-await page.screenshot({ path: "/tmp/v7-a.png" });
+// Right-click multiple cards (slots 0..2) to set up reservation list.
+const slots = await page.evaluate(() => {
+  const all = Array.from(document.querySelectorAll("button"));
+  return all.filter((b) => /^\d閃/.test(b.textContent ?? "")).slice(0, 3).map((b) => ({
+    text: b.textContent?.slice(0, 30),
+    rect: b.getBoundingClientRect(),
+  }));
+});
+console.log("found playable cards:", slots);
 
-// Queue more activity to alter the future
-await page.keyboard.press("3"); await page.waitForTimeout(100);
-await page.keyboard.press("4"); await page.waitForTimeout(100);
-await page.keyboard.press("5"); await page.waitForTimeout(300);
+for (const s of slots) {
+  if (!s.rect) continue;
+  const x = s.rect.x + 20;
+  const y = s.rect.y + 20;
+  await page.mouse.click(x, y, { button: "right" });
+  await page.waitForTimeout(120);
+}
 
-await page.screenshot({ path: "/tmp/v7-b.png" });
-
-const debug = await page.evaluate(() => {
+await page.waitForTimeout(300);
+const afterReserve = await page.evaluate(() => {
   const g = window.__sensen.getState();
   return {
-    p0Block: g.players[0].block,
-    p1Block: g.players[1].block,
-    p0History: g.players[0].blockHistory,
-    p1History: g.players[1].blockHistory,
-    nowSec: g.frame / 60,
+    reservations: g.players[0].reservations,
   };
 });
-console.log("debug:", JSON.stringify(debug, null, 2));
+console.log("after right-click reserve x3:", afterReserve);
 
+await page.screenshot({ path: "/tmp/v8-reserved.png" });
+
+// Press space — should clear manual reservations.
+await page.keyboard.press(" ");
+await page.waitForTimeout(120);
+const afterSpace = await page.evaluate(() => {
+  const g = window.__sensen.getState();
+  return { reservations: g.players[0].reservations };
+});
+console.log("after space:", afterSpace);
+
+await page.screenshot({ path: "/tmp/v8-cleared.png" });
 await browser.close();

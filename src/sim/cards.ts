@@ -32,6 +32,7 @@ export const enum CardId {
   Rage = 117, SecondWind = 118, SeeingRed = 119, Sentinel = 120,
   Shockwave = 121, SpotWeakness = 122, DoubleTap = 123, Exhume = 124,
   Impervious = 125, LimitBreak = 126, Offering = 127,
+  Counter = 128, ToxicSpray = 129,
   // Powers 200-299
   Combust = 200, DarkEmbrace = 201, Evolve = 202, FeelNoPain = 203,
   FireBreathing = 204, Inflame = 205, Metallicize = 206, Rupture = 207,
@@ -72,6 +73,13 @@ export type CardEffect =
   | { kind: "Brutality"; selfDmgPerSec: number; draw: number; drawInterval: number }
   | { kind: "Exhaust" }
   | { kind: "AddStatus"; cardId: CardId }
+  // Apply N stacks of Poison to the target. Poison ticks 1 HP per stack
+  // per 閃 (ignoring block), then decrements by 1 each tick.
+  | { kind: "Poison"; amount: number }
+  // Counter: while this card is the QUEUE HEAD (currently casting), any
+  // attack damage dealt to the player is reflected back to the attacker
+  // at 2× the original amount. The card itself has no on-resolve effect.
+  | { kind: "Counter" }
   | { kind: "Combo"; effects: CardEffect[] };
 
 export interface CardDef {
@@ -151,6 +159,8 @@ def({ id: CardId.Exhume,        name: "発掘",         description: "2枚追加
 def({ id: CardId.Impervious,    name: "鉄壁",         description: "ブロック30。キューに4秒以上必要。1試合に1回限り。",  cardType: CardType.Skill,  cost: 2, prereqQueueTime: 1, effect: { kind: "Block", amount: 30 }, exhausts: true });
 def({ id: CardId.LimitBreak,    name: "限界突破",     description: "現在の筋力を2倍。1試合に1回限り。",                  cardType: CardType.Skill,  cost: 1, effect: { kind: "DoubleStrength" }, exhausts: true });
 def({ id: CardId.Offering,      name: "供物",         description: "自分が6ダメージ。3枚追加ドロー。1試合に1回限り。",   cardType: CardType.Skill,  cost: 1, effect: { kind: "Combo", effects: [{ kind: "Bloodletting", amount: -6 }, { kind: "Draw", count: 3 }] }, exhausts: true });
+def({ id: CardId.Counter,       name: "カウンター",   description: "発動中、被ダメージの2倍を相手に返す。",               cardType: CardType.Skill,  cost: 2, effect: { kind: "Counter" } });
+def({ id: CardId.ToxicSpray,    name: "毒液",         description: "相手に毒6。",                                          cardType: CardType.Skill,  cost: 1, effect: { kind: "Poison", amount: 6 } });
 
 // === パワー (Powers — 永続効果、長キャスト) ===
 def({ id: CardId.Combust,       name: "燃焼",         description: "毎秒、自分0.5・相手2.5ダメージ。",                    cardType: CardType.Power,  cost: 1, effect: { kind: "Combust", selfDmgPerSec: 0.5, enemyDmgPerSec: 2.5 } });

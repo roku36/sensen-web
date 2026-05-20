@@ -20,6 +20,8 @@ export const INPUT_RESERVE_CARD_3 = 1 << 14;
 export const INPUT_RESERVE_CARD_4 = 1 << 15;
 export const INPUT_RESERVE_CARD_5 = 1 << 16;
 export const INPUT_RESERVE_CARD_6 = 1 << 17;
+// Clear ALL manual reservations (Space key).
+export const INPUT_RESET_RESERVATIONS = 1 << 18;
 
 export const cardFlag = (handIndex: number): number | null =>
   handIndex < 10 && handIndex >= 0 ? 1 << (handIndex + 1) : null;
@@ -38,6 +40,7 @@ const KEY_TO_FLAG: Record<string, number> = {
   d: INPUT_DRAW, D: INPUT_DRAW,
   "1": INPUT_CARD_1, "2": INPUT_CARD_2, "3": INPUT_CARD_3, "4": INPUT_CARD_4, "5": INPUT_CARD_5,
   "6": INPUT_CARD_6, "7": INPUT_CARD_7, "8": INPUT_CARD_8, "9": INPUT_CARD_9, "0": INPUT_CARD_10,
+  " ": INPUT_RESET_RESERVATIONS,
 };
 
 export const flagsFromKey = (key: string): number => KEY_TO_FLAG[key] ?? 0;

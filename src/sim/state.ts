@@ -13,7 +13,7 @@ import { MAX_HAND_SIZE } from "./rules";
 //     slots fill sequentially: drawSlots[k] is filled when the head's
 //     elapsed time crosses (k+1) seconds. drawFilledCount tracks progress.
 export type QueueEntry =
-  | { kind: "card"; cardId: CardId; duration: number }
+  | { kind: "card"; cardId: CardId; duration: number; blockApplied: boolean }
   | { kind: "draw"; drawSlots: number[]; drawFilledCount: number; duration: number };
 
 // A card that recently resolved. Kept around so the timeline can show it as
@@ -25,20 +25,23 @@ export interface ResolvedEntry {
   resolvedAt: number;
 }
 
-// What this player has queued to AUTO-PLAY when the queue empties (or, for
-// prereq-cards, when the queue total exactly meets the prereq). The Draw
-// button is the default reservation; right-clicking a card overrides it.
-//   kind="draw": queue a draw entry the next time the queue can accept one
-//     (= queue is empty AND there are empty hand slots).
-//   kind="card": queue this hand slot's card the next time the queue can
-//     accept it. For prereqQueueTime > 0, the trigger is "queue remaining
-//     time == prereqQueueTime"; otherwise it's "queue empty".
-//   kind="default": special marker meaning "compute on the fly" — Draw if
-//     there's anywhere to draw to, else the leftmost playable card.
-export type Reservation =
-  | { kind: "default" }
-  | { kind: "draw" }
-  | { kind: "card"; slotIndex: number };
+// Manual reservation list — an ORDERED queue of slot indices the player
+// has committed to play in order. Right-click on a card APPENDS its slot
+// index. Right-click on an already-reserved slot SLICES from that
+// position onward (cascade release: removing #2 also removes #3, #4 …).
+// Space key clears the list entirely.
+//
+// While the list is non-empty, the "forced" defaults (Draw / leftmost
+// playable card) are suppressed in the UI and don't fire from the sim
+// either. When the list runs dry, defaults take over again.
+//
+// Reservation firing: when the queue's trigger condition is met for the
+// HEAD reservation (queue empty for a no-prereq card; queue remaining ==
+// prereq for a prereq card), that slot is queued and the entry pops off
+// the list.
+//
+// Heavy (prereq) cards can only be APPENDED if the cumulative cast cost
+// of (current queue + earlier reservations in the list) meets the prereq.
 
 export interface PlayerState {
   handle: number;
@@ -53,6 +56,11 @@ export interface PlayerState {
   // recorded on actual block changes; between samples block is step-constant.
   // Bounded to the last BLOCK_HISTORY_SEC of activity.
   blockHistory: { t: number; block: number }[];
+  // Poison: integer count. Each 閃 it ticks 1 HP per current poison value
+  // and decrements by 1. Heal cures it. Visualized as a green band that
+  // extends OUTWARD from the block band's outer edge.
+  poison: number;
+  nextPoisonDecayAt: number;
   thorns: number;
   // Cast queue — head [0] is currently casting. Both peers see each other's
   // queue (it's part of GameState, so reproducible from inputs + seed).
@@ -63,8 +71,8 @@ export interface PlayerState {
   castStartedAt: number;
   // Bounded history of recently-resolved cards (head pops). Newest at the END.
   resolvedCards: ResolvedEntry[];
-  // What this player will auto-play next. See Reservation above.
-  reservation: Reservation;
+  // Ordered list of manually-reserved slot indices. See doc above.
+  reservations: number[];
   // Sim seconds at which this player first committed an action (queued a
   // card OR pressed Draw OR set a manual reservation). null until they act.
   // Used by the UI to hide the opponent's queue from a player who hasn't
@@ -118,11 +126,13 @@ const DEFAULT_PLAYER = (
   block: 0,
   nextBlockDecayAt: Infinity,
   blockHistory: [{ t: 0, block: 0 }],
+  poison: 0,
+  nextPoisonDecayAt: Infinity,
   thorns: 0,
   queue: [],
   castStartedAt: 0,
   resolvedCards: [],
-  reservation: { kind: "default" },
+  reservations: [],
   openedAt: null,
   strength: 0,
   vulnerableSecs: 0,
@@ -170,7 +180,7 @@ const clonePlayer = (p: PlayerState): PlayerState => ({
   queue: p.queue.map((q) => q.kind === "draw" ? { ...q, drawSlots: q.drawSlots.slice() } : { ...q }),
   resolvedCards: p.resolvedCards.map((r) => ({ ...r })),
   blockHistory: p.blockHistory.map((b) => ({ ...b })),
-  reservation: { ...p.reservation },
+  reservations: p.reservations.slice(),
   rage: p.rage ? { ...p.rage } : null,
   metallicize: p.metallicize ? { ...p.metallicize } : null,
   demonForm: p.demonForm ? { ...p.demonForm } : null,

@@ -28,6 +28,11 @@ export function useKeyboardInput() {
       if (e.key === "d" || e.key === "D") flags = 1;
       else if (e.key >= "1" && e.key <= "9") flags = 1 << (Number(e.key));
       else if (e.key === "0") flags = 1 << 10;
+      else if (e.key === " ") {
+        // Space = clear manual reservations (INPUT_RESET_RESERVATIONS, bit 18).
+        e.preventDefault();
+        flags = 1 << 18;
+      }
       if (flags !== 0) s.pushLocalInput(flags);
     };
     window.addEventListener("keydown", onKey);

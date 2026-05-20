@@ -17,6 +17,7 @@ import {
   INPUT_RESERVE_DRAW,
   INPUT_RESERVE_CARD_1, INPUT_RESERVE_CARD_2, INPUT_RESERVE_CARD_3,
   INPUT_RESERVE_CARD_4, INPUT_RESERVE_CARD_5, INPUT_RESERVE_CARD_6,
+  INPUT_RESET_RESERVATIONS,
 } from "./input";
 import {
   BLOCK_HISTORY_SEC,
@@ -24,20 +25,28 @@ import {
   DT,
   MAX_HAND_SIZE,
   PLAYED_TO_DISCARD,
+  POISON_DECAY_SEN_PER_STEP,
   RESOLVED_HISTORY_MAX,
   SEC_PER_SEN,
   senToSec,
 } from "./rules";
 import { rangeU64 } from "./rng";
-import type { GameState, PlayerState } from "./state";
+import type { GameState, PlayerState, QueueEntry } from "./state";
 
 const enum DamageKind { Attack = 0, Power = 1, Thorns = 2 }
 
-interface DamageMsg { target: 0 | 1; amount: number; source: 0 | 1 | null; kind: DamageKind; pierce?: number }
+interface DamageMsg {
+  target: 0 | 1; amount: number; source: 0 | 1 | null; kind: DamageKind; pierce?: number;
+  // Effects applied ONLY IF some damage reached HP (Vuln/Weak/etc. that ride
+  // along with an attack — if the hit was fully absorbed by block, they
+  // don't apply). Filled by applyEffect when an Attack Combo is processed.
+  onLand?: CardEffect[];
+}
 interface HealMsg { target: 0 | 1; amount: number }
 interface DrawMsg { target: 0 | 1; count: number }
 interface BlockMsg { target: 0 | 1; amount: number }
 interface ThornsMsg { target: 0 | 1; amount: number }
+interface PoisonMsg { target: 0 | 1; amount: number }
 interface StrMsg { target: 0 | 1; amount: number }
 interface VulnMsg { target: 0 | 1; duration: number }
 interface WeakMsg { target: 0 | 1; duration: number }
@@ -49,16 +58,17 @@ interface Bus {
   draw: DrawMsg[];
   block: BlockMsg[];
   thorns: ThornsMsg[];
+  poison: PoisonMsg[];
   strength: StrMsg[];
   vuln: VulnMsg[];
   weak: WeakMsg[];
   addStatus: AddStatusMsg[];
-  cardPlayed: { player: 0 | 1; cardId: CardId }[];
+  cardPlayed: { player: 0 | 1; cardId: CardId; skipBlock: boolean }[];
   exhausted: { player: 0 | 1; cardId: CardId }[];
 }
 
 const newBus = (): Bus => ({
-  damage: [], heal: [], draw: [], block: [], thorns: [],
+  damage: [], heal: [], draw: [], block: [], thorns: [], poison: [],
   strength: [], vuln: [], weak: [], addStatus: [],
   cardPlayed: [], exhausted: [],
 });
@@ -167,6 +177,24 @@ function armBlockDecay(p: PlayerState, now: number) {
   }
 }
 
+// Poison ticks once per 閃: deal (poison) HP damage IGNORING block,
+// decrement poison by 1.
+function tickPoison(p: PlayerState, now: number) {
+  while (p.poison > 0 && now >= p.nextPoisonDecayAt) {
+    p.hp = Math.max(0, p.hp - p.poison);
+    p.poison -= 1;
+    p.nextPoisonDecayAt += SEC_PER_SEN * POISON_DECAY_SEN_PER_STEP;
+  }
+  if (p.poison <= 0) p.nextPoisonDecayAt = Infinity;
+}
+
+function armPoisonDecay(p: PlayerState, now: number) {
+  if (p.poison <= 0) { p.nextPoisonDecayAt = Infinity; return; }
+  if (!isFinite(p.nextPoisonDecayAt) || p.nextPoisonDecayAt <= now) {
+    p.nextPoisonDecayAt = now + SEC_PER_SEN * POISON_DECAY_SEN_PER_STEP;
+  }
+}
+
 // ── Cast queue: resolve head when its duration elapses, advance start time ──
 
 function tickCasting(s: GameState, now: number, bus: Bus) {
@@ -209,6 +237,15 @@ function tickCasting(s: GameState, now: number, bus: Bus) {
         }
       }
 
+      // Block-on-cast-start: if this card has Block effects and we haven't
+      // applied them yet, do it NOW. (See applyBlockOnStart for the gather
+      // logic.) Only attacks/utilities still wait until the cast finishes.
+      if (entry.kind === "card" && !entry.blockApplied) {
+        const def = getCardDef(entry.cardId);
+        if (def) applyBlockOnStart(idx, def.effect, bus);
+        entry.blockApplied = true;
+      }
+
       // Has this entry's duration fully elapsed? If not, stop draining.
       if (now - p.castStartedAt < entry.duration) break;
       p.queue.shift();
@@ -236,12 +273,28 @@ function tickCasting(s: GameState, now: number, bus: Bus) {
         if (def.cardType === CardType.Skill && p.corruption) { goToDiscard = false; countsAsExhaust = true; }
         if (goToDiscard) p.discard.push(entry.cardId);
 
-        bus.cardPlayed.push({ player: idx, cardId: entry.cardId });
+        // skipBlock: block already fired at cast start, don't apply again.
+        bus.cardPlayed.push({ player: idx, cardId: entry.cardId, skipBlock: true });
         if (countsAsExhaust) bus.exhausted.push({ player: idx, cardId: entry.cardId });
       }
       // Draw entries leave no history mark — the slot fills themselves
       // make the action visible in the hand row.
     }
+  }
+}
+
+// Walk an effect tree and emit only Block events onto the bus. Used at
+// cast-start for card heads.
+function applyBlockOnStart(idx: 0 | 1, effect: CardEffect, bus: Bus) {
+  switch (effect.kind) {
+    case "Block":
+      bus.block.push({ target: idx, amount: effect.amount });
+      break;
+    case "Combo":
+      for (const sub of effect.effects) applyBlockOnStart(idx, sub, bus);
+      break;
+    default:
+      // non-block effect: skip at start, will fire at resolve
   }
 }
 
@@ -312,7 +365,7 @@ export function queueTotalCost(p: PlayerState, now: number = 0): number {
 // Try to queue the card in hand[slotIndex] immediately. Returns true on
 // success. Returns false if the slot is empty, the card is unplayable, or
 // the prereq isn't currently satisfied.
-function queueCardImmediate(p: PlayerState, slotIndex: number, now: number): boolean {
+function queueCardImmediate(p: PlayerState, slotIndex: number, now: number, bus: Bus): boolean {
   const cardId = p.hand[slotIndex];
   if (cardId === null || cardId === undefined) return false;
   const def = getCardDef(cardId);
@@ -323,8 +376,16 @@ function queueCardImmediate(p: PlayerState, slotIndex: number, now: number): boo
   let duration = senToSec(def.cost);
   if (p.corruption && def.cardType === CardType.Skill) duration = 0;
   p.hand[slotIndex] = null;
-  if (p.queue.length === 0) p.castStartedAt = Math.max(p.castStartedAt, now);
-  p.queue.push({ kind: "card", cardId, duration });
+  const wasEmpty = p.queue.length === 0;
+  if (wasEmpty) p.castStartedAt = Math.max(p.castStartedAt, now);
+  const entry: QueueEntry = { kind: "card", cardId, duration, blockApplied: false };
+  p.queue.push(entry);
+  // Block-on-cast-start: if THIS card is now the head (queue was empty
+  // before push), apply its Block effects immediately.
+  if (wasEmpty) {
+    applyBlockOnStart(p.handle as 0 | 1, def.effect, bus);
+    entry.blockApplied = true;
+  }
   return true;
 }
 
@@ -333,21 +394,58 @@ const RESERVE_FLAGS = [
   INPUT_RESERVE_CARD_4, INPUT_RESERVE_CARD_5, INPUT_RESERVE_CARD_6,
 ];
 
-function applyInput(s: GameState, idx: 0 | 1, flags: number) {
+// Right-click on slot N: append to reservations list OR slice from there
+// onward (cascade release). Heavy cards check the cumulative cost (queue
+// remaining + sum of preceding reservations' durations) >= prereq.
+function applyReservationToggle(p: PlayerState, slotIndex: number, now: number) {
+  const existingIdx = p.reservations.indexOf(slotIndex);
+  if (existingIdx >= 0) {
+    // Cascade-release: drop this entry and everything after.
+    p.reservations.length = existingIdx;
+    return;
+  }
+  const cardId = p.hand[slotIndex];
+  if (cardId === null || cardId === undefined) return; // empty slot, ignore
+  const def = getCardDef(cardId);
+  if (!def || def.cost >= 900) return; // unplayable, ignore
+  // Heavy-card check: cumulative committed time (queue remaining +
+  // preceding reservations' durations) must meet the prereq.
+  const prereqSec = senToSec(def.prereqQueueTime ?? 0);
+  if (prereqSec > 0) {
+    let committed = queueRemainingTime(p, now);
+    for (const slot of p.reservations) {
+      const c = p.hand[slot];
+      if (c === null || c === undefined) continue;
+      const d = getCardDef(c);
+      if (!d) continue;
+      committed += senToSec(d.cost);
+    }
+    if (committed < prereqSec) return; // not enough setup yet, reject
+  }
+  p.reservations.push(slotIndex);
+}
+
+function applyInput(s: GameState, idx: 0 | 1, flags: number, bus: Bus) {
   if (flags === 0) return;
   const p = s.players[idx];
   const now = s.frame * DT;
 
-  // Reservation inputs first — these don't immediately add to queue, just
-  // set the auto-play target. They still count as "the player has acted"
-  // for the opened-at gate.
+  // Reset all manual reservations (space key). Stops here — single dedicated
+  // input; further reservation toggles wouldn't make sense same-frame.
+  if ((flags & INPUT_RESET_RESERVATIONS) !== 0) {
+    p.reservations.length = 0;
+    if (p.openedAt === null) p.openedAt = now;
+  }
+
+  // Reserve Draw (right-click on Draw button) just clears the manual list
+  // — Draw is the default forced reservation when the list is empty.
   if ((flags & INPUT_RESERVE_DRAW) !== 0) {
-    p.reservation = { kind: "draw" };
+    p.reservations.length = 0;
     if (p.openedAt === null) p.openedAt = now;
   }
   for (let i = 0; i < 6; i++) {
     if ((flags & RESERVE_FLAGS[i]) !== 0) {
-      p.reservation = { kind: "card", slotIndex: i };
+      applyReservationToggle(p, i, now);
       if (p.openedAt === null) p.openedAt = now;
     }
   }
@@ -364,75 +462,72 @@ function applyInput(s: GameState, idx: 0 | 1, flags: number) {
     const flag = cardFlag(i);
     if (flag === null) continue;
     if ((flags & flag) === 0) continue;
-    if (queueCardImmediate(p, i, now)) {
+    if (queueCardImmediate(p, i, now, bus)) {
       if (p.openedAt === null) p.openedAt = now;
     }
     break;
   }
 }
 
-// Auto-fire reservation when the trigger condition is met:
-//   - reservation.kind === "draw": queue empty AND there's an empty slot
-//   - reservation.kind === "card" without prereq: queue empty
-//   - reservation.kind === "card" with prereq>0: queue remaining == prereq
-//   - reservation.kind === "default": treat as "draw if possible else
-//       leftmost playable card"
-// If the action succeeds, the reservation collapses back to "default" so the
-// next idle moment re-evaluates from scratch (the Draw default).
-function tickReservation(s: GameState, now: number) {
+// Auto-fire reservations. Walks the manual list head-first; fires when the
+// head's trigger condition is met (queue empty for non-prereq, queue
+// remaining == prereq for prereq cards). Falls back to "default" (Draw or
+// leftmost playable) only when the manual list is EMPTY.
+function tickReservation(s: GameState, now: number, bus: Bus) {
   for (const idx of [0, 1] as const) {
     const p = s.players[idx];
-    if (p.queue.length === 0) {
-      tryFireOnQueueEmpty(p, now);
-    } else if (p.reservation.kind === "card") {
-      const cardId = p.hand[p.reservation.slotIndex];
-      if (cardId !== null && cardId !== undefined) {
-        const def = getCardDef(cardId);
-        const prereqSec = def ? senToSec(def.prereqQueueTime ?? 0) : 0;
-        if (prereqSec > 0) {
-          // Fire when queue remaining ≈ prereq (within one frame's DT).
-          const remaining = queueRemainingTime(p, now);
-          if (remaining <= prereqSec + DT / 2 && remaining >= prereqSec - DT / 2) {
-            if (queueCardImmediate(p, p.reservation.slotIndex, now)) {
-              p.reservation = { kind: "default" };
-            }
-          }
-        }
-      }
+    // Loop: a fire may make the next reservation eligible (cascade through
+    // same-frame fires). Bounded for safety.
+    for (let safety = 0; safety < 8; safety++) {
+      if (!tickReservationOnce(p, now, bus)) break;
     }
   }
 }
 
-function tryFireOnQueueEmpty(p: PlayerState, now: number) {
-  let action: "draw" | { kind: "card"; slot: number } | "none" = "none";
-  if (p.reservation.kind === "draw") {
-    action = "draw";
-  } else if (p.reservation.kind === "card") {
-    const cardId = p.hand[p.reservation.slotIndex];
-    if (cardId !== null && cardId !== undefined) {
-      const def = getCardDef(cardId);
-      if (def && def.cost < 900 && (def.prereqQueueTime ?? 0) === 0) {
-        action = { kind: "card", slot: p.reservation.slotIndex };
+function tickReservationOnce(p: PlayerState, now: number, bus: Bus): boolean {
+  if (p.reservations.length > 0) {
+    const headSlot = p.reservations[0];
+    const cardId = p.hand[headSlot];
+    if (cardId === null || cardId === undefined) {
+      // Slot was emptied somehow; drop this reservation and try the next.
+      p.reservations.shift();
+      return true;
+    }
+    const def = getCardDef(cardId);
+    if (!def || def.cost >= 900) {
+      p.reservations.shift();
+      return true;
+    }
+    const prereqSec = senToSec(def.prereqQueueTime ?? 0);
+    if (prereqSec > 0) {
+      // Heavy card: fire when queue remaining ≈ prereq.
+      const remaining = queueRemainingTime(p, now);
+      if (remaining <= prereqSec + DT / 2 && remaining >= prereqSec - DT / 2) {
+        if (queueCardImmediate(p, headSlot, now, bus)) {
+          p.reservations.shift();
+          return true;
+        }
+      }
+      return false;
+    }
+    // Non-prereq: fire when queue empty.
+    if (p.queue.length === 0) {
+      if (queueCardImmediate(p, headSlot, now, bus)) {
+        p.reservations.shift();
+        return true;
       }
     }
-  } else {
-    // Default: prefer Draw if there's an empty non-reserved slot, else the
-    // leftmost playable card with no prereq.
-    if (hasEmptyOpenSlot(p)) {
-      action = "draw";
-    } else {
-      const slot = leftmostPlayableSlot(p, now);
-      if (slot >= 0) action = { kind: "card", slot };
-    }
+    return false;
   }
-  if (action === "draw") {
+  // Default forced reservation: Draw if there's space, else leftmost playable.
+  if (p.queue.length !== 0) return false;
+  if (hasEmptyOpenSlot(p)) {
     applyDrawAction(p, now);
-    if (p.reservation.kind === "draw") p.reservation = { kind: "default" };
-  } else if (action !== "none") {
-    if (queueCardImmediate(p, action.slot, now)) {
-      if (p.reservation.kind === "card") p.reservation = { kind: "default" };
-    }
+    return true;
   }
+  const slot = leftmostPlayableSlot(p, now);
+  if (slot >= 0) return queueCardImmediate(p, slot, now, bus);
+  return false;
 }
 
 function hasEmptyOpenSlot(p: PlayerState): boolean {
@@ -553,12 +648,14 @@ function drawCards(s: GameState, idx: 0 | 1, count: number, bus: Bus) {
 
 // ── Card effect resolution ──
 
-// Returns INTEGER damage. The ×0.75 / ×1.5 multipliers from weak/vuln are
-// rounded immediately so block (an integer) absorbs an integer number of
-// units — keeps every block update step-clean.
+// Returns INTEGER damage. Multipliers (weak / vulnerable) are applied to
+// the DEFENDER (target takes more) and rounded so block absorbs whole
+// integer units.
+//   - Weak on defender:        damage ×2
+//   - Vulnerable on defender:  damage ×1.5
 function attackDamage(base: number, attacker: PlayerState, defender: PlayerState | null): number {
   let dmg = base + attacker.strength;
-  if (attacker.weakSecs > 0) dmg *= 0.75;
+  if (defender && defender.weakSecs > 0) dmg *= 2;
   if (defender && defender.vulnerableSecs > 0) dmg *= 1.5;
   return Math.max(0, Math.round(dmg));
 }
@@ -568,6 +665,8 @@ function applyEffect(
   idx: 0 | 1,
   effect: CardEffect,
   bus: Bus,
+  /** When true, skip Block effects — they've already fired at cast start. */
+  skipBlock = false,
 ) {
   const p = s.players[idx];
   const o = s.players[opp(idx)];
@@ -589,7 +688,14 @@ function applyEffect(
       bus.draw.push({ target: idx, count: effect.count });
       break;
     case "Block":
-      bus.block.push({ target: idx, amount: effect.amount });
+      if (!skipBlock) bus.block.push({ target: idx, amount: effect.amount });
+      break;
+    case "Poison":
+      bus.poison.push({ target: opp(idx), amount: effect.amount });
+      break;
+    case "Counter":
+      // Pure marker effect — actual reflection is detected by inspecting
+      // the queue head in processDamage. Nothing to do at resolve.
       break;
     case "Thorns":
       bus.thorns.push({ target: idx, amount: effect.amount });
@@ -673,9 +779,35 @@ function applyEffect(
     case "AddStatus":
       bus.addStatus.push({ target: idx, cardId: effect.cardId });
       break;
-    case "Combo":
-      for (const e of effect.effects) applyEffect(s, idx, e, bus);
+    case "Combo": {
+      // No-debuff-on-blocked: if the combo contains attack damage AND
+      // conditional debuffs (Vuln/Weak/Poison/AddStatus), the debuffs
+      // ride along the FIRST damage message as `onLand` — they only
+      // apply if some damage reached HP. Non-attack sub-effects (Block,
+      // Heal, Draw, etc.) fire unconditionally.
+      const isDamaging = (e: CardEffect) =>
+        e.kind === "Damage" || e.kind === "MultiHit" || e.kind === "BodySlam";
+      const isCondDebuff = (e: CardEffect) =>
+        e.kind === "Vulnerable" || e.kind === "Weak" ||
+        e.kind === "Poison" || e.kind === "AddStatus";
+      const hasAttack = effect.effects.some(isDamaging);
+      if (hasAttack) {
+        const conditionals: CardEffect[] = [];
+        const damageStart = bus.damage.length;
+        for (const sub of effect.effects) {
+          if (isCondDebuff(sub)) conditionals.push(sub);
+          else applyEffect(s, idx, sub, bus, skipBlock);
+        }
+        if (conditionals.length > 0 && bus.damage.length > damageStart) {
+          // Attach to the FIRST damage message produced by this combo.
+          const dm = bus.damage[damageStart];
+          dm.onLand = (dm.onLand ?? []).concat(conditionals);
+        }
+      } else {
+        for (const sub of effect.effects) applyEffect(s, idx, sub, bus, skipBlock);
+      }
       break;
+    }
   }
 }
 
@@ -687,7 +819,7 @@ function processCardPlayed(s: GameState, bus: Bus) {
     for (const ev of played) {
       const def = getCardDef(ev.cardId);
       if (!def) continue;
-      applyEffect(s, ev.player, def.effect, bus);
+      applyEffect(s, ev.player, def.effect, bus, ev.skipBlock);
       if (def.cardType === CardType.Attack) {
         const p = s.players[ev.player];
         if (p.rage && p.rage.remaining > 0) {
@@ -747,6 +879,14 @@ function processDamage(s: GameState, bus: Bus) {
     const remaining = blockable + directHp;
     if (remaining > 0) target.hp = Math.max(0, target.hp - remaining);
 
+    // No-debuff-on-blocked: ride-along effects (Vuln/Weak/Poison/AddStatus
+    // attached to an attack combo) fire ONLY if some damage actually
+    // reached HP. Fully-absorbed hits leave the target unaffected.
+    if (m.onLand && m.onLand.length > 0 && remaining > 0 && m.source !== null) {
+      for (const onLand of m.onLand) applyEffect(s, m.source, onLand, bus);
+    }
+
+    // Thorns reflection (attacker took an attack → take thorns damage back).
     if (m.kind === DamageKind.Attack && m.source !== null && m.source !== m.target && target.thorns > 0 && m.amount > 0) {
       bus.damage.push({
         target: m.source,
@@ -755,9 +895,40 @@ function processDamage(s: GameState, bus: Bus) {
         kind: DamageKind.Thorns,
       });
     }
+    // Counter card: if defender's queue head is a Counter card AND this was
+    // an attack from a separate source, reflect 2× back to attacker. The
+    // amount reflected is the ORIGINAL damage value (before block).
+    if (m.kind === DamageKind.Attack && m.source !== null && m.source !== m.target && m.amount > 0
+        && target.queue.length > 0 && target.queue[0].kind === "card") {
+      const headDef = getCardDef(target.queue[0].cardId);
+      if (headDef && hasCounterEffect(headDef.effect)) {
+        bus.damage.push({
+          target: m.source,
+          amount: m.amount * 2,
+          source: m.target,
+          kind: DamageKind.Power,
+        });
+      }
+    }
     if (m.kind === DamageKind.Power && m.source === m.target && m.amount > 0 && target.rupture) {
       target.strength += target.rupture.strengthOnSelfDmg;
     }
+  }
+}
+
+function hasCounterEffect(e: CardEffect): boolean {
+  if (e.kind === "Counter") return true;
+  if (e.kind === "Combo") return e.effects.some(hasCounterEffect);
+  return false;
+}
+
+function processPoison(s: GameState, bus: Bus) {
+  const now = s.frame * DT;
+  while (bus.poison.length > 0) {
+    const m = bus.poison.shift()!;
+    const t = s.players[m.target];
+    t.poison = Math.max(0, t.poison + m.amount);
+    armPoisonDecay(t, now);
   }
 }
 
@@ -766,6 +937,12 @@ function processHeal(s: GameState, bus: Bus) {
     const m = bus.heal.shift()!;
     const p = s.players[m.target];
     p.hp = Math.min(p.hpMax, p.hp + m.amount);
+    // Heal also cures poison (up to amount stacks). User spec:
+    // 「治療系のカードによってなくすことができる」.
+    if (p.poison > 0 && m.amount > 0) {
+      p.poison = Math.max(0, p.poison - m.amount);
+      if (p.poison <= 0) p.nextPoisonDecayAt = Infinity;
+    }
   }
 }
 
@@ -809,24 +986,25 @@ export function step(s: GameState, p0Input: number, p1Input: number, dt: number 
   for (const p of s.players) tickStatus(p, dt);
   tickPowers(s, dt, bus);
   for (const p of s.players) tickBlockDecay(p, now);
+  for (const p of s.players) tickPoison(p, now);
 
   // 2. Cast slots: card casts resolve, draw-entry slots fill sequentially.
   tickCasting(s, now, bus);
 
-  // 3. Inputs: explicit plays / reservations.
-  applyInput(s, 0, p0Input);
-  applyInput(s, 1, p1Input);
+  // 3. Inputs: explicit plays / reservations (mutate p.reservations etc.).
+  applyInput(s, 0, p0Input, bus);
+  applyInput(s, 1, p1Input, bus);
 
-  // 4. Reservation auto-fire: if a player's queue is empty (or the prereq
-  // condition for a card reservation is met), append the reserved action.
-  tickReservation(s, now);
+  // 4. Reservation auto-fire: walk each player's manual reservation list
+  // head-first, OR fall back to forced default (Draw / leftmost playable).
+  tickReservation(s, now, bus);
 
   // 5. Drain effect / draw / damage chains until quiescent.
   let safety = 0;
   while (
     bus.cardPlayed.length || bus.exhausted.length ||
     bus.draw.length || bus.damage.length || bus.heal.length ||
-    bus.block.length || bus.thorns.length ||
+    bus.block.length || bus.thorns.length || bus.poison.length ||
     bus.strength.length || bus.vuln.length || bus.weak.length || bus.addStatus.length
   ) {
     if (++safety > 256) break;
@@ -835,10 +1013,12 @@ export function step(s: GameState, p0Input: number, p1Input: number, dt: number 
     processBlockGains(s, bus);
     processDamage(s, bus);
     processHeal(s, bus);
+    processPoison(s, bus);
     processDraw(s, bus);
   }
   // Re-arm block decay for both players (idempotent if block unchanged).
   for (const p of s.players) armBlockDecay(p, now);
+  for (const p of s.players) armPoisonDecay(p, now);
 
   // 6. Game over? HP zero OR hand stuck with no playable card and no empties.
   const p0Stuck = isStuck(s.players[0]);

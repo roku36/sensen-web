@@ -29,6 +29,12 @@ export const secToSen = (sec: number) => sec / SEC_PER_SEN;
 // now" so a fresh stack always has a full 閃 before the first decrement.
 export const BLOCK_DECAY_SEN_PER_STEP = 1;
 
+// ── Poison ──
+// Poison ticks once per 閃: deals (current poison) HP damage IGNORING block,
+// then decrements poison by 1. Total damage from N poison = N*(N+1)/2.
+// Heal cards subtract their amount from poison too.
+export const POISON_DECAY_SEN_PER_STEP = 1;
+
 // ── Draw action ──
 // Pressing the Draw button appends a draw entry to the queue with duration =
 // (count) × DRAW_SEN_PER_CARD 閃. Slot k fills castStartedAt + (k+1) 閃 in.

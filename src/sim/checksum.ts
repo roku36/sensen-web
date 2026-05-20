@@ -41,11 +41,13 @@ function hashPlayer(p: PlayerState) {
   f(isFinite(p.nextBlockDecayAt) ? p.nextBlockDecayAt : 1e9);
   u32(p.blockHistory.length);
   for (const h of p.blockHistory) { f(h.t); u32(h.block | 0); }
+  u32(p.poison | 0);
+  f(isFinite(p.nextPoisonDecayAt) ? p.nextPoisonDecayAt : 1e9);
   f(p.thorns);
   u32(p.queue.length);
   for (const q of p.queue) {
     if (q.kind === "card") {
-      byte(0); u32(q.cardId); f(q.duration);
+      byte(0); u32(q.cardId); f(q.duration); byte(q.blockApplied ? 1 : 0);
     } else {
       byte(1); f(q.duration); u32(q.drawFilledCount);
       u32(q.drawSlots.length);
@@ -55,10 +57,9 @@ function hashPlayer(p: PlayerState) {
   f(p.castStartedAt);
   u32(p.resolvedCards.length);
   for (const r of p.resolvedCards) { u32(r.cardId); f(r.duration); f(r.resolvedAt); }
-  // Reservation kind + payload.
-  if (p.reservation.kind === "default") { byte(0); }
-  else if (p.reservation.kind === "draw") { byte(1); }
-  else { byte(2); u32(p.reservation.slotIndex); }
+  // Manual reservations: ordered list of slot indices.
+  u32(p.reservations.length);
+  for (const r of p.reservations) u32(r);
   // openedAt — null is a sentinel ("hasn't acted yet").
   byte(p.openedAt === null ? 0 : 1);
   if (p.openedAt !== null) f(p.openedAt);
