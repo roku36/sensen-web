@@ -11,18 +11,14 @@
 // playable + the player's own manual reservation list) still fires inside
 // the sim, which is what we want — the user has already opted into that.
 //
-// Block / poison samples are emitted on a FIXED 0.5閃 grid relative to
-// the start frame (plus the t=0 anchor and any transition during a grid
-// interval). This stabilises what the UI receives — between grid points
-// the data is constant, so any visual flicker is purely a rendering
-// concern (positions still scroll smoothly as nowSec advances).
+// Block / poison samples are emitted whenever the value CHANGES — that
+// way the sample's relative-to-now `t` matches the actual event time in
+// the sim, and the UI polygon scrolls left smoothly with the queue chips
+// instead of being snapped to an artificial grid.
 
 import { step } from "./reducer";
-import { DT, SEC_PER_SEN } from "./rules";
+import { DT } from "./rules";
 import { snapshot, GameState } from "./state";
-
-// Sample grid: one block/poison sample every 0.5 閃.
-const SAMPLE_GRID_SEC = SEC_PER_SEN / 2;
 
 export interface BlockSample {
   /** Sim seconds RELATIVE to `from.frame * DT` (i.e., 0 = now). */
@@ -79,12 +75,10 @@ export function predictForward(from: GameState, horizonSec: number): PredictResu
     p1Pierces: [],
     endsAtFrame: null,
   };
-  // The latest grid index emitted for each (player, channel). We emit a
-  // new sample only after the sim has crossed the NEXT grid boundary.
-  let p0BlockGridIdx = 0;
-  let p1BlockGridIdx = 0;
-  let p0PoisonGridIdx = 0;
-  let p1PoisonGridIdx = 0;
+  let last0 = s.players[0].block;
+  let last1 = s.players[1].block;
+  let lastPo0 = s.players[0].poison;
+  let lastPo1 = s.players[1].poison;
 
   while (s.frame < stopFrame) {
     const beforeHp0 = s.players[0].hp;
@@ -96,55 +90,37 @@ export function predictForward(from: GameState, horizonSec: number): PredictResu
     const wasPlaying = s.result === 0;
     step(s, 0, 0);
     if (wasPlaying && s.result !== 0) out.endsAtFrame = s.frame;
+    // Event-precise sampling: emit a sample only when the value changed.
+    // sample.t = (s.frame * DT - startSec) is the RELATIVE time from the
+    // snapshot. As the caller re-runs predict each frame with a fresh
+    // snapshot, these relative times shift smoothly with `now`, so the
+    // polygon scrolls left in lockstep with the queue chips.
     const t = s.frame * DT - startSec;
-    // Emit one block/poison sample per 0.5 閃 boundary crossed. We use the
-    // CURRENT-frame values: between grid points the visualization is
-    // step-constant, which matches the reducer (block decays in whole
-    // units on 閃 boundaries anyway).
-    const gridIdx = Math.floor(t / SAMPLE_GRID_SEC + 1e-9);
-    if (gridIdx > p0BlockGridIdx) {
-      out.p0Block.push({ t: gridIdx * SAMPLE_GRID_SEC, block: s.players[0].block });
-      p0BlockGridIdx = gridIdx;
-    }
-    if (gridIdx > p1BlockGridIdx) {
-      out.p1Block.push({ t: gridIdx * SAMPLE_GRID_SEC, block: s.players[1].block });
-      p1BlockGridIdx = gridIdx;
-    }
-    if (gridIdx > p0PoisonGridIdx) {
-      out.p0Poison.push({ t: gridIdx * SAMPLE_GRID_SEC, poison: s.players[0].poison });
-      p0PoisonGridIdx = gridIdx;
-    }
-    if (gridIdx > p1PoisonGridIdx) {
-      out.p1Poison.push({ t: gridIdx * SAMPLE_GRID_SEC, poison: s.players[1].poison });
-      p1PoisonGridIdx = gridIdx;
-    }
-    // Pierce detection: HP dropped on this frame and block also took a hit
-    // (or was already 0). Stays frame-precise so the red mark appears at
-    // the exact resolution moment, not snapped to a grid line.
+    const b0 = s.players[0].block;
+    if (b0 !== last0) { out.p0Block.push({ t, block: b0 }); last0 = b0; }
+    const b1 = s.players[1].block;
+    if (b1 !== last1) { out.p1Block.push({ t, block: b1 }); last1 = b1; }
+    const po0 = s.players[0].poison;
+    if (po0 !== lastPo0) { out.p0Poison.push({ t, poison: po0 }); lastPo0 = po0; }
+    const po1 = s.players[1].poison;
+    if (po1 !== lastPo1) { out.p1Poison.push({ t, poison: po1 }); lastPo1 = po1; }
+    // Pierce: HP dropped on this frame AND block also took a hit (or was 0).
     const hpLost0 = beforeHp0 - s.players[0].hp;
     if (hpLost0 > 0 && (beforeBlock0 === 0 || s.players[0].block < beforeBlock0)) {
-      const poisonTick = beforePoison0;
-      const attackHp = Math.max(0, hpLost0 - (s.players[0].poison < beforePoison0 ? poisonTick : 0));
+      const attackHp = Math.max(0, hpLost0 - (s.players[0].poison < beforePoison0 ? beforePoison0 : 0));
       if (attackHp > 0) out.p0Pierces.push({ t, hpLost: attackHp });
     }
     const hpLost1 = beforeHp1 - s.players[1].hp;
     if (hpLost1 > 0 && (beforeBlock1 === 0 || s.players[1].block < beforeBlock1)) {
-      const poisonTick = beforePoison1;
-      const attackHp = Math.max(0, hpLost1 - (s.players[1].poison < beforePoison1 ? poisonTick : 0));
+      const attackHp = Math.max(0, hpLost1 - (s.players[1].poison < beforePoison1 ? beforePoison1 : 0));
       if (attackHp > 0) out.p1Pierces.push({ t, hpLost: attackHp });
     }
   }
-  // Horizon cap.
+  // Horizon cap so the UI can extend a flat tail to the right edge.
   const finalT = (s.frame - startFrame) * DT;
-  const cap = (arr: { t: number; block?: number; poison?: number }[], v: number, key: "block" | "poison") => {
-    const last = arr[arr.length - 1];
-    if (last.t < finalT) {
-      arr.push(key === "block" ? { t: finalT, block: v } as never : { t: finalT, poison: v } as never);
-    }
-  };
-  cap(out.p0Block, s.players[0].block, "block");
-  cap(out.p1Block, s.players[1].block, "block");
-  cap(out.p0Poison, s.players[0].poison, "poison");
-  cap(out.p1Poison, s.players[1].poison, "poison");
+  if (out.p0Block[out.p0Block.length - 1].t < finalT) out.p0Block.push({ t: finalT, block: last0 });
+  if (out.p1Block[out.p1Block.length - 1].t < finalT) out.p1Block.push({ t: finalT, block: last1 });
+  if (out.p0Poison[out.p0Poison.length - 1].t < finalT) out.p0Poison.push({ t: finalT, poison: lastPo0 });
+  if (out.p1Poison[out.p1Poison.length - 1].t < finalT) out.p1Poison.push({ t: finalT, poison: lastPo1 });
   return out;
 }
