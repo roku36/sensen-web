@@ -30,7 +30,7 @@ import {
 } from "../../sim/rules";
 import { GameState, PlayerState, ResolvedEntry } from "../../sim/state";
 
-import { getActiveMode, getSession, useKeyboardInput } from "../hooks";
+import { advanceFrames, getActiveMode, getSession, useKeyboardInput } from "../hooks";
 import { useStore } from "../store";
 import { PilePeek } from "./PilePeek";
 import { ResultPanel } from "./ResultPanel";
@@ -135,6 +135,7 @@ export function SimpleGameplay() {
           <BattleZone game={game} op={op} me={me} now={now} />
           <SelfHand player={me} now={now} />
           <DrawButton player={me} />
+          <AdvanceButton />
         </div>
       </div>
 
@@ -322,6 +323,8 @@ function BattleZone({ game, op, me, now }: { game: GameState; op: PlayerState; m
             <PoisonArea currentPoison={me.poison} future={mePoisonPred} side="self" maxSec={maxSec} />
             {!hideOppQueue && <PierceMarks events={opPierces} side="opp" />}
             <PierceMarks events={mePierces} side="self" />
+            <BlockGainLabels history={op.blockHistory} future={opBlockPred} side="opp" nowSec={now} maxSec={maxSec} hidden={hideOppQueue} />
+            <BlockGainLabels history={me.blockHistory} future={meBlockPred} side="self" nowSec={now} maxSec={maxSec} />
           </svg>
           <div style={{ ...nowDivider, left: NOW_OFFSET - 18, top: BLOCK_CENTER - 8 }}>NOW</div>
           <div style={{ ...nowLine, left: NOW_OFFSET, height: TIMELINE_HEIGHT }} />
@@ -801,6 +804,66 @@ function PierceMarks({
   );
 }
 
+// Numeric labels at block-gain transitions. Walks (sample[i-1], sample[i])
+// pairs in both history and prediction; whenever block JUMPED UP, drop a
+// "newBlockValue" label at that point on the trajectory curve. Past
+// labels come from blockHistory directly; future labels from prediction
+// samples. Helps the player count the total block they've stacked up.
+function BlockGainLabels({
+  history, future, side, nowSec, maxSec, hidden,
+}: {
+  history: { t: number; block: number }[];
+  future: BlockSample[];
+  side: "opp" | "self";
+  nowSec: number;
+  maxSec: number;
+  hidden?: boolean;
+}) {
+  if (hidden) return null;
+  type Gain = { t: number; newBlock: number };
+  const gains: Gain[] = [];
+  // Past: walk blockHistory (absolute t).
+  for (let i = 1; i < history.length; i++) {
+    const cur = history[i], prev = history[i - 1];
+    if (cur.block > prev.block) {
+      const r = cur.t - nowSec;
+      if (r >= -HISTORY_SEC) gains.push({ t: r, newBlock: cur.block });
+    }
+  }
+  // Future: walk prediction samples (relative t).
+  for (let i = 1; i < future.length; i++) {
+    const cur = future[i], prev = future[i - 1];
+    if (cur.block > prev.block && cur.t <= maxSec) {
+      gains.push({ t: cur.t, newBlock: cur.block });
+    }
+  }
+  if (gains.length === 0) return null;
+  const outerY = side === "opp" ? 0 : BLOCK_BAND;
+  const yFor = (b: number) => {
+    const h = Math.min(BLOCK_HALF, blockHeight(b));
+    return Math.round(side === "opp" ? outerY + h : outerY - h);
+  };
+  return (
+    <>
+      {gains.map((g, i) => {
+        const x = Math.round(NOW_OFFSET + g.t * PX_PER_SEC);
+        const y = yFor(g.newBlock);
+        // Label sits just BEYOND the tip (inward, toward the centre axis).
+        const labelY = side === "opp" ? y + 10 : y - 3;
+        return (
+          <g key={i}>
+            <text
+              x={x + 3} y={labelY}
+              fill="#7fe3a4" fontSize={11} fontWeight={700}
+              fontFamily="ui-monospace, monospace"
+            >{g.newBlock}</text>
+          </g>
+        );
+      })}
+    </>
+  );
+}
+
 // ── Hands (fixed 6 slots, reserved derived from queue) ──
 
 // Resolve a slot index to its pending-draw timing, if any. Walks the queue
@@ -843,6 +906,11 @@ function OpponentHand({ player, now }: { player: PlayerState; now: number }) {
         const card = player.hand[i];
         const pending = slotPendingInfo(player, i, now);
         if (card !== null) {
+          const def = getCardDef(card);
+          // [開示] cards are visible face-up to the opponent so they can
+          // anticipate the threat. Render a mini name+cost chip instead
+          // of the generic face-down back.
+          if (def && def.reveal) return <RevealedBack key={i} def={def} />;
           return <div key={i} style={cardBack}><div style={cardBackSigil}>✦</div></div>;
         }
         if (pending !== null) {
@@ -850,6 +918,33 @@ function OpponentHand({ player, now }: { player: PlayerState; now: number }) {
         }
         return <div key={i} style={emptyBack} />;
       })}
+    </div>
+  );
+}
+
+function RevealedBack({ def }: { def: NonNullable<ReturnType<typeof getCardDef>> }) {
+  const color = def.cardType === CardType.Attack ? "#e3553c"
+    : def.cardType === CardType.Power ? "#b465e0"
+    : "#5fa0e0";
+  return (
+    <div style={{
+      ...cardBack,
+      background: dim(color, 0.55),
+      border: `2px solid ${color}`,
+      flexDirection: "column", padding: "4px 3px",
+      gap: 2,
+    }}>
+      <div style={{
+        fontSize: 9, color: "#ffe066", fontWeight: 700, fontFamily: "ui-monospace, monospace",
+      }}>{def.cost}閃</div>
+      <div style={{
+        fontSize: 9, color: "white", fontWeight: 600, textAlign: "center",
+        lineHeight: 1.1, padding: "0 2px",
+        textShadow: "0 1px 2px rgba(0,0,0,0.8)",
+      }}>{def.name}</div>
+      <div style={{
+        fontSize: 7, color: "#ffe066", opacity: 0.85,
+      }}>開示</div>
     </div>
   );
 }
@@ -1046,6 +1141,29 @@ function DrawButton({ player }: { player: PlayerState }) {
         {drawing ? "キューで実行中" : enabled ? `${emptyCount}枚 (合計 ${costSen}閃)` : "(空きなし)"}
       </span>
     </button>
+  );
+}
+
+// Beginner-mode "次の閃" button. Only renders when the active session is
+// an OfflineSession with beginnerMode = true. Each click advances the sim
+// by exactly 1 閃 (= SEC_PER_SEN seconds = SEC_PER_SEN/DT frames).
+function AdvanceButton() {
+  const beginner = useStore((s) => s.beginnerMode);
+  const mode = getActiveMode();
+  if (!beginner || mode !== "offline") return null;
+  const onClick = () => {
+    advanceFrames(Math.round(SEC_PER_SEN / DT));
+  };
+  const onClickHalf = () => {
+    advanceFrames(Math.round((SEC_PER_SEN / 2) / DT));
+  };
+  return (
+    <div style={{ display: "flex", gap: 8, justifyContent: "center", marginTop: 4 }}>
+      <button onClick={onClickHalf} style={advanceBtnStyle}>+0.5 閃</button>
+      <button onClick={onClick} style={{ ...advanceBtnStyle, background: "#3a6c3a", borderColor: "#5a9c5a" }}>
+        次の閃 (+1 閃)
+      </button>
+    </div>
   );
 }
 
@@ -1294,6 +1412,12 @@ const drawButtonStyle: React.CSSProperties = {
   height: 44, borderRadius: 8, border: "1px solid #3a7fbf",
   display: "flex", alignItems: "center", justifyContent: "center",
   gap: 8, fontFamily: "ui-sans-serif, system-ui, sans-serif",
+};
+const advanceBtnStyle: React.CSSProperties = {
+  padding: "6px 16px", borderRadius: 6,
+  background: "#2a4a2a", color: "white",
+  border: "1px solid #4a7c4a",
+  fontSize: 13, fontWeight: 600, cursor: "pointer",
 };
 
 const tooltipBox: React.CSSProperties = {

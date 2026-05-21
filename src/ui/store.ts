@@ -49,8 +49,10 @@ interface UiStore {
   // player knows what level of opposition they're facing.
   aiOpponentName: string; // matches a key in policies (passive/random/...)
   aiSpectate: boolean;    // when true, AI plays for the local side too
+  beginnerMode: boolean;  // CPU-only: sim is frozen until 「次の閃」is pressed
   setAiOpponentName: (n: string) => void;
   setAiSpectate: (b: boolean) => void;
+  setBeginnerMode: (b: boolean) => void;
 }
 
 export const useStore = create<UiStore>((set) => ({
@@ -93,6 +95,8 @@ export const useStore = create<UiStore>((set) => ({
     (typeof window !== "undefined" && localStorage.getItem("sensen.aiOpponent")) || "heuristic",
   aiSpectate:
     typeof window !== "undefined" && localStorage.getItem("sensen.aiSpectate") === "1",
+  beginnerMode:
+    typeof window !== "undefined" && localStorage.getItem("sensen.beginnerMode") === "1",
   setAiOpponentName: (n) => {
     if (typeof window !== "undefined") localStorage.setItem("sensen.aiOpponent", n);
     set({ aiOpponentName: n });
@@ -100,5 +104,9 @@ export const useStore = create<UiStore>((set) => ({
   setAiSpectate: (b) => {
     if (typeof window !== "undefined") localStorage.setItem("sensen.aiSpectate", b ? "1" : "0");
     set({ aiSpectate: b });
+  },
+  setBeginnerMode: (b) => {
+    if (typeof window !== "undefined") localStorage.setItem("sensen.beginnerMode", b ? "1" : "0");
+    set({ beginnerMode: b });
   },
 }));

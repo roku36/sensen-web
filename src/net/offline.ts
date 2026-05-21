@@ -24,6 +24,8 @@ export interface OfflineOptions {
   opponentPolicy?: PolicyFactory;
   /** Drive the LOCAL side too (spectator / AI-vs-AI mode). */
   selfPolicy?: PolicyFactory;
+  /** Beginner mode: sim is FROZEN until the player calls advance(frames). */
+  beginnerMode?: boolean;
 }
 
 export class OfflineSession {
@@ -76,10 +78,29 @@ export class OfflineSession {
     this.loop();
   }
 
-  pushLocalInput(flags: number) { this.pendingLocal |= flags; }
+  pushLocalInput(flags: number) {
+    this.pendingLocal |= flags;
+    // Beginner mode: clicks still register, but the sim doesn't advance
+    // until the player presses "次の閃". Drain the click on the next tick
+    // by giving a tiny budget so the input fires within one frame.
+    if (this.opts.beginnerMode) this.frameBudget = Math.max(this.frameBudget, 1);
+  }
 
   state_(): GameState { return this.state; }
   localPlayer(): 0 { return 0; }
+
+  /** Beginner-mode controller. Advance N frames of sim. */
+  advance(frames: number) {
+    this.frameBudget += frames;
+  }
+
+  /** True if the loop is currently waiting for the player to advance time. */
+  isFrozen(): boolean { return !!this.opts.beginnerMode && this.frameBudget <= 0; }
+
+  // Beginner mode budget: number of remaining frames the sim is allowed to
+  // step. Without beginner mode this is irrelevant (the loop steps based on
+  // wall-clock time).
+  private frameBudget = 0;
 
   private loop = () => {
     if (this.stopped) return;
@@ -87,35 +108,42 @@ export class OfflineSession {
     let elapsed = (now - this.last) / 1000;
     if (elapsed > 0.25) elapsed = 0.25;
     this.last = now;
-    this.acc += elapsed;
     const dt = 1 / 60;
-    while (this.acc >= dt) {
-      // Once the match has resolved, the reducer just increments frame and
-      // returns. Keep the rAF loop alive so the UI can still render the
-      // final state, but DO NOT evaluate AI policies or record inputs —
-      // policies have no way to see s.result and would otherwise spam Draw
-      // (or whatever they last wanted) forever, bloating the replay with
-      // ghost inputs at one entry per frame.
-      if (this.state.result !== 0) {
+    if (this.opts.beginnerMode) {
+      // Step only as many frames as the player explicitly granted.
+      while (this.frameBudget > 0) {
+        if (this.state.result !== 0) { this.frameBudget = 0; break; }
+        this.tickOneFrame();
+        this.frameBudget--;
+      }
+    } else {
+      // Real-time mode.
+      this.acc += elapsed;
+      while (this.acc >= dt) {
+        if (this.state.result !== 0) {
+          this.acc -= dt;
+          continue;
+        }
+        this.tickOneFrame();
         this.acc -= dt;
-        continue;
       }
-      let local = this.pendingLocal;
-      this.pendingLocal = 0;
-      if (this.selfAi) {
-        const ai = this.selfAi(this.state, 0);
-        if (ai !== 0) local = ai;
-      }
-      const opp = this.oppAi ? this.oppAi(this.state, 1) : 0;
-
-      if (local !== 0) this.recorded.push({ f: this.state.frame, s: 0, flags: local });
-      if (opp   !== 0) this.recorded.push({ f: this.state.frame, s: 1, flags: opp });
-      step(this.state, local, opp);
-      this.acc -= dt;
     }
     this.opts.onState?.(this.state);
     this.rafId = requestAnimationFrame(this.loop);
   };
+
+  private tickOneFrame() {
+    let local = this.pendingLocal;
+    this.pendingLocal = 0;
+    if (this.selfAi) {
+      const ai = this.selfAi(this.state, 0);
+      if (ai !== 0) local = ai;
+    }
+    const opp = this.oppAi ? this.oppAi(this.state, 1) : 0;
+    if (local !== 0) this.recorded.push({ f: this.state.frame, s: 0, flags: local });
+    if (opp   !== 0) this.recorded.push({ f: this.state.frame, s: 1, flags: opp });
+    step(this.state, local, opp);
+  }
 
   stop() {
     if (this.stopped) return;

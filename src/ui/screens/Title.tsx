@@ -25,13 +25,19 @@ export function Title() {
   const setAiName = useStore((s) => s.setAiOpponentName);
   const spectate = useStore((s) => s.aiSpectate);
   const setSpectate = useStore((s) => s.setAiSpectate);
+  const beginner = useStore((s) => s.beginnerMode);
+  const setBeginner = useStore((s) => s.setBeginnerMode);
   const deckSize = loadDeck().length;
   const streak = loadStreak();
 
   const startSolo = () => {
     const oppFact = policies[aiName] ?? policies.heuristic;
     const selfFact = spectate ? oppFact : undefined;
-    void startOffline(loadDeck(), { opponentPolicy: oppFact, selfPolicy: selfFact });
+    void startOffline(loadDeck(), {
+      opponentPolicy: oppFact,
+      selfPolicy: selfFact,
+      beginnerMode: beginner,
+    });
   };
 
   return (
@@ -61,6 +67,10 @@ export function Title() {
           <label style={checkboxRow}>
             <input type="checkbox" checked={spectate} onChange={(e) => setSpectate(e.target.checked)} />
             <span>AI vs AI 観戦 (自分側も CPU が操作)</span>
+          </label>
+          <label style={checkboxRow}>
+            <input type="checkbox" checked={beginner} onChange={(e) => setBeginner(e.target.checked)} />
+            <span>初心者モード (CPU 戦のみ・「次の閃」ボタンで進行)</span>
           </label>
         </div>
 

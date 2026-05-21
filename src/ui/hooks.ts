@@ -8,6 +8,7 @@ import { useStore } from "./store";
 export interface AiOptions {
   opponentPolicy?: PolicyFactory;
   selfPolicy?: PolicyFactory;
+  beginnerMode?: boolean;
 }
 
 // Remembered across rematches so '次のマッチへ' keeps the chosen CPU.
@@ -70,6 +71,7 @@ export async function startOffline(deck: CardId[], ai: AiOptions = {}) {
     onState: (g) => useStore.getState().setGame(g),
     opponentPolicy: ai.opponentPolicy,
     selfPolicy: ai.selfPolicy,
+    beginnerMode: ai.beginnerMode,
   });
   setSession(s);
   activeMode = "offline";
@@ -127,6 +129,12 @@ export function buildCurrentReplay() {
   const s = activeSession;
   if (!s || !("buildReplay" in s)) return null;
   return (s as any).buildReplay() ?? null;
+}
+
+// Beginner-mode advancement. Only OfflineSession exposes this.
+export function advanceFrames(frames: number) {
+  const s = activeSession;
+  if (s && "advance" in s) (s as any).advance(frames);
 }
 
 export function useFrameTick(rerender: () => void) {

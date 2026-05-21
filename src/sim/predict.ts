@@ -10,10 +10,19 @@
 // anything new right now". Auto-reservation (default Draw / leftmost
 // playable + the player's own manual reservation list) still fires inside
 // the sim, which is what we want — the user has already opted into that.
+//
+// Block / poison samples are emitted on a FIXED 0.5閃 grid relative to
+// the start frame (plus the t=0 anchor and any transition during a grid
+// interval). This stabilises what the UI receives — between grid points
+// the data is constant, so any visual flicker is purely a rendering
+// concern (positions still scroll smoothly as nowSec advances).
 
 import { step } from "./reducer";
-import { DT } from "./rules";
+import { DT, SEC_PER_SEN } from "./rules";
 import { snapshot, GameState } from "./state";
+
+// Sample grid: one block/poison sample every 0.5 閃.
+const SAMPLE_GRID_SEC = SEC_PER_SEN / 2;
 
 export interface BlockSample {
   /** Sim seconds RELATIVE to `from.frame * DT` (i.e., 0 = now). */
@@ -70,10 +79,12 @@ export function predictForward(from: GameState, horizonSec: number): PredictResu
     p1Pierces: [],
     endsAtFrame: null,
   };
-  let lastBlock0 = s.players[0].block;
-  let lastBlock1 = s.players[1].block;
-  let lastPoison0 = s.players[0].poison;
-  let lastPoison1 = s.players[1].poison;
+  // The latest grid index emitted for each (player, channel). We emit a
+  // new sample only after the sim has crossed the NEXT grid boundary.
+  let p0BlockGridIdx = 0;
+  let p1BlockGridIdx = 0;
+  let p0PoisonGridIdx = 0;
+  let p1PoisonGridIdx = 0;
 
   while (s.frame < stopFrame) {
     const beforeHp0 = s.players[0].hp;
@@ -86,21 +97,33 @@ export function predictForward(from: GameState, horizonSec: number): PredictResu
     step(s, 0, 0);
     if (wasPlaying && s.result !== 0) out.endsAtFrame = s.frame;
     const t = s.frame * DT - startSec;
-    const b0 = s.players[0].block;
-    const b1 = s.players[1].block;
-    if (b0 !== lastBlock0) { out.p0Block.push({ t, block: b0 }); lastBlock0 = b0; }
-    if (b1 !== lastBlock1) { out.p1Block.push({ t, block: b1 }); lastBlock1 = b1; }
-    const po0 = s.players[0].poison;
-    const po1 = s.players[1].poison;
-    if (po0 !== lastPoison0) { out.p0Poison.push({ t, poison: po0 }); lastPoison0 = po0; }
-    if (po1 !== lastPoison1) { out.p1Poison.push({ t, poison: po1 }); lastPoison1 = po1; }
-    // Pierce detection: HP dropped on this frame. Attribute to attack only
-    // if block ALSO dropped on this frame OR was 0 going in (i.e., the hit
-    // had nowhere to be absorbed). Otherwise it's poison/combust ticks.
+    // Emit one block/poison sample per 0.5 閃 boundary crossed. We use the
+    // CURRENT-frame values: between grid points the visualization is
+    // step-constant, which matches the reducer (block decays in whole
+    // units on 閃 boundaries anyway).
+    const gridIdx = Math.floor(t / SAMPLE_GRID_SEC + 1e-9);
+    if (gridIdx > p0BlockGridIdx) {
+      out.p0Block.push({ t: gridIdx * SAMPLE_GRID_SEC, block: s.players[0].block });
+      p0BlockGridIdx = gridIdx;
+    }
+    if (gridIdx > p1BlockGridIdx) {
+      out.p1Block.push({ t: gridIdx * SAMPLE_GRID_SEC, block: s.players[1].block });
+      p1BlockGridIdx = gridIdx;
+    }
+    if (gridIdx > p0PoisonGridIdx) {
+      out.p0Poison.push({ t: gridIdx * SAMPLE_GRID_SEC, poison: s.players[0].poison });
+      p0PoisonGridIdx = gridIdx;
+    }
+    if (gridIdx > p1PoisonGridIdx) {
+      out.p1Poison.push({ t: gridIdx * SAMPLE_GRID_SEC, poison: s.players[1].poison });
+      p1PoisonGridIdx = gridIdx;
+    }
+    // Pierce detection: HP dropped on this frame and block also took a hit
+    // (or was already 0). Stays frame-precise so the red mark appears at
+    // the exact resolution moment, not snapped to a grid line.
     const hpLost0 = beforeHp0 - s.players[0].hp;
     if (hpLost0 > 0 && (beforeBlock0 === 0 || s.players[0].block < beforeBlock0)) {
-      // Subtract poison-tick contribution (if any).
-      const poisonTick = beforePoison0; // poison damages BEFORE its own decrement
+      const poisonTick = beforePoison0;
       const attackHp = Math.max(0, hpLost0 - (s.players[0].poison < beforePoison0 ? poisonTick : 0));
       if (attackHp > 0) out.p0Pierces.push({ t, hpLost: attackHp });
     }
@@ -111,12 +134,17 @@ export function predictForward(from: GameState, horizonSec: number): PredictResu
       if (attackHp > 0) out.p1Pierces.push({ t, hpLost: attackHp });
     }
   }
-  // Final horizon cap so the UI can flatline to the right edge.
+  // Horizon cap.
   const finalT = (s.frame - startFrame) * DT;
-  if (out.p0Block[out.p0Block.length - 1].t < finalT) out.p0Block.push({ t: finalT, block: lastBlock0 });
-  if (out.p1Block[out.p1Block.length - 1].t < finalT) out.p1Block.push({ t: finalT, block: lastBlock1 });
-  if (out.p0Poison[out.p0Poison.length - 1].t < finalT) out.p0Poison.push({ t: finalT, poison: lastPoison0 });
-  if (out.p1Poison[out.p1Poison.length - 1].t < finalT) out.p1Poison.push({ t: finalT, poison: lastPoison1 });
-
+  const cap = (arr: { t: number; block?: number; poison?: number }[], v: number, key: "block" | "poison") => {
+    const last = arr[arr.length - 1];
+    if (last.t < finalT) {
+      arr.push(key === "block" ? { t: finalT, block: v } as never : { t: finalT, poison: v } as never);
+    }
+  };
+  cap(out.p0Block, s.players[0].block, "block");
+  cap(out.p1Block, s.players[1].block, "block");
+  cap(out.p0Poison, s.players[0].poison, "poison");
+  cap(out.p1Poison, s.players[1].poison, "poison");
   return out;
 }
