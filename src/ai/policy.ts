@@ -32,7 +32,16 @@ function mulberry32(seed: number) {
 function playableIndices(p: PlayerState, now: number): number[] {
   const out: number[] = [];
   const queuedSec = queueRemainingTime(p, now); // SECONDS
+  // CRITICAL: skip slots that are already in the manual reservation list.
+  // With left-click TOGGLE semantics, returning the same cardFlag for an
+  // already-reserved slot would CANCEL the reservation — causing the AI
+  // to oscillate (reserve → cancel → reserve → …) every single frame.
+  const reservedSlots = new Set<number>();
+  for (const r of p.reservations) {
+    if (r.kind === "card") reservedSlots.add(r.slotIndex);
+  }
   for (let i = 0; i < p.hand.length; i++) {
+    if (reservedSlots.has(i)) continue;
     const cardId = p.hand[i];
     if (cardId === null) continue; // empty slot
     const d = getCardDef(cardId);
@@ -46,18 +55,32 @@ function playableIndices(p: PlayerState, now: number): number[] {
   return out;
 }
 
+// Total committed actions = currently in queue + waiting in reservation
+// list. Used as the AI's "I've already planned enough" cap so it doesn't
+// keep stuffing cards into reservations every frame.
+function committedCount(p: PlayerState): number {
+  let n = 0;
+  for (const q of p.queue) if (q.kind === "card") n++;
+  for (const r of p.reservations) if (r.kind === "card") n++;
+  return n;
+}
+
 // True if the AI should press Draw this frame. Triggers when the hand has
-// any empty non-reserved slot AND no draw is already queued AND the AI
-// doesn't have a queueable card right now (so it doesn't pre-empt a strong
-// play). Cap so the AI doesn't spam — it's already 1-per-frame.
+// any empty non-reserved slot AND no draw is already queued/reserved AND
+// the AI doesn't have a queueable card right now (so it doesn't pre-empt
+// a strong play).
 function shouldDraw(p: PlayerState, playableCount: number): boolean {
+  // Don't draw if any draw is already queued OR already reserved.
   for (const q of p.queue) if (q.kind === "draw") return false;
+  for (const r of p.reservations) if (r.kind === "draw") return false;
+  // Reserved slot set (active draw entries + manual card reservations).
   const reserved = new Set<number>();
   for (const q of p.queue) {
     if (q.kind === "draw") {
       for (let k = q.drawFilledCount; k < q.drawSlots.length; k++) reserved.add(q.drawSlots[k]);
     }
   }
+  for (const r of p.reservations) if (r.kind === "card") reserved.add(r.slotIndex);
   let emptyCount = 0;
   for (let i = 0; i < p.hand.length; i++) {
     if (p.hand[i] === null && !reserved.has(i)) emptyCount++;
@@ -122,7 +145,7 @@ export const random: PolicyFactory = (seed = 1) => {
   const r = mulberry32(seed);
   return (state, side) => {
     const p = state.players[side];
-    if (p.queue.length >= 2) return 0;
+    if (committedCount(p) >= 2) return 0;
     const opts = playableIndices(p, state.frame * DT);
     if (shouldDraw(p, opts.length)) return INPUT_DRAW;
     if (opts.length === 0) return 0;
@@ -135,7 +158,7 @@ export const greedyAttack: PolicyFactory = (seed = 1) => {
   const r = mulberry32(seed);
   return (state, side) => {
     const p = state.players[side], o = state.players[(side ^ 1) as 0 | 1];
-    if (p.queue.length >= 2) return 0;
+    if (committedCount(p) >= 2) return 0;
     const opts = playableIndices(p, state.frame * DT);
     if (shouldDraw(p, opts.length)) return INPUT_DRAW;
     if (opts.length === 0) return 0;
@@ -155,7 +178,7 @@ export const greedyDefense: PolicyFactory = (seed = 1) => {
   const r = mulberry32(seed);
   return (state, side) => {
     const p = state.players[side], o = state.players[(side ^ 1) as 0 | 1];
-    if (p.queue.length >= 2) return 0;
+    if (committedCount(p) >= 2) return 0;
     const opts = playableIndices(p, state.frame * DT);
     if (shouldDraw(p, opts.length)) return INPUT_DRAW;
     if (opts.length === 0) return 0;
@@ -178,7 +201,7 @@ export const heuristic: PolicyFactory = (seed = 1) => {
   const r = mulberry32(seed);
   return (state, side) => {
     const p = state.players[side], o = state.players[(side ^ 1) as 0 | 1];
-    if (p.queue.length >= 2) return 0;
+    if (committedCount(p) >= 2) return 0;
     const opts = playableIndices(p, state.frame * DT);
     if (shouldDraw(p, opts.length)) return INPUT_DRAW;
     if (opts.length === 0) return 0;

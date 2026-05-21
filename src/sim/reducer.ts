@@ -513,17 +513,18 @@ function tickReservation(s: GameState, now: number, bus: Bus) {
 }
 
 function tickReservationOnce(p: PlayerState, now: number, bus: Bus): boolean {
-  // If the manual list is empty AND there's room for new commits, auto-
-  // append the FORCED default — same code path as manual from here on.
-  // This is what the player explicitly does NOT want as a separate branch:
-  // the "default" is just a manual reservation we added on their behalf.
-  if (p.reservations.length === 0 && p.queue.length === 0) {
-    if (hasEmptyOpenSlot(p)) {
-      p.reservations.push({ kind: "draw" });
-    } else {
-      const slot = leftmostPlayableSlot(p, now);
-      if (slot >= 0) p.reservations.push({ kind: "card", slotIndex: slot });
-    }
+  // Forced default: when there's NOTHING manually reserved and the queue
+  // is empty, auto-append a Draw reservation IF there's a slot to fill.
+  // We DO NOT auto-fire the leftmost playable card any more — that would
+  // play cards the player never reserved (e.g., Defends giving block, or
+  // Bloodletting eating their own block), and the predicted block bar
+  // would show changes the player didn't author.
+  //
+  // Stalls (full hand, queue empty, no auto-Draw possible) are intentional:
+  // the player must reserve a card to make progress. If their hand is full
+  // of UNPLAYABLE cards, isStuck() forfeits the match — same as before.
+  if (p.reservations.length === 0 && p.queue.length === 0 && hasEmptyOpenSlot(p)) {
+    p.reservations.push({ kind: "draw" });
   }
   if (p.reservations.length === 0) return false;
 
