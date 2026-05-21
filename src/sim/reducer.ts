@@ -416,13 +416,19 @@ function committedTime(p: PlayerState, now: number): number {
   return total;
 }
 
-// LEFT-click on a card: append a card reservation. Heavy cards check the
-// cumulative committed time against the prereq.
-function appendCardReservation(p: PlayerState, slotIndex: number, now: number): boolean {
-  // Already reserved? No-op (left-click on already-reserved card does nothing;
-  // right-click is the way to cascade-release).
-  for (const r of p.reservations) {
-    if (r.kind === "card" && r.slotIndex === slotIndex) return false;
+// LEFT-click on a card: TOGGLE its reservation. If already reserved,
+// cascade-release from that position (drop later entries too). Otherwise
+// append, with the heavy-card cumulative committed-time gate. This makes
+// cancellation discoverable through the same click the user already uses
+// to reserve, without needing right-click (which can be hijacked by the
+// browser's native context menu, page extensions, etc).
+function toggleCardReservation(p: PlayerState, slotIndex: number, now: number): boolean {
+  const existing = p.reservations.findIndex(
+    (r) => r.kind === "card" && r.slotIndex === slotIndex,
+  );
+  if (existing >= 0) {
+    p.reservations.length = existing;
+    return true;
   }
   const cardId = p.hand[slotIndex];
   if (cardId === null || cardId === undefined) return false;
@@ -465,7 +471,8 @@ function applyInput(s: GameState, idx: 0 | 1, flags: number, _bus: Bus) {
     opened = true;
   }
 
-  // Right-click on a card → cascade-release.
+  // Right-click on a card → cascade-release (same as toggling an
+  // already-reserved card: drop that entry AND everything after it).
   for (let i = 0; i < 6; i++) {
     if ((flags & RESERVE_FLAGS[i]) !== 0) {
       cascadeReleaseCard(p, i);
@@ -478,12 +485,12 @@ function applyInput(s: GameState, idx: 0 | 1, flags: number, _bus: Bus) {
     if (appendDrawReservation(p)) opened = true;
   }
 
-  // Left-click on a card → append card reservation (first match only).
+  // Left-click on a card → TOGGLE reservation (first match only).
   for (let i = 0; i < MAX_HAND_SIZE; i++) {
     const flag = cardFlag(i);
     if (flag === null) continue;
     if ((flags & flag) === 0) continue;
-    if (appendCardReservation(p, i, now)) opened = true;
+    if (toggleCardReservation(p, i, now)) opened = true;
     break;
   }
 
@@ -506,33 +513,37 @@ function tickReservation(s: GameState, now: number, bus: Bus) {
 }
 
 function tickReservationOnce(p: PlayerState, now: number, bus: Bus): boolean {
-  if (p.reservations.length > 0) {
-    const head = p.reservations[0];
-    if (head.kind === "card") {
-      const cardId = p.hand[head.slotIndex];
-      if (cardId === null || cardId === undefined) {
-        // Slot was emptied somehow; drop this reservation and try the next.
-        p.reservations.shift();
-        return true;
-      }
-      const def = getCardDef(cardId);
-      if (!def || def.cost >= 900) {
-        p.reservations.shift();
-        return true;
-      }
-      const prereqSec = senToSec(def.prereqQueueTime ?? 0);
-      if (prereqSec > 0) {
-        const remaining = queueRemainingTime(p, now);
-        if (remaining <= prereqSec + DT / 2 && remaining >= prereqSec - DT / 2) {
-          if (queueCardImmediate(p, head.slotIndex, now, bus)) {
-            p.reservations.shift();
-            return true;
-          }
-        }
-        return false;
-      }
-      // Non-prereq: fire when queue empty.
-      if (p.queue.length === 0) {
+  // If the manual list is empty AND there's room for new commits, auto-
+  // append the FORCED default — same code path as manual from here on.
+  // This is what the player explicitly does NOT want as a separate branch:
+  // the "default" is just a manual reservation we added on their behalf.
+  if (p.reservations.length === 0 && p.queue.length === 0) {
+    if (hasEmptyOpenSlot(p)) {
+      p.reservations.push({ kind: "draw" });
+    } else {
+      const slot = leftmostPlayableSlot(p, now);
+      if (slot >= 0) p.reservations.push({ kind: "card", slotIndex: slot });
+    }
+  }
+  if (p.reservations.length === 0) return false;
+
+  const head = p.reservations[0];
+  if (head.kind === "card") {
+    const cardId = p.hand[head.slotIndex];
+    if (cardId === null || cardId === undefined) {
+      // Slot was emptied somehow; drop this reservation and try the next.
+      p.reservations.shift();
+      return true;
+    }
+    const def = getCardDef(cardId);
+    if (!def || def.cost >= 900) {
+      p.reservations.shift();
+      return true;
+    }
+    const prereqSec = senToSec(def.prereqQueueTime ?? 0);
+    if (prereqSec > 0) {
+      const remaining = queueRemainingTime(p, now);
+      if (remaining <= prereqSec + DT / 2 && remaining >= prereqSec - DT / 2) {
         if (queueCardImmediate(p, head.slotIndex, now, bus)) {
           p.reservations.shift();
           return true;
@@ -540,25 +551,24 @@ function tickReservationOnce(p: PlayerState, now: number, bus: Bus): boolean {
       }
       return false;
     }
-    // head.kind === "draw"
-    if (p.queue.length !== 0) return false;
-    if (applyDrawAction(p, now)) {
-      p.reservations.shift();
-      return true;
+    // Non-prereq: fire when queue empty.
+    if (p.queue.length === 0) {
+      if (queueCardImmediate(p, head.slotIndex, now, bus)) {
+        p.reservations.shift();
+        return true;
+      }
     }
-    // Couldn't draw (no empty slots) — drop and try the next reservation.
+    return false;
+  }
+  // head.kind === "draw"
+  if (p.queue.length !== 0) return false;
+  if (applyDrawAction(p, now)) {
     p.reservations.shift();
     return true;
   }
-  // Default forced reservation: Draw if there's space, else leftmost playable.
-  if (p.queue.length !== 0) return false;
-  if (hasEmptyOpenSlot(p)) {
-    applyDrawAction(p, now);
-    return true;
-  }
-  const slot = leftmostPlayableSlot(p, now);
-  if (slot >= 0) return queueCardImmediate(p, slot, now, bus);
-  return false;
+  // Couldn't draw (no empty slots) — drop and try the next reservation.
+  p.reservations.shift();
+  return true;
 }
 
 function hasEmptyOpenSlot(p: PlayerState): boolean {
