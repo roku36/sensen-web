@@ -26,7 +26,7 @@ import {
 import { predictForward } from "../../sim/predict";
 import { queueRemainingTime, reservedSlotSet } from "../../sim/reducer";
 import {
-  DRAW_SEN_PER_CARD, DT, MAX_HAND_SIZE, SEC_PER_SEN, secToSen,
+  DRAW_SEN_PER_CARD, DT, MAX_HAND_SIZE, SEC_PER_SEN, secToSen, senToSec,
 } from "../../sim/rules";
 import { GameState, PlayerState, ResolvedEntry } from "../../sim/state";
 
@@ -216,11 +216,15 @@ function BattleZone({ game, op, me, now }: { game: GameState; op: PlayerState; m
   const meQueue = computeQueueLayout(me, now);
   const opHist = computeHistoryBoxes(op.resolvedCards, now);
   const meHist = computeHistoryBoxes(me.resolvedCards, now);
+  const opGhosts = hideOppQueue ? [] : computeReservationGhosts(op, opQueue.totalSec);
+  const meGhosts = computeReservationGhosts(me, meQueue.totalSec);
 
+  const opTotalSec = opQueue.totalSec + opGhosts.reduce((s, g) => s + g.duration, 0);
+  const meTotalSec = meQueue.totalSec + meGhosts.reduce((s, g) => s + g.duration, 0);
   const maxSec = Math.max(
     MIN_TIMELINE_SEC,
-    Math.ceil(opQueue.totalSec + 2),
-    Math.ceil(meQueue.totalSec + 2),
+    Math.ceil(opTotalSec + 2),
+    Math.ceil(meTotalSec + 2),
   );
   const innerWidth = NOW_OFFSET + maxSec * PX_PER_SEC + EDGE_PAD;
 
@@ -329,6 +333,11 @@ function BattleZone({ game, op, me, now }: { game: GameState; op: PlayerState; m
           {!hideOppQueue && opQueue.boxes.map((b, i) => (
             <QueueBox key={`o${i}`} {...b} yTop={OPP_QUEUE_Y_TOP} />
           ))}
+          {/* Ghost chips — the manual reservation list rendered behind the
+              actual queue. Same row, lower opacity + dashed border. */}
+          {!hideOppQueue && opGhosts.map((b, i) => (
+            <QueueBox key={`og${i}`} {...b} yTop={OPP_QUEUE_Y_TOP} />
+          ))}
           {hideOppQueue && (
             <div style={{
               position: "absolute", left: NOW_OFFSET - 200, top: OPP_QUEUE_Y_TOP + 8,
@@ -343,8 +352,11 @@ function BattleZone({ game, op, me, now }: { game: GameState; op: PlayerState; m
           {meQueue.boxes.map((b, i) => (
             <QueueBox key={`m${i}`} {...b} yTop={SELF_QUEUE_Y_TOP} />
           ))}
-          {opQueue.boxes.length === 0 && <span style={{ ...idleHint, top: QUEUE_ROW / 2 - 7 }}>相手キュー空</span>}
-          {meQueue.boxes.length === 0 && <span style={{ ...idleHint, top: SELF_QUEUE_Y_TOP + BOX_HEIGHT / 2 - 7 }}>自分キュー空</span>}
+          {meGhosts.map((b, i) => (
+            <QueueBox key={`mg${i}`} {...b} yTop={SELF_QUEUE_Y_TOP} />
+          ))}
+          {opQueue.boxes.length === 0 && opGhosts.length === 0 && <span style={{ ...idleHint, top: QUEUE_ROW / 2 - 7 }}>相手キュー空</span>}
+          {meQueue.boxes.length === 0 && meGhosts.length === 0 && <span style={{ ...idleHint, top: SELF_QUEUE_Y_TOP + BOX_HEIGHT / 2 - 7 }}>自分キュー空</span>}
         </div>
       </div>
     </div>
@@ -362,6 +374,12 @@ interface BoxLayout {
   endRel: number;
   isHead: boolean;
   resolved?: boolean;
+  // Ghost = a reservation that hasn't fired yet. Rendered with reduced
+  // opacity + dashed border so the player can see their planned sequence
+  // sitting "behind" the actual queue.
+  ghost?: boolean;
+  // 1-based reservation number for ghost chips (matches the hand badge).
+  reservationOrder?: number;
 }
 
 interface QueueLayout {
@@ -386,6 +404,55 @@ function computeQueueLayout(player: PlayerState, now: number): QueueLayout {
     };
   });
   return { boxes, totalSec: endRel };
+}
+
+// Build ghost chips for the player's manual reservation list, appended
+// linearly after the queue. Heavy (prereq) cards are still appended
+// linearly here — actual fire timing is governed by the sim's "queue
+// remaining == prereq" rule, but a simple time-ordered ghost is what
+// the player intuitively reads as "next, then next".
+function computeReservationGhosts(player: PlayerState, queueTotalSec: number): BoxLayout[] {
+  if (player.reservations.length === 0) return [];
+  const out: BoxLayout[] = [];
+  let cum = queueTotalSec;
+  for (let i = 0; i < player.reservations.length; i++) {
+    const r = player.reservations[i];
+    if (r.kind === "card") {
+      const cardId = player.hand[r.slotIndex];
+      if (cardId === null || cardId === undefined) continue;
+      const def = getCardDef(cardId);
+      if (!def) continue;
+      const duration = senToSec(def.cost);
+      out.push({
+        cardId,
+        duration,
+        startRel: cum,
+        endRel: cum + duration,
+        isHead: false,
+        ghost: true,
+        reservationOrder: i + 1,
+      });
+      cum += duration;
+    } else {
+      // Draw entry: estimate duration from current empty count (best guess).
+      let n = 0;
+      for (const c of player.hand) if (c === null) n++;
+      const duration = senToSec(Math.max(1, n) * DRAW_SEN_PER_CARD);
+      out.push({
+        cardId: null,
+        drawSlots: new Array(Math.max(1, n)).fill(0),
+        drawFilledCount: 0,
+        duration,
+        startRel: cum,
+        endRel: cum + duration,
+        isHead: false,
+        ghost: true,
+        reservationOrder: i + 1,
+      });
+      cum += duration;
+    }
+  }
+  return out;
 }
 
 function computeHistoryBoxes(resolved: ResolvedEntry[], now: number): BoxLayout[] {
@@ -429,7 +496,7 @@ function TimeTick({ sen, totalHeight }: { sen: number; totalHeight: number }) {
   );
 }
 
-function QueueBox({ cardId, drawSlots, drawFilledCount, duration, startRel, endRel, isHead, yTop, resolved }: BoxLayout & { yTop: number }) {
+function QueueBox({ cardId, drawSlots, drawFilledCount, duration, startRel, endRel, isHead, yTop, resolved, ghost, reservationOrder }: BoxLayout & { yTop: number }) {
   const isDraw = drawSlots != null;
   const def = !isDraw && cardId != null ? getCardDef(cardId) : null;
 
@@ -437,10 +504,11 @@ function QueueBox({ cardId, drawSlots, drawFilledCount, duration, startRel, endR
     : def?.cardType === CardType.Attack ? "#e3553c"
     : def?.cardType === CardType.Power ? "#b465e0"
     : "#5fa0e0";
-  const color = resolved ? dim(baseColor, 0.45) : baseColor;
+  // Resolved chips and ghost reservations both render dimmed.
+  const color = resolved ? dim(baseColor, 0.45) : ghost ? dim(baseColor, 0.6) : baseColor;
   const left = NOW_OFFSET + startRel * PX_PER_SEC;
   const w = duration * PX_PER_SEC;
-  const glow = !resolved && isHead && endRel < 0.4;
+  const glow = !resolved && !ghost && isHead && endRel < 0.4;
   const glowIntensity = glow ? 1 - endRel / 0.4 : 0;
 
   let label: string;
@@ -459,16 +527,20 @@ function QueueBox({ cardId, drawSlots, drawFilledCount, duration, startRel, endR
         left, width: w, height: BOX_HEIGHT,
         top: yTop,
         background: color,
-        border: `2px solid ${glow ? "#fff" : color}`,
+        // Ghost: dashed yellow-tinted border so it visually reads as
+        // "reserved, not yet committed".
+        border: ghost
+          ? `2px dashed rgba(255, 224, 102, 0.85)`
+          : `2px solid ${glow ? "#fff" : color}`,
         boxSizing: "border-box",
         boxShadow: glow
           ? `0 0 ${10 + 20 * glowIntensity}px rgba(255,255,200,${0.4 + 0.5 * glowIntensity})`
-          : resolved ? "none" : "0 2px 6px rgba(0,0,0,0.4)",
+          : resolved || ghost ? "none" : "0 2px 6px rgba(0,0,0,0.4)",
         borderRadius: 6,
         padding: "3px 8px",
-        color: resolved ? "rgba(255,255,255,0.55)" : "white",
+        color: ghost ? "rgba(255, 224, 102, 0.85)" : resolved ? "rgba(255,255,255,0.55)" : "white",
         overflow: "hidden",
-        opacity: resolved ? 0.55 : (isHead ? 1 : 0.85),
+        opacity: resolved ? 0.55 : ghost ? 0.45 : (isHead ? 1 : 0.85),
         display: "flex",
         flexDirection: "column",
         justifyContent: "center",
@@ -476,9 +548,19 @@ function QueueBox({ cardId, drawSlots, drawFilledCount, duration, startRel, endR
         textAlign: "right",
       }}
     >
+      {ghost && reservationOrder != null && (
+        <div style={{
+          position: "absolute", top: 2, left: 4,
+          background: "#ffe066", color: "#1a1a22",
+          width: 14, height: 14, borderRadius: 999,
+          fontSize: 9, fontWeight: 700, lineHeight: "14px",
+          textAlign: "center",
+        }}>{reservationOrder}</div>
+      )}
       <div style={queueBoxName}>{label}</div>
       <div style={queueBoxMeta}>
         {resolved ? "発動済"
+          : ghost ? `予約 · ${durSen}閃`
           : isHead ? `あと ${secToSen(Math.max(0, endRel)).toFixed(1)}閃`
           : `${durSen}閃`}
       </div>
@@ -842,7 +924,9 @@ function SimpleCard({ cardId, idx, player, now }: { cardId: number; idx: number;
   // Reservation order: 1-based index in the manual reservations list, or 0
   // if not reserved. Shown as a yellow numbered badge on the card so the
   // player can see the planned play sequence.
-  const reservationIdx = player.reservations.indexOf(idx);
+  const reservationIdx = player.reservations.findIndex(
+    (r) => r.kind === "card" && r.slotIndex === idx,
+  );
   const reserved = reservationIdx >= 0;
   const reservationOrder = reservationIdx + 1;
 

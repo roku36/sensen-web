@@ -25,23 +25,28 @@ export interface ResolvedEntry {
   resolvedAt: number;
 }
 
-// Manual reservation list — an ORDERED queue of slot indices the player
-// has committed to play in order. Right-click on a card APPENDS its slot
-// index. Right-click on an already-reserved slot SLICES from that
-// position onward (cascade release: removing #2 also removes #3, #4 …).
-// Space key clears the list entirely.
+// Manual reservation list — an ORDERED queue of actions the player has
+// committed to play in order. Everything goes through this list now:
+// LEFT-clicking a card APPENDS a card entry, LEFT-clicking the Draw
+// button APPENDS a draw entry. RIGHT-clicking a card SLICES from that
+// entry onward (cascade release: removing #2 also removes #3, #4 …).
+// SPACE (or right-click Draw) clears the list entirely.
 //
-// While the list is non-empty, the "forced" defaults (Draw / leftmost
-// playable card) are suppressed in the UI and don't fire from the sim
-// either. When the list runs dry, defaults take over again.
+// While the list is non-empty, the "forced" default (Draw / leftmost
+// playable card) is suppressed. When the list runs dry, defaults take
+// over so the player never sits idle.
 //
 // Reservation firing: when the queue's trigger condition is met for the
-// HEAD reservation (queue empty for a no-prereq card; queue remaining ==
-// prereq for a prereq card), that slot is queued and the entry pops off
-// the list.
+// HEAD reservation it pops off the list and joins the cast queue:
+//   - card with no prereq: queue empty
+//   - card with prereq: queue remaining time == prereq
+//   - draw: queue empty AND there's an empty hand slot
 //
 // Heavy (prereq) cards can only be APPENDED if the cumulative cast cost
-// of (current queue + earlier reservations in the list) meets the prereq.
+// of (current queue + earlier reservations) already meets the prereq.
+export type ReservationEntry =
+  | { kind: "card"; slotIndex: number }
+  | { kind: "draw" };
 
 export interface PlayerState {
   handle: number;
@@ -71,8 +76,8 @@ export interface PlayerState {
   castStartedAt: number;
   // Bounded history of recently-resolved cards (head pops). Newest at the END.
   resolvedCards: ResolvedEntry[];
-  // Ordered list of manually-reserved slot indices. See doc above.
-  reservations: number[];
+  // Ordered list of manually-reserved actions. See doc above.
+  reservations: ReservationEntry[];
   // Sim seconds at which this player first committed an action (queued a
   // card OR pressed Draw OR set a manual reservation). null until they act.
   // Used by the UI to hide the opponent's queue from a player who hasn't
@@ -180,7 +185,7 @@ const clonePlayer = (p: PlayerState): PlayerState => ({
   queue: p.queue.map((q) => q.kind === "draw" ? { ...q, drawSlots: q.drawSlots.slice() } : { ...q }),
   resolvedCards: p.resolvedCards.map((r) => ({ ...r })),
   blockHistory: p.blockHistory.map((b) => ({ ...b })),
-  reservations: p.reservations.slice(),
+  reservations: p.reservations.map((r) => ({ ...r })),
   rage: p.rage ? { ...p.rage } : null,
   metallicize: p.metallicize ? { ...p.metallicize } : null,
   demonForm: p.demonForm ? { ...p.demonForm } : null,

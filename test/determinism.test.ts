@@ -30,12 +30,30 @@ function cardCount(s: ReturnType<typeof initGame>, side: 0 | 1): number {
   return s.players[side].queue.filter((q) => q.kind === "card").length;
 }
 
-// Queue a Strike for `side` by finding any slot that still holds Strike.
-// Necessary because the fixed-slot hand turns each play into hand[i]=null
-// rather than splicing, so re-targeting slot 0 every press only works once.
+// All-actions-as-reservation flow: clicking a card APPENDS a reservation
+// entry; the sim fires from the reservation list into the queue as
+// conditions permit. So the player's "total committed cards" is the sum
+// of in-queue cards + in-reservation cards.
+function totalCommittedCards(s: ReturnType<typeof initGame>, side: 0 | 1): number {
+  const inQueue = s.players[side].queue.filter((q) => q.kind === "card").length;
+  const inReservations = s.players[side].reservations.filter((r) => r.kind === "card").length;
+  return inQueue + inReservations;
+}
+
+// Press a Strike slot that isn't already reserved AND isn't empty. With
+// the all-actions-as-reservation model, pressing the same slot twice is a
+// no-op (it's already in the reservation list), so we have to pick the
+// next un-reserved Strike slot for each call.
 function queueAnyStrike(s: ReturnType<typeof initGame>, side: 0 | 1) {
-  const idx = s.players[side].hand.indexOf(CardId.Strike);
-  if (idx < 0) throw new Error("no Strike to queue");
+  const p = s.players[side];
+  const reservedSlots = new Set<number>(
+    p.reservations.flatMap((r) => r.kind === "card" ? [r.slotIndex] : []),
+  );
+  let idx = -1;
+  for (let i = 0; i < p.hand.length; i++) {
+    if (p.hand[i] === CardId.Strike && !reservedSlots.has(i)) { idx = i; break; }
+  }
+  if (idx < 0) throw new Error("no un-reserved Strike to queue");
   const flag = cardFlag(idx)!;
   return side === 0 ? step(s, flag, 0) : step(s, 0, flag);
 }
@@ -108,31 +126,32 @@ describe("reducer determinism", () => {
     expect(dealt).toBeLessThanOrEqual(6.5);
   });
 
-  it("clicking multiple cards APPENDS to the queue (this is the queue mechanic)", () => {
+  it("clicking multiple cards commits them to the reservation list in order", () => {
     const deck = Array(20).fill(CardId.Strike);
     const s = initGame({ matchSeed: 1n, hpMax: 80, deckP0: deck, deckP1: deck });
-    // Slots are fixed: queueing slot 0 sets hand[0]=null. The next press
-    // must target a still-occupied slot.
+    // All actions are reservations now: the first click fires immediately
+    // (queue empty), the rest sit in the reservation list waiting for queue
+    // to drain. Total commitments = 3 (1 in queue + 2 in reservations).
     queueAnyStrike(s, 0); queueAnyStrike(s, 0); queueAnyStrike(s, 0);
-    expect(s.players[0].queue.length).toBe(3);
-    expect(countHand(s.players[0])).toBe(2);
+    expect(totalCommittedCards(s, 0)).toBe(3);
   });
 
-  it("queued casts resolve in order with carry-over time (no drift)", () => {
+  it("reserved casts resolve in order with carry-over time (no drift)", () => {
     const deck = Array(20).fill(CardId.Strike);
     const s = initGame({ matchSeed: 1n, hpMax: 80, deckP0: deck, deckP1: deck });
     s.players[1].block = 0;
-    // 3 Strikes (1 閃 each = 9 sec total).
+    // 3 Strikes committed (one fires, two sit in reservation list).
     queueAnyStrike(s, 0); queueAnyStrike(s, 0); queueAnyStrike(s, 0);
+    expect(totalCommittedCards(s, 0)).toBe(3);
     const startHp = s.players[1].hp;
     for (let f = 0; f < 185; f++) step(s, 0, 0); // ~3s → first resolved
-    expect(cardCount(s, 0)).toBe(2);
+    expect(totalCommittedCards(s, 0)).toBe(2);
     expect(startHp - s.players[1].hp).toBeGreaterThanOrEqual(5.5);
     for (let f = 0; f < 180; f++) step(s, 0, 0); // ~6s → second resolved
-    expect(cardCount(s, 0)).toBe(1);
+    expect(totalCommittedCards(s, 0)).toBe(1);
     expect(startHp - s.players[1].hp).toBeGreaterThanOrEqual(11);
     for (let f = 0; f < 180; f++) step(s, 0, 0); // ~9s → third resolved
-    expect(cardCount(s, 0)).toBe(0);
+    expect(totalCommittedCards(s, 0)).toBe(0);
     expect(startHp - s.players[1].hp).toBeGreaterThanOrEqual(17);
   });
 
@@ -150,18 +169,20 @@ describe("reducer determinism", () => {
     expect(s.players[0].hand.indexOf(CardId.Bludgeon)).toBeGreaterThanOrEqual(0);
 
     // Queue 3 Strikes (1 閃 each = 3 閃 of setup, above Bludgeon's prereq 2).
+    // First Strike fires into queue; 2nd/3rd stack in reservations. Find
+    // an un-reserved Strike slot each iteration because reservation does
+    // NOT empty the slot.
     for (let n = 0; n < 3; n++) {
-      const strikeIdx = s.players[0].hand.indexOf(CardId.Strike);
-      step(s, cardFlag(strikeIdx)!, 0);
+      queueAnyStrike(s, 0);
     }
-    expect(cardCount(s, 0)).toBe(3);
+    expect(totalCommittedCards(s, 0)).toBe(3);
     const bludIdxNow = s.players[0].hand.indexOf(CardId.Bludgeon);
     step(s, cardFlag(bludIdxNow)!, 0);
-    expect(cardCount(s, 0)).toBe(4);
-    // The Bludgeon should be the LAST card entry in the queue.
-    const cards = s.players[0].queue.filter((q) => q.kind === "card");
-    const last = cards[cards.length - 1];
-    expect(last.kind === "card" && last.cardId === CardId.Bludgeon).toBe(true);
+    expect(totalCommittedCards(s, 0)).toBe(4);
+    // The Bludgeon should be the LAST reservation.
+    const lastRes = s.players[0].reservations[s.players[0].reservations.length - 1];
+    expect(lastRes.kind === "card"
+      && s.players[0].hand[lastRes.slotIndex] === CardId.Bludgeon).toBe(true);
   });
 
   it("played non-power cards go to discard on resolve", () => {

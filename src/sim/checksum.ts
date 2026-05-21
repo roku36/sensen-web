@@ -57,9 +57,12 @@ function hashPlayer(p: PlayerState) {
   f(p.castStartedAt);
   u32(p.resolvedCards.length);
   for (const r of p.resolvedCards) { u32(r.cardId); f(r.duration); f(r.resolvedAt); }
-  // Manual reservations: ordered list of slot indices.
+  // Manual reservations: ordered list of typed entries (card | draw).
   u32(p.reservations.length);
-  for (const r of p.reservations) u32(r);
+  for (const r of p.reservations) {
+    if (r.kind === "card") { byte(0); u32(r.slotIndex); }
+    else { byte(1); }
+  }
   // openedAt — null is a sentinel ("hasn't acted yet").
   byte(p.openedAt === null ? 0 : 1);
   if (p.openedAt !== null) f(p.openedAt);

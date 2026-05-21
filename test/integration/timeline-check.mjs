@@ -1,7 +1,4 @@
-// v8 visual smoke test: poison area, pierce marks, multi-reservation
-//   - Queue Defend → block immediate (cast-start)
-//   - Right-click 2 cards in order → numbered badges 1, 2
-//   - Press space → manual reservations cleared
+// v9 visual: ghost reservation chips appear in queue area
 import { chromium } from "playwright";
 const wait = (ms) => new Promise((r) => setTimeout(r, ms));
 
@@ -18,45 +15,34 @@ await page.selectOption("select", "passive");
 await page.click("button:has-text('CPU と対戦')");
 await page.waitForTimeout(500);
 
-await page.screenshot({ path: "/tmp/v8-initial.png" });
+// Click 3 cards left-to-right to fill reservation list (1 fires immediately,
+// rest become ghost chips).
+await page.keyboard.press("1"); await page.waitForTimeout(120);
+await page.keyboard.press("2"); await page.waitForTimeout(120);
+await page.keyboard.press("3"); await page.waitForTimeout(300);
 
-// Right-click multiple cards (slots 0..2) to set up reservation list.
-const slots = await page.evaluate(() => {
-  const all = Array.from(document.querySelectorAll("button"));
-  return all.filter((b) => /^\d閃/.test(b.textContent ?? "")).slice(0, 3).map((b) => ({
-    text: b.textContent?.slice(0, 30),
-    rect: b.getBoundingClientRect(),
-  }));
-});
-console.log("found playable cards:", slots);
-
-for (const s of slots) {
-  if (!s.rect) continue;
-  const x = s.rect.x + 20;
-  const y = s.rect.y + 20;
-  await page.mouse.click(x, y, { button: "right" });
-  await page.waitForTimeout(120);
-}
-
-await page.waitForTimeout(300);
-const afterReserve = await page.evaluate(() => {
+const state = await page.evaluate(() => {
   const g = window.__sensen.getState();
   return {
+    queue: g.players[0].queue.map((q) => q.kind === "card"
+      ? { kind: "card", cardId: q.cardId, dur: q.duration }
+      : { kind: "draw", slots: q.drawSlots, dur: q.duration }),
     reservations: g.players[0].reservations,
+    hand: g.players[0].hand,
   };
 });
-console.log("after right-click reserve x3:", afterReserve);
+console.log("after 3 left-clicks:", JSON.stringify(state, null, 2));
 
-await page.screenshot({ path: "/tmp/v8-reserved.png" });
+await page.screenshot({ path: "/tmp/v9-ghosts.png" });
+console.log("saved /tmp/v9-ghosts.png");
 
-// Press space — should clear manual reservations.
+// Now Space to clear
 await page.keyboard.press(" ");
-await page.waitForTimeout(120);
-const afterSpace = await page.evaluate(() => {
-  const g = window.__sensen.getState();
-  return { reservations: g.players[0].reservations };
-});
-console.log("after space:", afterSpace);
+await page.waitForTimeout(150);
+const cleared = await page.evaluate(() => ({
+  reservations: window.__sensen.getState().players[0].reservations,
+}));
+console.log("after space:", cleared);
 
-await page.screenshot({ path: "/tmp/v8-cleared.png" });
+await page.screenshot({ path: "/tmp/v9-cleared.png" });
 await browser.close();
