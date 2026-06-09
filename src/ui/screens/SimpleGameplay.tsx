@@ -1281,6 +1281,33 @@ function SimpleCard({ cardId, idx, player, now }: { cardId: number; idx: number;
             boxShadow: "0 0 6px rgba(255, 224, 102, 0.6)",
           }}>{reservationOrder}</div>
         )}
+        {def.matureInto !== undefined && (def.matureSen ?? 0) > 0 && (
+          (() => {
+            const total = (def.matureSen ?? 1) * FRAMES_PER_SEN;
+            const age = player.handAge[idx] ?? 0;
+            const remainSen = Math.max(0, (total - age) / FRAMES_PER_SEN);
+            return (
+              <div aria-hidden style={{
+                position: "absolute", left: 0, right: 0, bottom: 0, zIndex: 2,
+                pointerEvents: "none",
+              }}>
+                <div style={{
+                  height: 4, background: "rgba(0,0,0,0.5)",
+                }}>
+                  <div style={{
+                    height: "100%", width: `${Math.min(100, (age / total) * 100)}%`,
+                    background: "#ffb347",
+                  }} />
+                </div>
+                <div style={{
+                  position: "absolute", right: 4, bottom: 6,
+                  fontSize: 9, color: "#ffb347", fontWeight: 700,
+                  textShadow: "0 1px 2px black",
+                }}>熟成まで {remainSen.toFixed(1)}閃</div>
+              </div>
+            );
+          })()
+        )}
         <div style={{ ...cardCostStyle, color: clickable ? "#ffe580" : "#cfd6e0" }}>
           {unplayable ? "✗" : def.cost + "閃"}
           {(def.prereqQueueTime ?? 0) > 0 && (

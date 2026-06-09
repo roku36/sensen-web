@@ -372,6 +372,30 @@ describe("reducer determinism", () => {
     expect(sawReset).toBe(true);
   });
 
+  it("熟成: card transforms after exactly matureSen 閃 in hand; playing early keeps the base form", () => {
+    // Hand: lone 業火の種 (matures into 業火 after 2閃 = 360 frames).
+    // Deck has only that one card, so the forced-default Draw can never
+    // refill the hand and the seed sits undisturbed.
+    const deck = [CardId.EmberSeed];
+    const s = initGame({ matchSeed: 1n, hpMax: 1000, deckP0: deck, deckP1: deck });
+    const slot = s.players[0].hand.indexOf(CardId.EmberSeed);
+    expect(slot).toBeGreaterThanOrEqual(0);
+
+    // 1 frame before the threshold: still a seed.
+    for (let f = 0; f < 359; f++) step(s, 0, 0);
+    expect(s.players[0].hand[slot]).toBe(CardId.EmberSeed);
+    // At the threshold frame: transformed.
+    for (let f = 0; f < 3; f++) step(s, 0, 0);
+    expect(s.players[0].hand[slot]).toBe(CardId.EmberBurst);
+
+    // Early play keeps the base form: fresh game, click the seed at once.
+    const s2 = initGame({ matchSeed: 1n, hpMax: 1000, deckP0: deck, deckP1: deck });
+    const slot2 = s2.players[0].hand.indexOf(CardId.EmberSeed);
+    step(s2, cardFlag(slot2)!, 0);
+    const queued = s2.players[0].queue.find((q) => q.kind === "card");
+    expect(queued && (queued as { cardId: number }).cardId).toBe(CardId.EmberSeed);
+  });
+
   it("played non-power cards go to discard on resolve", () => {
     const deck = Array(20).fill(CardId.Strike);
     const s = initGame({ matchSeed: 1n, hpMax: 80, deckP0: deck, deckP1: deck });

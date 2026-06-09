@@ -115,6 +115,12 @@ export interface PlayerState {
   // pendingDraw entry, which is tracked separately). Slot index is stable
   // across plays — playing a card just sets hand[i] = null, never splices.
   hand: (CardId | null)[];
+  // 熟成 tracking — handAge[i] counts FRAMES the current card has sat in
+  // slot i; handAgeCard[i] remembers WHICH card the count refers to, so a
+  // slot change (play → refill) resets the age without every hand-write
+  // site needing to know about aging. Integer frames: deterministic.
+  handAge: number[];
+  handAgeCard: (CardId | null)[];
   discard: CardId[];
   // Per-player RNG state for shuffling/drawing.
   rng: Rng;
@@ -175,6 +181,8 @@ const DEFAULT_PLAYER = (
   brutality: null,
   deck: [...initialDeck],
   hand: Array.from({ length: MAX_HAND_SIZE }, () => null),
+  handAge: Array.from({ length: MAX_HAND_SIZE }, () => 0),
+  handAgeCard: Array.from({ length: MAX_HAND_SIZE }, () => null),
   discard: [],
   rng: { state: rngState },
 });
@@ -217,6 +225,8 @@ const clonePlayer = (p: PlayerState): PlayerState => ({
   brutality: p.brutality ? { ...p.brutality } : null,
   deck: p.deck.slice(),
   hand: p.hand.slice(),
+  handAge: p.handAge.slice(),
+  handAgeCard: p.handAgeCard.slice(),
   discard: p.discard.slice(),
   rng: { state: p.rng.state },
 });

@@ -85,6 +85,9 @@ function hashPlayer(p: PlayerState) {
   // Hand is fixed length 6 with null = empty. Encode null as a sentinel.
   u32(p.hand.length);
   for (const c of p.hand) u32(c === null ? 0xffffffff : c);
+  // 熟成 age tracking (integer frames + tracked card per slot).
+  for (const a of p.handAge) u32(a);
+  for (const c of p.handAgeCard) u32(c === null ? 0xffffffff : c);
   u32(p.discard.length); for (const c of p.discard) u32(c);
   u64(p.rng.state);
 }

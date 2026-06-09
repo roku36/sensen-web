@@ -179,6 +179,30 @@ function armBlockDecay(p: PlayerState, now: number) {
   }
 }
 
+// 熟成 tick: cards with matureInto transform after sitting in hand for
+// matureSen 閃. Age tracking is centralized HERE — handAgeCard remembers
+// which card each count refers to, so any slot change (play, draw fill,
+// effect draw) resets the age implicitly on the next frame instead of
+// every hand-write site needing to know about aging.
+function tickMaturing(p: PlayerState) {
+  for (let i = 0; i < p.hand.length; i++) {
+    const c = p.hand[i];
+    if (c === null || p.handAgeCard[i] !== c) {
+      p.handAgeCard[i] = c;
+      p.handAge[i] = 0;
+      continue;
+    }
+    p.handAge[i]++;
+    const def = getCardDef(c);
+    if (def?.matureInto !== undefined && (def.matureSen ?? 0) > 0
+        && p.handAge[i] >= (def.matureSen ?? 0) * FRAMES_PER_SEN) {
+      p.hand[i] = def.matureInto;
+      p.handAgeCard[i] = def.matureInto;
+      p.handAge[i] = 0;
+    }
+  }
+}
+
 // Poison ticks once per 閃: deal (poison) HP damage IGNORING block,
 // decrement poison by 1.
 function tickPoison(p: PlayerState, now: number) {
@@ -1181,6 +1205,7 @@ export function step(s: GameState, p0Input: number, p1Input: number, dt: number 
   tickPowers(s, dt, bus);
   for (const p of s.players) tickBlockDecay(p, now);
   for (const p of s.players) tickPoison(p, now);
+  for (const p of s.players) tickMaturing(p);
 
   // 2. Cast slots: card casts resolve, draw-entry slots fill sequentially.
   tickCasting(s, now, bus);
