@@ -55,6 +55,15 @@ export interface PredictResult {
   /** Frames where opp's attack landed HP damage on p0 (block insufficient). */
   p0Pierces: PierceEvent[];
   p1Pierces: PierceEvent[];
+  /**
+   * Per-reservation CONFIRM times: p0ResFires[i] is the sim time (relative
+   * to baseSec) at which reservations[i] (index at snapshot time) leaves
+   * the list — fired into the queue or self-dropped. Reservations only
+   * shrink head-first under zero inputs, so the k-th removal IS index k.
+   * Used by the UI to mark when a ghost chip will lock in (確定).
+   */
+  p0ResFires: number[];
+  p1ResFires: number[];
   /** When the predicted match would end, or null. */
   endsAtFrame: number | null;
 }
@@ -88,6 +97,8 @@ export function predictForward(from: GameState, horizonSec: number): PredictResu
     p1Poison: [{ t: 0, poison: s.players[1].poison }],
     p0Pierces: [],
     p1Pierces: [],
+    p0ResFires: [],
+    p1ResFires: [],
     endsAtFrame: null,
   };
   let last0 = s.players[0].block;
@@ -102,6 +113,8 @@ export function predictForward(from: GameState, horizonSec: number): PredictResu
     const beforeBlock1 = s.players[1].block;
     const beforePoison0 = s.players[0].poison;
     const beforePoison1 = s.players[1].poison;
+    const beforeRes0 = s.players[0].reservations.length;
+    const beforeRes1 = s.players[1].reservations.length;
     const wasPlaying = s.result === 0;
     step(s, 0, 0);
     if (wasPlaying && s.result !== 0) out.endsAtFrame = s.frame;
@@ -111,6 +124,9 @@ export function predictForward(from: GameState, horizonSec: number): PredictResu
     // snapshot, these relative times shift smoothly with `now`, so the
     // polygon scrolls left in lockstep with the queue chips.
     const t = s.frame * DT - startSec;
+    // Reservation confirms: each head-removal this frame fires at `t`.
+    for (let k = s.players[0].reservations.length; k < beforeRes0; k++) out.p0ResFires.push(t);
+    for (let k = s.players[1].reservations.length; k < beforeRes1; k++) out.p1ResFires.push(t);
     const b0 = s.players[0].block;
     if (b0 !== last0) { out.p0Block.push({ t, block: b0 }); last0 = b0; }
     const b1 = s.players[1].block;

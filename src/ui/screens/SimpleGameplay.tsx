@@ -26,7 +26,7 @@ import {
 import { predictForward } from "../../sim/predict";
 import { canReserveCard, futureEmptyAtDrawPosition } from "../../sim/reducer";
 import {
-  DRAW_SEN_PER_CARD, DT, MAX_HAND_SIZE, SEC_PER_SEN, secToSen, senToSec,
+  DRAW_SEN_PER_CARD, DT, FRAMES_PER_SEN, MAX_HAND_SIZE, SEC_PER_SEN, secToSen, senToSec,
 } from "../../sim/rules";
 import { GameState, PlayerState, ResolvedEntry } from "../../sim/state";
 
@@ -36,7 +36,10 @@ import { PilePeek } from "./PilePeek";
 import { ResultPanel } from "./ResultPanel";
 
 const AI_LABEL: Record<string, string> = {
-  passive: "なし", random: "ランダム", greedyDefense: "防御型", greedyAttack: "攻撃型", heuristic: "バランス型",
+  passive: "なし",
+  lv1: "Lv1 ランダム", lv2: "Lv2 テンポ型", lv3: "Lv3 読み型", lv4: "Lv4 先読み型",
+  // legacy keys from older saved settings
+  random: "Lv1 ランダム", greedyDefense: "Lv2 テンポ型", greedyAttack: "Lv2 テンポ型", heuristic: "Lv3 読み型",
 };
 
 type Peek =
@@ -132,7 +135,11 @@ export function SimpleGameplay() {
     <div style={page}>
       <div style={topBar}>
         <button style={ghostBtn} onClick={() => setScreen("title")}>← タイトル</button>
-        <span style={{ opacity: 0.6, fontSize: 12 }}>frame {game.frame} · 2D · cast-time model</span>
+        <span style={{ opacity: 0.6, fontSize: 12, fontFamily: "ui-monospace, monospace" }}>
+          第{Math.floor(game.frame / FRAMES_PER_SEN)}閃
+          {typeof window !== "undefined" && window.location.search.includes("debug")
+            ? ` · frame ${game.frame}` : ""}
+        </span>
       </div>
 
       <div style={mainRow}>
@@ -147,6 +154,12 @@ export function SimpleGameplay() {
           <SelfHand player={me} now={now} />
           <DrawButton player={me} />
           <AdvanceButton />
+          <div style={controlsHint}>
+            左クリック: 予約（もう一度で取消） · 右クリック: そのカード以降を取消 · Space: 全取消 · D: ドロー · 1〜6: カード選択
+          </div>
+          <div style={controlsHint}>
+            連閃: カードを連続発動するたび攻撃+1（最大+5）· ドローが発動するとリセット
+          </div>
         </div>
       </div>
 
@@ -190,6 +203,11 @@ function PlayerInfoCard({
            color={hpPct > 0.4 ? "#34c759" : hpPct > 0.2 ? "#ffcc00" : "#ff3b30"}
            label={`HP ${Math.round(player.hp)} / ${player.hpMax}`} />
       <div style={pillRow}>
+        {player.renzan >= 2 && (
+          <span style={pill("#ffd166")}>
+            連閃 ×{player.renzan}（攻撃+{Math.min(5, player.renzan - 1)}）
+          </span>
+        )}
         {player.thorns > 0 && <span style={pill("#ff9f43")}>棘 {Math.round(player.thorns)}</span>}
         {player.poison > 0 && <span style={pill("#5fc870")}>毒 {player.poison}</span>}
         {player.strength !== 0 && <span style={pill("#ff6961")}>筋力 {player.strength > 0 ? "+" : ""}{player.strength}</span>}
@@ -233,7 +251,7 @@ function predictSignature(g: GameState): string {
   let sig = "";
   for (const p of g.players) {
     sig += Math.ceil(p.hp) + "," + p.block + "," + p.poison + "," + p.strength + ","
-      + p.thorns + "," + p.castStartedAt + ";";
+      + p.thorns + "," + p.renzan + "," + p.castStartedAt + ";";
     for (const q of p.queue) {
       sig += q.kind === "card"
         ? "c" + q.cardId + ":" + q.duration
@@ -268,10 +286,14 @@ function BattleZone({ game, op, me, now }: { game: GameState; op: PlayerState; m
   const meQueue = computeQueueLayout(me, now);
   const opHist = computeHistoryBoxes(op.resolvedCards, now);
   const meHist = computeHistoryBoxes(me.resolvedCards, now);
-  const opGhosts = hideOppQueue ? [] : computeReservationGhosts(op, opQueue.totalSec);
+  // 予約はローカル情報 (design law: 相手には伝わらない). The opponent's
+  // reservation list is NEVER rendered — no ghost chips for them, and the
+  // prediction below runs with their reservations stripped so their plan
+  // can't leak through the forecast (block trajectory / pierce marks /
+  // poison) either. Only their QUEUE — the public commitment — is shown.
   const meGhosts = computeReservationGhosts(me, meQueue.totalSec);
 
-  const opTotalSec = opQueue.totalSec + opGhosts.reduce((s, g) => s + g.duration, 0);
+  const opTotalSec = opQueue.totalSec;
   const meTotalSec = meQueue.totalSec + meGhosts.reduce((s, g) => s + g.duration, 0);
   // Quantized to whole 閃 so the timeline width (and the prediction
   // horizon) changes at most once per 閃 instead of every second —
@@ -289,40 +311,52 @@ function BattleZone({ game, op, me, now }: { game: GameState; op: PlayerState; m
   // reducer knows about (defense gains, attack hits, combust ticks,
   // step-decay, auto-reservations, self-damage, etc.) is reflected.
   //
-  // When the opp's queue is hidden, we strip it from the snapshot before
-  // simulating so the second player can't see-through to predictions of
-  // unrevealed cards.
+  // The snapshot is MASKED: the opponent's reservations are always
+  // stripped (予約はローカル — their plan must not leak through the
+  // forecast), and their queue too while it's hidden from this player.
   //
-  // PERFORMANCE: keyed on predictSignature(game), NOT game.frame. The
+  // PERFORMANCE: keyed on predictSignature(masked), NOT game.frame. The
   // trajectory is in absolute time (pred.baseSec + sample.t); each render
   // just shifts it by `predOffset` below. Re-simulation only happens when
   // the sim state meaningfully changes (a few times per 閃), instead of a
   // full 30s × 60fps re-simulation every frame — which was eating most of
   // the frame budget and causing dropped frames.
-  const sig = predictSignature(game);
+  const oppHandle = op.handle;
+  const maskPlayer = (pl: PlayerState): PlayerState =>
+    pl.handle === oppHandle
+      ? { ...pl, reservations: [], queue: hideOppQueue ? [] : pl.queue }
+      : pl;
+  const maskedGame: GameState = {
+    ...game,
+    players: [maskPlayer(game.players[0]), maskPlayer(game.players[1])] as [PlayerState, PlayerState],
+  };
+  const sig = predictSignature(maskedGame);
   const pred = useMemo(() => {
-    if (!hideOppQueue) return predictForward(game, maxSec);
-    // Build a forecast input where opp's queue is empty (hidden).
-    const oppHandle = op.handle;
-    const masked: GameState = {
-      ...game,
-      players: [
-        game.players[0].handle === oppHandle
-          ? { ...game.players[0], queue: [] }
-          : game.players[0],
-        game.players[1].handle === oppHandle
-          ? { ...game.players[1], queue: [] }
-          : game.players[1],
-      ] as [PlayerState, PlayerState],
-    };
-    return predictForward(masked, maxSec);
-    // `sig` is the memo key standing in for `game`'s prediction-relevant
-    // content; `game` itself is mutated in place by the reducer.
+    return predictForward(maskedGame, maxSec);
+    // `sig` is the memo key standing in for maskedGame's prediction-
+    // relevant content; the underlying state is mutated in place by the
+    // reducer so object identity can't be the key.
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [sig, maxSec, hideOppQueue, op.handle]);
   // How far the (absolute-time) prediction has drifted behind NOW. All
   // future-sample `t`s are shifted by this before drawing. Always <= 0.
   const predOffset = pred.baseSec - now;
+  // Confirm (確定) markers: the predicted moment each of MY reservations
+  // leaves the list and locks into the queue. Normal cards confirm exactly
+  // where their ghost chip starts (marker would be redundant); a marker is
+  // shown only when a reservation locks EARLIER than its chip — i.e. heavy
+  // cards (lock at remaining == prereq, before their cast start) and the
+  // members of an atomic batch (all lock together at the batch moment).
+  const meResFires = me.handle === 0 ? pred.p0ResFires : pred.p1ResFires;
+  const confirmTicks: number[] = [];
+  for (const g of meGhosts) {
+    const fireAbs = meResFires[(g.reservationOrder ?? 1) - 1];
+    if (fireAbs === undefined) continue;
+    const fireRel = fireAbs + predOffset;
+    if (fireRel < -0.01) continue;
+    if (g.startRel - fireRel <= 0.1) continue; // confirms at its own start — implicit
+    if (!confirmTicks.some((t) => Math.abs(t - fireRel) < 0.05)) confirmTicks.push(fireRel);
+  }
   // Pick out each side's trajectory by handle.
   const opBlockPred = op.handle === 0 ? pred.p0Block : pred.p1Block;
   const meBlockPred = me.handle === 0 ? pred.p0Block : pred.p1Block;
@@ -357,6 +391,9 @@ function BattleZone({ game, op, me, now }: { game: GameState; op: PlayerState; m
 
   return (
     <div style={battleZone}>
+      {/* Row ownership tags — fixed at the left edge, above the scroll. */}
+      <div style={{ ...rowTag, color: "#7db4e8", top: 8 + QUEUE_ROW / 2 - 9 }}>相手</div>
+      <div style={{ ...rowTag, color: "#7fd8a0", top: 8 + SELF_QUEUE_Y_TOP + BOX_HEIGHT / 2 - 9 }}>自分</div>
       <div style={scrollWrap} className="no-scrollbar" ref={scrollRef}>
         <div style={{ ...timelineInner, width: innerWidth, height: TIMELINE_HEIGHT }}>
           {Array.from({ length: Math.ceil(HISTORY_SEC / SEC_PER_SEN) + 1 }).map((_, s) => (
@@ -408,11 +445,8 @@ function BattleZone({ game, op, me, now }: { game: GameState; op: PlayerState; m
           {!hideOppQueue && opQueue.boxes.map((b, i) => (
             <QueueBox key={`o${i}`} {...b} yTop={OPP_QUEUE_Y_TOP} />
           ))}
-          {/* Ghost chips — the manual reservation list rendered behind the
-              actual queue. Same row, lower opacity + dashed border. */}
-          {!hideOppQueue && opGhosts.map((b, i) => (
-            <QueueBox key={`og${i}`} {...b} yTop={OPP_QUEUE_Y_TOP} />
-          ))}
+          {/* NOTE: no ghost chips for the opponent — reservations are
+              local-only information (予約は相手に伝わらない). */}
           {hideOppQueue && (
             <div style={{
               position: "absolute", left: NOW_OFFSET - 200, top: OPP_QUEUE_Y_TOP + 8,
@@ -430,7 +464,26 @@ function BattleZone({ game, op, me, now }: { game: GameState; op: PlayerState; m
           {meGhosts.map((b, i) => (
             <QueueBox key={`mg${i}`} {...b} yTop={SELF_QUEUE_Y_TOP} />
           ))}
-          {opQueue.boxes.length === 0 && opGhosts.length === 0 && <span style={{ ...idleHint, top: QUEUE_ROW / 2 - 7 }}>相手キュー空</span>}
+          {/* 確定 markers: where reservations will LOCK (heavy cards lock
+              before their chip start; atomic batches lock together). */}
+          {confirmTicks.map((t, i) => {
+            const x = NOW_OFFSET + t * PX_PER_SEC;
+            return (
+              <div key={`cf${i}`} style={{ position: "absolute", left: x, top: SELF_QUEUE_Y_TOP - 14, pointerEvents: "none", zIndex: 2 }}>
+                <div style={{
+                  fontSize: 9, fontWeight: 700, color: "#ffe066",
+                  background: "rgba(40,34,8,0.9)", border: "1px solid rgba(255,224,102,0.5)",
+                  padding: "0 4px", borderRadius: 3, whiteSpace: "nowrap",
+                  transform: "translateX(-50%)",
+                }}>確定</div>
+                <div style={{
+                  position: "absolute", left: 0, top: 14, width: 1, height: BOX_HEIGHT + 14,
+                  background: "rgba(255,224,102,0.55)",
+                }} />
+              </div>
+            );
+          })}
+          {opQueue.boxes.length === 0 && <span style={{ ...idleHint, top: QUEUE_ROW / 2 - 7 }}>相手キュー空</span>}
           {meQueue.boxes.length === 0 && meGhosts.length === 0 && <span style={{ ...idleHint, top: SELF_QUEUE_Y_TOP + BOX_HEIGHT / 2 - 7 }}>自分キュー空</span>}
         </div>
       </div>
@@ -1285,16 +1338,17 @@ function DrawButton({ player }: { player: PlayerState }) {
       style={{
         ...drawButtonStyle,
         width: HAND_ROW_WIDTH,
-        background: drawing
-          ? "rgba(95,160,224,0.18)"
-          : enabled ? "linear-gradient(180deg, #2c5b8e 0%, #1a3d6e 100%)" : "#1a1a22",
+        // Clickability drives the look — a draw being mid-cast does NOT
+        // disable the button (another draw can still be reserved), so it
+        // must not LOOK disabled while enabled.
+        background: enabled ? "linear-gradient(180deg, #2c5b8e 0%, #1a3d6e 100%)" : "#1a1a22",
         color: enabled ? "#fff" : "#666",
         cursor: enabled ? "pointer" : "not-allowed",
-        borderColor: isReservation ? "#ffe066" : drawing ? "rgba(95,160,224,0.5)" : enabled ? "#3a7fbf" : "#2a2a35",
+        borderColor: isReservation ? "#ffe066" : enabled ? "#3a7fbf" : "#2a2a35",
         outline: isReservation ? "2px solid #ffe066" : "none",
         outlineOffset: -2,
       }}
-      title={drawing ? "ドロー中" : enabled ? `${emptyCount}枚 / ${costSen}閃` : "空きなし"}
+      title={enabled ? `${emptyCount}枚 / ${costSen}閃` : "空きなし"}
     >
       {isReservation && (
         <span style={{
@@ -1304,7 +1358,9 @@ function DrawButton({ player }: { player: PlayerState }) {
       )}
       <span style={{ fontSize: 16, fontWeight: 700, letterSpacing: 2 }}>⇊ ドロー (D)</span>
       <span style={{ fontSize: 12, opacity: 0.85, marginLeft: 12, fontFamily: "ui-monospace, monospace" }}>
-        {drawing ? "キューで実行中" : enabled ? `${emptyCount}枚 (合計 ${costSen}閃)` : "(空きなし)"}
+        {drawing
+          ? (enabled ? `実行中 · さらに予約 ${emptyCount}枚 (${costSen}閃)` : "実行中")
+          : enabled ? `${emptyCount}枚 (合計 ${costSen}閃)` : "(空きなし)"}
       </span>
     </button>
   );
@@ -1393,7 +1449,6 @@ function effectText(e: CardEffect): string {
     case "Vulnerable": return `相手に脆弱${e.duration}秒`;
     case "SelfVulnerable": return `自分に脆弱${e.duration}秒`;
     case "Weak": return `相手に弱体${e.duration}秒`;
-    case "Accelerate": return `(現在無効)`;
     case "BodySlam": return `現在のブロックと同じダメージ`;
     case "Bloodletting": return e.amount < 0 ? `自分が${-e.amount}ダメージ` : `${e.amount}回復`;
     case "DoubleBlock": return `現在のブロックを2倍`;
@@ -1492,11 +1547,20 @@ const pendingBack: React.CSSProperties = {
 };
 
 const battleZone: React.CSSProperties = {
+  position: "relative",
   display: "flex", flexDirection: "column",
   background: "rgba(40, 30, 60, 0.25)",
   border: "1px solid rgba(110, 80, 170, 0.35)",
   borderRadius: 10,
   padding: 8,
+};
+// Row ownership tag (相手/自分) pinned to the timeline's left edge.
+const rowTag: React.CSSProperties = {
+  position: "absolute", left: 14, zIndex: 6,
+  fontSize: 10, fontWeight: 700, letterSpacing: 2,
+  padding: "2px 6px", borderRadius: 4,
+  background: "rgba(10, 10, 16, 0.75)",
+  pointerEvents: "none",
 };
 const scrollWrap: React.CSSProperties = {
   position: "relative", width: "100%",
@@ -1578,6 +1642,10 @@ const drawButtonStyle: React.CSSProperties = {
   height: 44, borderRadius: 8, border: "1px solid #3a7fbf",
   display: "flex", alignItems: "center", justifyContent: "center",
   gap: 8, fontFamily: "ui-sans-serif, system-ui, sans-serif",
+};
+const controlsHint: React.CSSProperties = {
+  textAlign: "center", fontSize: 11, opacity: 0.45, marginTop: 2,
+  letterSpacing: 0.5,
 };
 const advanceBtnStyle: React.CSSProperties = {
   padding: "6px 16px", borderRadius: 6,

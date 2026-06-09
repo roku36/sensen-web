@@ -8,11 +8,11 @@ import { pickReplayFile } from "./ReplayViewer";
 // AI options surfaced on Title — labels in Japanese, key matches a policy
 // factory exported from ../../ai/policy.
 const AI_LEVELS: { key: string; label: string; desc: string }[] = [
-  { key: "passive",       label: "なし",         desc: "相手は何もしない (旧 Practice)" },
-  { key: "random",        label: "ランダム",     desc: "出せる手から無造作にプレイ" },
-  { key: "greedyDefense", label: "防御型",       desc: "HPが減ると堅実に守る" },
-  { key: "greedyAttack",  label: "攻撃型",       desc: "常に最大ダメージを優先" },
-  { key: "heuristic",     label: "バランス型",   desc: "状況で守る/攻める/止める。推奨" },
+  { key: "passive", label: "なし",          desc: "相手は何もしない (練習用)" },
+  { key: "lv1",     label: "Lv1 ランダム",  desc: "出せる手から無作為にプレイ" },
+  { key: "lv2",     label: "Lv2 テンポ型",  desc: "閃あたりの価値効率だけで選ぶ" },
+  { key: "lv3",     label: "Lv3 読み型",    desc: "相手キューを読み、着弾に合わせてブロック" },
+  { key: "lv4",     label: "Lv4 先読み型",  desc: "数閃先までシミュレートして最善手 (最強)" },
 ];
 
 export function Title() {

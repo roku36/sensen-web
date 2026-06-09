@@ -27,6 +27,7 @@ import {
   MAX_HAND_SIZE,
   PLAYED_TO_DISCARD,
   POISON_DECAY_SEN_PER_STEP,
+  RENZAN_MAX_BONUS,
   RESOLVED_HISTORY_MAX,
   SEC_PER_SEN,
   senToSec,
@@ -255,6 +256,10 @@ function tickCasting(s: GameState, now: number, bus: Bus) {
       p.castStartedAt += entry.duration;
 
       if (entry.kind === "card") {
+        // 連閃: one more card resolved without a draw in between. The
+        // count INCLUDES this card; its own damage (processed later this
+        // frame) gets +（renzan−1）, so the first card of a chain is flat.
+        p.renzan += 1;
         // Stamp it as resolved for the UI history.
         p.resolvedCards.push({
           cardId: entry.cardId,
@@ -277,6 +282,11 @@ function tickCasting(s: GameState, now: number, bus: Bus) {
         // skipBlock: block already fired at cast start, don't apply again.
         bus.cardPlayed.push({ player: idx, cardId: entry.cardId, skipBlock: true });
         if (countsAsExhaust) bus.exhausted.push({ player: idx, cardId: entry.cardId });
+      }
+      if (entry.kind === "draw") {
+        // 連閃 reset: a Draw resolving breaks the card chain. Refill costs
+        // momentum, not just the draw's cast time.
+        p.renzan = 0;
       }
       // Draw entries leave no history mark — the slot fills themselves
       // make the action visible in the hand row.
@@ -841,8 +851,10 @@ function drawCards(s: GameState, idx: 0 | 1, count: number, bus: Bus) {
 // 整数ダメージを返す。弱体・脆弱はどちらも防御側にかかり、被ダメージが増える。
 //   - 弱体（防御側）:   被ダメージ ×2
 //   - 脆弱（防御側）:   被ダメージ ×1.5
+//   - 連閃（攻撃側）:   連続発動2枚目以降 +1ずつ（上限 RENZAN_MAX_BONUS）
 function attackDamage(base: number, attacker: PlayerState, defender: PlayerState | null): number {
-  let dmg = base + attacker.strength;
+  const renzanBonus = Math.min(RENZAN_MAX_BONUS, Math.max(0, attacker.renzan - 1));
+  let dmg = base + attacker.strength + renzanBonus;
   if (defender && defender.weakSecs > 0) dmg *= 2;
   if (defender && defender.vulnerableSecs > 0) dmg *= 1.5;
   return Math.max(0, Math.round(dmg));
@@ -899,12 +911,6 @@ function applyEffect(
       break;
     case "Weak":
       bus.weak.push({ target: opp(idx), duration: effect.duration });
-      break;
-    case "Accelerate":
-      // No-op in cast-time model. The old meaning (cost regen boost) doesn't
-      // map cleanly here. Cards that had this effect (Bloodletting/SeeingRed
-      // /Offering/Dropkick/Berserk) are weaker than intended for now; will
-      // redesign as e.g. "next cast is N× faster" in a follow-up.
       break;
     case "BodySlam":
       bus.damage.push({ target: opp(idx), amount: attackDamage(p.block, p, o), source: idx, kind: DamageKind.Attack });

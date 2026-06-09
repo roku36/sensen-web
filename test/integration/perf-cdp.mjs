@@ -10,7 +10,7 @@ async function measureOnce() {
   await page.goto("http://localhost:5175?simple");
   await page.waitForFunction(() => window.__sensen != null);
   await page.click("button:has-text('2D Simple')");
-  await page.selectOption("select", "heuristic");
+  await page.selectOption("select", "lv3");
   await page.click("button:has-text('CPU と対戦')");
   await wait(2000); // warm up, let combat develop
 

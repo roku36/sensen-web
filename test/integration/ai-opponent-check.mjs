@@ -19,7 +19,7 @@ await page.click("button:has-text('2D Simple')");
 
 // === Scenario A: human vs CPU (heuristic) ===
 // Confirm heuristic is selected (it's the default).
-await page.selectOption("select", "heuristic");
+await page.selectOption("select", "lv3");
 await page.click("button:has-text('CPU と対戦')");
 await page.waitForTimeout(500);
 

@@ -335,6 +335,43 @@ describe("reducer determinism", () => {
     expect(s.players[0].hand.indexOf(CardId.Bludgeon)).toBe(b2); // still in hand
   });
 
+  it("連閃: consecutive card resolves build the chain; a draw resolve resets it", () => {
+    const deck = Array(20).fill(CardId.Strike);
+    const s = initGame({ matchSeed: 1n, hpMax: 1000, deckP0: deck, deckP1: deck });
+    s.players[1].block = 0;
+    const hp0 = s.players[1].hp;
+    // Commit 3 strikes: S1 fires, S2/S3 wait in reservations.
+    queueAnyStrike(s, 0); queueAnyStrike(s, 0); queueAnyStrike(s, 0);
+
+    // S1 resolves (~3s): renzan 1 → no bonus. Strike = 6.
+    for (let f = 0; f < 185; f++) step(s, 0, 0);
+    expect(s.players[0].renzan).toBe(1);
+    const d1 = hp0 - s.players[1].hp;
+    expect(d1).toBeGreaterThanOrEqual(6);
+    expect(d1).toBeLessThanOrEqual(6.5);
+
+    // S2 resolves: renzan 2 → +1 (deals 7).
+    const hp1 = s.players[1].hp;
+    for (let f = 0; f < 180; f++) step(s, 0, 0);
+    expect(s.players[0].renzan).toBe(2);
+    expect(hp1 - s.players[1].hp).toBeGreaterThanOrEqual(7);
+
+    // S3 resolves: renzan 3 → +2 (deals 8).
+    const hp2 = s.players[1].hp;
+    for (let f = 0; f < 180; f++) step(s, 0, 0);
+    expect(s.players[0].renzan).toBe(3);
+    expect(hp2 - s.players[1].hp).toBeGreaterThanOrEqual(8);
+
+    // Reservations now empty → forced default queues a Draw (3 slots are
+    // empty). When that draw RESOLVES the chain resets to 0.
+    let sawReset = false;
+    for (let f = 0; f < 1000 && !sawReset; f++) {
+      step(s, 0, 0);
+      if (s.players[0].renzan === 0) sawReset = true;
+    }
+    expect(sawReset).toBe(true);
+  });
+
   it("played non-power cards go to discard on resolve", () => {
     const deck = Array(20).fill(CardId.Strike);
     const s = initGame({ matchSeed: 1n, hpMax: 80, deckP0: deck, deckP1: deck });

@@ -60,7 +60,6 @@ export type CardEffect =
   | { kind: "Vulnerable"; duration: number }
   | { kind: "SelfVulnerable"; duration: number }
   | { kind: "Weak"; duration: number }
-  | { kind: "Accelerate"; bonusRate: number; duration: number }
   | { kind: "BodySlam" }
   | { kind: "Bloodletting"; amount: number }
   | { kind: "DoubleBlock" }
@@ -125,7 +124,7 @@ def({ id: CardId.TwinStrike,    name: "二連撃",       description: "5ダメ�
 def({ id: CardId.WildStrike,    name: "蛮撃",         description: "12ダメージ。山札に「傷」を1枚追加。",                cardType: CardType.Attack, cost: 1, effect: { kind: "Combo", effects: [{ kind: "Damage", amount: 12 }, { kind: "AddStatus", cardId: CardId.Wound }] } });
 def({ id: CardId.BodySlam,      name: "体当たり",     description: "現在のブロック値と同じダメージ。",                   cardType: CardType.Attack, cost: 1, effect: { kind: "BodySlam" } });
 // Carnage: heavy finisher, needs setup
-def({ id: CardId.Carnage,       name: "殺戮",         description: "25ダメージ。キューに4秒以上積まれている必要あり。1試合に1回限り。[開示]", cardType: CardType.Attack, cost: 2, prereqQueueTime: 1, effect: { kind: "Damage", amount: 25 }, exhausts: true, reveal: true });
+def({ id: CardId.Carnage,       name: "殺戮",         description: "25ダメージ。積み1閃必要。1試合に1回限り。[開示]", cardType: CardType.Attack, cost: 2, prereqQueueTime: 1, effect: { kind: "Damage", amount: 25 }, exhausts: true, reveal: true });
 def({ id: CardId.Dropkick,      name: "ドロップキック",description: "5ダメージ。1枚追加ドロー。",                          cardType: CardType.Attack, cost: 1, effect: { kind: "Combo", effects: [{ kind: "Damage", amount: 5 }, { kind: "Draw", count: 1 }] } });
 def({ id: CardId.Hemokinesis,   name: "血操術",       description: "自分が2ダメージ。相手に15ダメージ。",                cardType: CardType.Attack, cost: 1, effect: { kind: "Combo", effects: [{ kind: "Bloodletting", amount: -2 }, { kind: "Damage", amount: 15 }] } });
 def({ id: CardId.Pummel,        name: "連打",         description: "2ダメージを4回。",                                    cardType: CardType.Attack, cost: 1, effect: { kind: "MultiHit", damage: 2, hits: 4 } });
@@ -135,10 +134,10 @@ def({ id: CardId.SearingBlow,   name: "灼熱の一撃",   description: "12ダ�
 def({ id: CardId.Uppercut,      name: "アッパーカット",description: "13ダメージ。弱体2秒+脆弱2秒。",                      cardType: CardType.Attack, cost: 1, effect: { kind: "Combo", effects: [{ kind: "Damage", amount: 13 }, { kind: "Weak", duration: 2 }, { kind: "Vulnerable", duration: 2 }] } });
 def({ id: CardId.Whirlwind,     name: "旋風",         description: "5ダメージを3回。",                                    cardType: CardType.Attack, cost: 1, effect: { kind: "MultiHit", damage: 5, hits: 3 } });
 // Bludgeon: signature finisher
-def({ id: CardId.Bludgeon,      name: "重撃",         description: "32ダメージ。キューに6秒以上積まれている必要あり。[開示]",  cardType: CardType.Attack, cost: 2, prereqQueueTime: 2, effect: { kind: "Damage", amount: 32 }, reveal: true });
+def({ id: CardId.Bludgeon,      name: "重撃",         description: "32ダメージ。積み2閃必要。[開示]",  cardType: CardType.Attack, cost: 2, prereqQueueTime: 2, effect: { kind: "Damage", amount: 32 }, reveal: true });
 def({ id: CardId.Feed,          name: "捕食",         description: "10ダメージ + 3回復。1試合に1回限り。",                cardType: CardType.Attack, cost: 1, effect: { kind: "Combo", effects: [{ kind: "Damage", amount: 10 }, { kind: "Heal", amount: 3 }] }, exhausts: true });
-def({ id: CardId.FiendFire,     name: "鬼火",         description: "28ダメージ。半分はブロック貫通。キューに5秒以上必要。1回限り。[開示]", cardType: CardType.Attack, cost: 2, prereqQueueTime: 2, effect: { kind: "Damage", amount: 28, pierceBlock: 0.5 }, exhausts: true, reveal: true });
-def({ id: CardId.Immolate,      name: "焼却",         description: "21ダメージ。捨て札に「火傷」を追加。キューに4秒以上必要。[開示]", cardType: CardType.Attack, cost: 2, prereqQueueTime: 1, effect: { kind: "Combo", effects: [{ kind: "Damage", amount: 21 }, { kind: "AddStatus", cardId: CardId.Burn }] }, reveal: true });
+def({ id: CardId.FiendFire,     name: "鬼火",         description: "28ダメージ。半分はブロック貫通。積み2閃必要。1回限り。[開示]", cardType: CardType.Attack, cost: 2, prereqQueueTime: 2, effect: { kind: "Damage", amount: 28, pierceBlock: 0.5 }, exhausts: true, reveal: true });
+def({ id: CardId.Immolate,      name: "焼却",         description: "21ダメージ。捨て札に「火傷」を追加。積み1閃必要。[開示]", cardType: CardType.Attack, cost: 2, prereqQueueTime: 1, effect: { kind: "Combo", effects: [{ kind: "Damage", amount: 21 }, { kind: "AddStatus", cardId: CardId.Burn }] }, reveal: true });
 def({ id: CardId.Reaper,        name: "死神",         description: "8ダメージ(ブロック貫通)+ 6回復。",                    cardType: CardType.Attack, cost: 1, effect: { kind: "Combo", effects: [{ kind: "Damage", amount: 8, pierceBlock: 1 }, { kind: "Heal", amount: 6 }] } });
 
 // === 技 (Skills) ===
@@ -161,40 +160,40 @@ def({ id: CardId.Intimidate,    name: "威嚇",         description: "相手に�
 def({ id: CardId.PowerThrough,  name: "底力",         description: "ブロック15。手札に「傷」を2枚追加。",                cardType: CardType.Skill,  cost: 1, effect: { kind: "Combo", effects: [{ kind: "Block", amount: 15 }, { kind: "AddStatus", cardId: CardId.Wound }, { kind: "AddStatus", cardId: CardId.Wound }] } });
 def({ id: CardId.Rage,          name: "激昂",         description: "10秒間、攻撃完了ごとにブロック+3。",                  cardType: CardType.Skill,  cost: 1, effect: { kind: "Rage", blockPerAttack: 3 } });
 def({ id: CardId.SecondWind,    name: "再起",         description: "ブロック20。1試合に1回限り。",                        cardType: CardType.Skill,  cost: 1, effect: { kind: "Block", amount: 20 }, exhausts: true });
-def({ id: CardId.SeeingRed,     name: "赤を見る",     description: "現在無効 (要再設計)。",                              cardType: CardType.Skill,  cost: 1, effect: { kind: "Accelerate", bonusRate: 1.5, duration: 4 } });
+def({ id: CardId.SeeingRed,     name: "赤を見る",     description: "自分が3ダメージ。筋力+3。",                          cardType: CardType.Skill,  cost: 1, effect: { kind: "Combo", effects: [{ kind: "Bloodletting", amount: -3 }, { kind: "Strength", amount: 3 }] } });
 def({ id: CardId.Sentinel,      name: "歩哨",         description: "ブロック5。",                                          cardType: CardType.Skill,  cost: 1, effect: { kind: "Block", amount: 5 } });
 def({ id: CardId.Shockwave,     name: "衝撃波",       description: "相手に弱体3秒+脆弱3秒。1試合に1回限り。",            cardType: CardType.Skill,  cost: 1, effect: { kind: "Combo", effects: [{ kind: "Weak", duration: 3 }, { kind: "Vulnerable", duration: 3 }] }, exhausts: true });
 def({ id: CardId.SpotWeakness,  name: "弱点看破",     description: "筋力+3。",                                            cardType: CardType.Skill,  cost: 1, effect: { kind: "Strength", amount: 3 } });
 def({ id: CardId.DoubleTap,     name: "二段撃ち",     description: "1枚追加ドロー。",                                      cardType: CardType.Skill,  cost: 1, effect: { kind: "Draw", count: 1 } });
 def({ id: CardId.Exhume,        name: "発掘",         description: "2枚追加ドロー。1試合に1回限り。",                     cardType: CardType.Skill,  cost: 1, effect: { kind: "Draw", count: 2 }, exhausts: true });
-def({ id: CardId.Impervious,    name: "鉄壁",         description: "ブロック30。キューに4秒以上必要。1試合に1回限り。",  cardType: CardType.Skill,  cost: 2, prereqQueueTime: 1, effect: { kind: "Block", amount: 30 }, exhausts: true });
+def({ id: CardId.Impervious,    name: "鉄壁",         description: "ブロック30。積み1閃必要。1試合に1回限り。",  cardType: CardType.Skill,  cost: 2, prereqQueueTime: 1, effect: { kind: "Block", amount: 30 }, exhausts: true });
 def({ id: CardId.LimitBreak,    name: "限界突破",     description: "現在の筋力を2倍。1試合に1回限り。",                  cardType: CardType.Skill,  cost: 1, effect: { kind: "DoubleStrength" }, exhausts: true });
 def({ id: CardId.Offering,      name: "供物",         description: "自分が6ダメージ。3枚追加ドロー。1試合に1回限り。",   cardType: CardType.Skill,  cost: 1, effect: { kind: "Combo", effects: [{ kind: "Bloodletting", amount: -6 }, { kind: "Draw", count: 3 }] }, exhausts: true });
 def({ id: CardId.Counter,       name: "カウンター",   description: "発動中、被ダメージの2倍を相手に返す。[開示]",         cardType: CardType.Skill,  cost: 2, effect: { kind: "Counter" }, reveal: true });
 def({ id: CardId.ToxicSpray,    name: "毒液",         description: "相手に毒6。",                                          cardType: CardType.Skill,  cost: 1, effect: { kind: "Poison", amount: 6 } });
 
 // === 重カード追加 (3閃 cost, prereq付き、全て[開示]) ===
-def({ id: CardId.Bloodbath,     name: "血の宴",       description: "40ダメージ。キューに6秒以上積まれている必要あり。[開示]", cardType: CardType.Attack, cost: 3, prereqQueueTime: 2, effect: { kind: "Damage", amount: 40 }, reveal: true });
-def({ id: CardId.ToxicDose,    name: "毒の盃",        description: "相手に毒10 + 6ダメージ。キューに3秒以上必要。[開示]", cardType: CardType.Attack, cost: 3, prereqQueueTime: 1, effect: { kind: "Combo", effects: [{ kind: "Damage", amount: 6 }, { kind: "Poison", amount: 10 }] }, reveal: true });
-def({ id: CardId.SacredStrike,  name: "聖戦",         description: "25ダメージ + 自分10回復。キューに6秒以上必要。[開示]", cardType: CardType.Attack, cost: 3, prereqQueueTime: 2, effect: { kind: "Combo", effects: [{ kind: "Damage", amount: 25 }, { kind: "Heal", amount: 10 }] }, reveal: true });
-def({ id: CardId.ArcLightning,  name: "雷光乱舞",     description: "6ダメージを4回。キューに3秒以上必要。[開示]",        cardType: CardType.Attack, cost: 3, prereqQueueTime: 1, effect: { kind: "MultiHit", damage: 6, hits: 4 }, reveal: true });
-def({ id: CardId.SiegeBreaker,  name: "破城",         description: "40ダメージ。半分はブロック貫通。キューに9秒以上必要。[開示]", cardType: CardType.Attack, cost: 3, prereqQueueTime: 3, effect: { kind: "Damage", amount: 40, pierceBlock: 0.5 }, reveal: true });
+def({ id: CardId.Bloodbath,     name: "血の宴",       description: "40ダメージ。積み2閃必要。[開示]", cardType: CardType.Attack, cost: 3, prereqQueueTime: 2, effect: { kind: "Damage", amount: 40 }, reveal: true });
+def({ id: CardId.ToxicDose,    name: "毒の盃",        description: "相手に毒10 + 6ダメージ。積み1閃必要。[開示]", cardType: CardType.Attack, cost: 3, prereqQueueTime: 1, effect: { kind: "Combo", effects: [{ kind: "Damage", amount: 6 }, { kind: "Poison", amount: 10 }] }, reveal: true });
+def({ id: CardId.SacredStrike,  name: "聖戦",         description: "25ダメージ + 自分10回復。積み2閃必要。[開示]", cardType: CardType.Attack, cost: 3, prereqQueueTime: 2, effect: { kind: "Combo", effects: [{ kind: "Damage", amount: 25 }, { kind: "Heal", amount: 10 }] }, reveal: true });
+def({ id: CardId.ArcLightning,  name: "雷光乱舞",     description: "6ダメージを4回。積み1閃必要。[開示]",        cardType: CardType.Attack, cost: 3, prereqQueueTime: 1, effect: { kind: "MultiHit", damage: 6, hits: 4 }, reveal: true });
+def({ id: CardId.SiegeBreaker,  name: "破城",         description: "40ダメージ。半分はブロック貫通。積み3閃必要。[開示]", cardType: CardType.Attack, cost: 3, prereqQueueTime: 3, effect: { kind: "Damage", amount: 40, pierceBlock: 0.5 }, reveal: true });
 
 // === パワー (Powers — 永続効果、長キャスト) ===
 def({ id: CardId.Combust,       name: "燃焼",         description: "毎秒、自分0.5・相手2.5ダメージ。",                    cardType: CardType.Power,  cost: 1, effect: { kind: "Combust", selfDmgPerSec: 0.5, enemyDmgPerSec: 2.5 } });
-def({ id: CardId.DarkEmbrace,   name: "闇の抱擁",     description: "カードが除外されるたびに1枚ドロー。キューに5秒以上必要。", cardType: CardType.Power,  cost: 2, prereqQueueTime: 2, effect: { kind: "DarkEmbrace", draw: 1 } });
+def({ id: CardId.DarkEmbrace,   name: "闇の抱擁",     description: "カードが除外されるたびに1枚ドロー。積み2閃必要。", cardType: CardType.Power,  cost: 2, prereqQueueTime: 2, effect: { kind: "DarkEmbrace", draw: 1 } });
 def({ id: CardId.Evolve,        name: "進化",         description: "状態カードを引くたびに1枚ドロー。",                  cardType: CardType.Power,  cost: 1, effect: { kind: "Evolve", draw: 1 } });
 def({ id: CardId.FeelNoPain,    name: "痛覚遮断",     description: "カードが除外されるたびにブロック+3。",                cardType: CardType.Power,  cost: 1, effect: { kind: "FeelNoPain", block: 3 } });
 def({ id: CardId.FireBreathing, name: "火炎放射",     description: "状態カード引きで相手に6ダメージ。",                   cardType: CardType.Power,  cost: 1, effect: { kind: "FireBreathing", damage: 6 } });
 def({ id: CardId.Inflame,       name: "炎上",         description: "筋力+2(永続)。",                                      cardType: CardType.Power,  cost: 1, effect: { kind: "Strength", amount: 2 } });
 def({ id: CardId.Metallicize,   name: "金属化",       description: "毎秒ブロック+3。",                                    cardType: CardType.Power,  cost: 1, effect: { kind: "Metallicize", blockPerSecond: 3 } });
 def({ id: CardId.Rupture,       name: "破裂",         description: "自傷ダメージを受けるたびに筋力+1。",                 cardType: CardType.Power,  cost: 1, effect: { kind: "Rupture", strength: 1 } });
-def({ id: CardId.Barricade,     name: "防壁",         description: "ブロックが減少しなくなる。キューに6秒以上必要。[開示]", cardType: CardType.Power,  cost: 2, prereqQueueTime: 2, effect: { kind: "Barricade" }, reveal: true });
+def({ id: CardId.Barricade,     name: "防壁",         description: "ブロックが減少しなくなる。積み2閃必要。[開示]", cardType: CardType.Power,  cost: 2, prereqQueueTime: 2, effect: { kind: "Barricade" }, reveal: true });
 def({ id: CardId.Berserk,       name: "狂戦士",       description: "自分に脆弱2秒。",                                    cardType: CardType.Power,  cost: 1, effect: { kind: "SelfVulnerable", duration: 2 } });
 def({ id: CardId.Brutality,     name: "残虐",         description: "毎秒自分0.5ダメージ。3秒ごとに1枚ドロー。",          cardType: CardType.Power,  cost: 1, effect: { kind: "Brutality", selfDmgPerSec: 0.5, draw: 1, drawInterval: 3 } });
-def({ id: CardId.Corruption,    name: "腐敗",         description: "スキルが0秒キャスト・除外。キューに6秒以上必要。[開示]", cardType: CardType.Power,  cost: 2, prereqQueueTime: 2, effect: { kind: "Corruption" }, reveal: true });
-def({ id: CardId.DemonForm,     name: "悪魔の姿",     description: "毎秒、筋力+0.4。キューに6秒以上必要。[開示]",       cardType: CardType.Power,  cost: 2, prereqQueueTime: 2, effect: { kind: "DemonForm", strengthPerSecond: 0.4 }, reveal: true });
-def({ id: CardId.Juggernaut,    name: "巨獣",         description: "ブロック獲得時に5ダメージ。キューに5秒以上必要。",    cardType: CardType.Power,  cost: 2, prereqQueueTime: 2, effect: { kind: "Juggernaut", damageOnBlock: 5 } });
+def({ id: CardId.Corruption,    name: "腐敗",         description: "スキルが即時キャスト・除外。積み2閃必要。[開示]", cardType: CardType.Power,  cost: 2, prereqQueueTime: 2, effect: { kind: "Corruption" }, reveal: true });
+def({ id: CardId.DemonForm,     name: "悪魔の姿",     description: "毎秒、筋力+0.4。積み2閃必要。[開示]",       cardType: CardType.Power,  cost: 2, prereqQueueTime: 2, effect: { kind: "DemonForm", strengthPerSecond: 0.4 }, reveal: true });
+def({ id: CardId.Juggernaut,    name: "巨獣",         description: "ブロック獲得時に5ダメージ。積み2閃必要。",    cardType: CardType.Power,  cost: 2, prereqQueueTime: 2, effect: { kind: "Juggernaut", damageOnBlock: 5 } });
 
 // === 状態カード (Status) ===
 def({ id: CardId.Dazed,  name: "幻惑", description: "プレイ不可。手札を圧迫する。",                              cardType: CardType.Status, cost: 999, effect: { kind: "Exhaust" }, exhausts: true });

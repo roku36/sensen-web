@@ -1,17 +1,39 @@
-// AI policies for the cast-time model (v2).
+// AI policies — a strategic LADDER for the cast-time model.
 //
-// A policy is a per-frame function. It returns 0 (do nothing) or a card-flag
-// bit (start casting that hand index). When the player is already casting,
-// the policy always returns 0 — the cast slot IS the cooldown, no need for
-// a manual delay.
+// Each level adds exactly ONE strategic concept on top of the previous,
+// so the ladder doubles as documentation of what "playing well" means in
+// this game:
 //
+//   Lv1 ランダム   — legal moves at random. Baseline.
+//   Lv2 テンポ型   — value-per-閃 greed: every 閃 of cast time should buy
+//                    the most damage/block possible. No opponent reading.
+//   Lv3 読み型     — reads the opponent's PUBLIC queue (the core mechanic):
+//                    when do their attacks land, how much will pierce my
+//                    decaying block? Blocks just-in-time instead of early
+//                    (block decays 1/閃 — early block is wasted block),
+//                    takes lethal when available, and protects its 連閃
+//                    chain by not drawing while momentum is up. Also plans
+//                    one commitment DEEPER (3 vs 2) — deep enough to build
+//                    a setup chain and land heavy (prereq) cards, which
+//                    Lv1/Lv2 structurally cannot reserve.
+//   Lv4 先読み型   — rollout search: actually runs the deterministic
+//                    reducer several 閃 into the future for each candidate
+//                    action and picks the best outcome. The sim IS the
+//                    evaluation function, so every mechanic (連閃, poison
+//                    ticks, block decay, heavy-card scheduling) is priced
+//                    in automatically.
+//
+// Reservations are LOCAL information by design — these policies only read
+// the opponent's queue/visible state, never their reservation list.
+//
+// A policy is a per-frame function returning 0 (nothing) or an input flag.
 // Policies receive a seed for reproducibility (used by tie-breaks).
 
 import { CardEffect, getCardDef } from "../sim/cards";
-import { cardFlag, INPUT_DRAW } from "../sim/input";
-import { canReserveCard } from "../sim/reducer";
-import { DT } from "../sim/rules";
-import { GameState, PlayerState } from "../sim/state";
+import { cardFlag, INPUT_DRAW, INPUT_RESET_RESERVATIONS } from "../sim/input";
+import { canReserveCard, queueRemainingFrames, step } from "../sim/reducer";
+import { DT, RENZAN_MAX_BONUS, SEC_PER_SEN } from "../sim/rules";
+import { GameState, PlayerState, snapshot } from "../sim/state";
 
 export type Policy = (state: GameState, side: 0 | 1) => number;
 export type PolicyFactory = (seed?: number) => Policy;
@@ -61,15 +83,11 @@ function committedCount(p: PlayerState): number {
   return n;
 }
 
-// True if the AI should press Draw this frame. Triggers when the hand has
-// any empty non-reserved slot AND no draw is already queued/reserved AND
-// the AI doesn't have a queueable card right now (so it doesn't pre-empt
-// a strong play).
+// True if pressing Draw is sensible: an empty non-reserved slot exists and
+// no draw is already queued/reserved.
 function shouldDraw(p: PlayerState, playableCount: number): boolean {
-  // Don't draw if any draw is already queued OR already reserved.
   for (const q of p.queue) if (q.kind === "draw") return false;
   for (const r of p.reservations) if (r.kind === "draw") return false;
-  // Reserved slot set (active draw entries + manual card reservations).
   const reserved = new Set<number>();
   for (const q of p.queue) {
     if (q.kind === "draw") {
@@ -85,59 +103,83 @@ function shouldDraw(p: PlayerState, playableCount: number): boolean {
   return emptyCount >= 2 || playableCount === 0;
 }
 
-function damageScore(e: CardEffect, p: PlayerState, o: PlayerState): number {
-  switch (e.kind) {
-    case "Damage": return effectiveDamage(e.amount, p, o, e.pierceBlock ?? 0);
-    case "MultiHit": return effectiveDamage(e.damage, p, o, e.pierceBlock ?? 0) * e.hits;
-    case "BodySlam": return effectiveDamage(p.block, p, o, 0);
-    case "Combo": return e.effects.reduce((s, x) => s + damageScore(x, p, o), 0);
-    default: return 0;
-  }
-}
-
-function effectiveDamage(base: number, p: PlayerState, o: PlayerState, pierce: number): number {
-  let dmg = base + p.strength;
-  if (p.weakSecs > 0) dmg *= 0.75;
-  if (o.vulnerableSecs > 0) dmg *= 1.5;
-  dmg = Math.max(0, dmg);
-  const direct = dmg * pierce;
-  const blocked = Math.max(0, dmg * (1 - pierce) - o.block);
-  return direct + blocked;
-}
-
-function blockScore(e: CardEffect): number {
-  switch (e.kind) {
-    case "Block": return e.amount;
-    case "Combo": return e.effects.reduce((s, x) => s + blockScore(x), 0);
-    case "DoubleBlock": return 1;
-    default: return 0;
-  }
-}
-
-function utilityScore(e: CardEffect): number {
-  switch (e.kind) {
-    case "Draw": return 2 * e.count;
-    case "Strength": return 4 * e.amount;
-    case "Vulnerable": return 3 * e.duration;
-    case "Weak": return 2 * e.duration;
-    case "Heal": return 0.5 * e.amount;
-    case "Thorns": return 0.5 * e.amount;
-    case "Combo": return e.effects.reduce((s, x) => s + utilityScore(x), 0);
-    default: return 0;
-  }
-}
-
-// ── policies ──
-
-export const passive: PolicyFactory = () => () => 0;
-
 // Look up a card def from a (possibly empty) slot.
 const slotDef = (p: PlayerState, i: number) => {
   const c = p.hand[i];
   return c === null ? null : getCardDef(c);
 };
 
-export const random: PolicyFactory = (seed = 1) => {
+// ── combat model (mirrors reducer.attackDamage — the OLD policy model had
+//    Weak backwards and didn't know about 連閃, so the AI mispriced every
+//    attack) ──
+
+function simDamage(base: number, p: PlayerState, o: PlayerState): number {
+  const renzanBonus = Math.min(RENZAN_MAX_BONUS, Math.max(0, p.renzan - 1));
+  let dmg = base + p.strength + renzanBonus;
+  if (o.weakSecs > 0) dmg *= 2;
+  if (o.vulnerableSecs > 0) dmg *= 1.5;
+  return Math.max(0, Math.round(dmg));
+}
+
+function damageOf(e: CardEffect, p: PlayerState, o: PlayerState): number {
+  switch (e.kind) {
+    case "Damage": return simDamage(e.amount, p, o);
+    case "MultiHit": return simDamage(e.damage, p, o) * e.hits;
+    case "BodySlam": return simDamage(p.block, p, o);
+    case "Combo": return e.effects.reduce((s, x) => s + damageOf(x, p, o), 0);
+    default: return 0;
+  }
+}
+
+function blockOf(e: CardEffect, p?: PlayerState): number {
+  switch (e.kind) {
+    case "Block": return e.amount;
+    case "DoubleBlock": return p ? p.block : 5;
+    case "Combo": return e.effects.reduce((s, x) => s + blockOf(x, p), 0);
+    default: return 0;
+  }
+}
+
+function utilityOf(e: CardEffect): number {
+  switch (e.kind) {
+    case "Draw": return 2 * e.count;
+    case "Strength": return 4 * e.amount;
+    case "Vulnerable": return 3 * e.duration;
+    case "Weak": return 2 * e.duration;
+    case "Poison": return 1.2 * e.amount;
+    case "Heal": return 0.5 * e.amount;
+    case "Thorns": return 0.5 * e.amount;
+    case "Combo": return e.effects.reduce((s, x) => s + utilityOf(x), 0);
+    default: return 0;
+  }
+}
+
+// ── threat model (Lv3+): the opponent's PUBLIC queue tells us exactly
+//    when their attacks land. Reservations are local — not read. ──
+
+interface Threat { t: number; dmg: number }
+
+function incomingAttacks(o: PlayerState, me: PlayerState, now: number): Threat[] {
+  const out: Threat[] = [];
+  let end = o.castStartedAt;
+  for (const q of o.queue) {
+    end += q.duration;
+    if (q.kind !== "card") continue;
+    const def = getCardDef(q.cardId);
+    if (!def) continue;
+    const dmg = damageOf(def.effect, o, me);
+    if (dmg > 0) out.push({ t: end - now, dmg });
+  }
+  return out;
+}
+
+// ── Lv0: passive ──
+
+export const passive: PolicyFactory = () => () => 0;
+
+// ── Lv1: random legal move ──
+
+export const lv1Random: PolicyFactory = (seed = 1) => {
   const r = mulberry32(seed);
   return (state, side) => {
     const p = state.players[side];
@@ -149,8 +191,9 @@ export const random: PolicyFactory = (seed = 1) => {
   };
 };
 
-// Highest damage-per-second pick (value-per-time matters in cast model).
-export const greedyAttack: PolicyFactory = (seed = 1) => {
+// ── Lv2: tempo greed — best immediate value per 閃 of cast time ──
+
+export const lv2Tempo: PolicyFactory = (seed = 1) => {
   const r = mulberry32(seed);
   return (state, side) => {
     const p = state.players[side], o = state.players[(side ^ 1) as 0 | 1];
@@ -158,70 +201,228 @@ export const greedyAttack: PolicyFactory = (seed = 1) => {
     const opts = playableIndices(p, state.frame * DT);
     if (shouldDraw(p, opts.length)) return INPUT_DRAW;
     if (opts.length === 0) return 0;
-    let bestI = opts[0], bestScore = -Infinity;
+    let bestI = opts[0], bestS = -Infinity;
     for (const i of opts) {
       const def = slotDef(p, i)!;
-      const t = Math.max(0.1, def.cost);
-      const s = damageScore(def.effect, p, o) / t;
-      if (s > bestScore || (s === bestScore && r() < 0.5)) { bestScore = s; bestI = i; }
+      const t = Math.max(1, def.cost);
+      const s = (damageOf(def.effect, p, o) * 1.2 + blockOf(def.effect, p) * 0.8 + utilityOf(def.effect)) / t;
+      if (s > bestS || (s === bestS && r() < 0.5)) { bestS = s; bestI = i; }
     }
     return cardFlag(bestI) ?? 0;
   };
 };
 
-// Block when HP is low, attack otherwise.
-export const greedyDefense: PolicyFactory = (seed = 1) => {
+// ── Lv3: tactical — queue reading, just-in-time block, lethal, 連閃 ──
+
+export const lv3Tactical: PolicyFactory = (seed = 1) => {
   const r = mulberry32(seed);
   return (state, side) => {
     const p = state.players[side], o = state.players[(side ^ 1) as 0 | 1];
-    if (committedCount(p) >= 2) return 0;
-    const opts = playableIndices(p, state.frame * DT);
-    if (shouldDraw(p, opts.length)) return INPUT_DRAW;
-    if (opts.length === 0) return 0;
-    const wantBlock = p.hp / p.hpMax < 0.6 && p.block < 8;
-    let bestI = opts[0], bestScore = -Infinity;
+    // Commitment discipline: plan 2 deep by default — deeper plans cost
+    // the flexibility that just-in-time blocking depends on (committing 3
+    // blind was MEASURABLY worse: 2/10 vs Lv2 in the ladder). The 3rd
+    // slot is reserved for one thing only: completing a HEAVY play when
+    // the setup is already in place and no threat is incoming.
+    const committed = committedCount(p);
+    if (committed >= 3) return 0;
+    const now = state.frame * DT;
+    const opts = playableIndices(p, now);
+
+    // ① Lethal: if a single card finishes them through block, take it.
+    let bestDmgIdx = -1, bestDmg = 0;
     for (const i of opts) {
       const def = slotDef(p, i)!;
-      const t = Math.max(0.1, def.cost);
-      const s = wantBlock
-        ? (blockScore(def.effect) * 2 + damageScore(def.effect, p, o)) / t
-        : damageScore(def.effect, p, o) / t;
-      if (s > bestScore || (s === bestScore && r() < 0.5)) { bestScore = s; bestI = i; }
+      const dmg = damageOf(def.effect, p, o);
+      if (dmg > bestDmg) { bestDmg = dmg; bestDmgIdx = i; }
+    }
+    if (bestDmgIdx >= 0 && bestDmg >= o.hp + o.block) return cardFlag(bestDmgIdx) ?? 0;
+
+    // ② Threat read: when do their queued attacks land, and how much gets
+    // through my block AFTER decay (block loses 1/閃)? Only worry about
+    // hits inside a ~3閃 planning window past my own chain.
+    const threats = incomingAttacks(o, p, now);
+    const applySec = queueRemainingFrames(p, now) * DT; // when my next card's block goes up
+    let unblocked = 0;
+    for (const th of threats) {
+      if (th.t > applySec + 3 * SEC_PER_SEN) continue;
+      const myBlockThen = Math.max(0, p.block - Math.floor(th.t / SEC_PER_SEN));
+      unblocked += Math.max(0, th.dmg - myBlockThen);
+    }
+    if (unblocked > 0) {
+      // Pick the block card whose value SURVIVES until the hits land —
+      // just-in-time blocking, not panic blocking.
+      let bi = -1, bv = 0;
+      for (const i of opts) {
+        const def = slotDef(p, i)!;
+        const b = blockOf(def.effect, p);
+        if (b <= 0) continue;
+        let v = 0;
+        for (const th of threats) {
+          if (th.t < applySec) continue; // lands before my block is up
+          const decayed = Math.max(0, b - Math.floor((th.t - applySec) / SEC_PER_SEN));
+          v += Math.min(th.dmg, decayed);
+        }
+        if (v > bv) { bv = v; bi = i; }
+      }
+      if (bi >= 0 && bv >= 3) return cardFlag(bi) ?? 0;
+    }
+
+    // ③ Third commitment: ONLY to land a heavy (prereq) card whose setup
+    // is complete, and only while nothing is incoming. Otherwise stay at
+    // 2 and keep the block-reaction slot open.
+    if (committed >= 2) {
+      if (unblocked > 0) return 0;
+      let hi = -1, hv = 0;
+      for (const i of opts) {
+        const def = slotDef(p, i)!;
+        if ((def.prereqQueueTime ?? 0) <= 0) continue;
+        const v = damageOf(def.effect, p, o) + blockOf(def.effect, p);
+        if (v > hv) { hv = v; hi = i; }
+      }
+      return hi >= 0 ? (cardFlag(hi) ?? 0) : 0;
+    }
+
+    // ④ 連閃 protection: while momentum is up and we still hold playable
+    // cards, do NOT draw (a resolving draw resets the chain).
+    if (shouldDraw(p, opts.length) && !(p.renzan >= 2 && opts.length > 0)) return INPUT_DRAW;
+    if (opts.length === 0) return 0;
+
+    // ⑤ Otherwise: corrected value-per-閃 greed.
+    let bestI = opts[0], bestS = -Infinity;
+    for (const i of opts) {
+      const def = slotDef(p, i)!;
+      const t = Math.max(1, def.cost);
+      const s = (damageOf(def.effect, p, o) * 1.3 + blockOf(def.effect, p) * 0.7 + utilityOf(def.effect)) / t;
+      if (s > bestS || (s === bestS && r() < 0.5)) { bestS = s; bestI = i; }
     }
     return cardFlag(bestI) ?? 0;
   };
 };
 
-// Combined: lethal → survive → maximize value-per-second.
-export const heuristic: PolicyFactory = (seed = 1) => {
-  const r = mulberry32(seed);
+// ── Lv4: rollout planner — the deterministic sim IS the evaluator ──
+//
+// Each candidate action is applied to a snapshot, then the future is
+// played out with BOTH sides driven by Lv3 — evaluating "what happens if
+// everyone keeps playing competently", not "what happens if everyone goes
+// limp" (an autopilot opponent model made Lv4 systematically overcommit,
+// because nothing in its imagined future ever punished deep commitments).
+
+// 8閃 horizon: long enough for a heavy play (2閃 setup + 2-3閃 cast) to
+// actually RESOLVE inside the evaluation window — at 5閃 the planner kept
+// paying for setups whose payoff it never saw.
+const ROLLOUT_FRAMES = 8 * SEC_PER_SEN * 60;
+const THINK_INTERVAL = 90;                   // re-plan at most every 1.5s
+// A branch must beat the Lv3 baseline by this margin (≈HP) to override
+// it — the eval is an approximation, and deviating on noise-level
+// differences traded confirmed-good moves for speculative ones.
+const DEVIATE_MARGIN = 1.5;
+
+function rolloutScore(s: GameState, side: 0 | 1): number {
+  const me = s.players[side], op = s.players[(side ^ 1) as 0 | 1];
+  if (s.result !== 0) {
+    if (s.result === 3) return 0;
+    return (s.result === side + 1 ? 1 : -1) * 10000;
+  }
+  let handCards = 0;
+  for (const c of me.hand) if (c !== null) handCards++;
+  return (me.hp - op.hp)
+    + 0.4 * (me.block - op.block)
+    + 1.5 * (me.strength - op.strength)
+    + 0.8 * (op.poison - me.poison)
+    + 0.7 * me.renzan          // chain momentum keeps paying past the horizon
+    + 0.3 * handCards;         // cards in hand = options
+}
+
+export const lv4Planner: PolicyFactory = (seed = 1) => {
+  let nextThink = -1;
+  const brain = lv3Tactical(seed); // anchored baseline — Lv4 is Lv3-plus
   return (state, side) => {
-    const p = state.players[side], o = state.players[(side ^ 1) as 0 | 1];
-    if (committedCount(p) >= 2) return 0;
-    const opts = playableIndices(p, state.frame * DT);
-    if (shouldDraw(p, opts.length)) return INPUT_DRAW;
-    if (opts.length === 0) return 0;
-    const hpFrac = p.hp / p.hpMax;
-    const oppNearDead = o.hp <= 15;
-    const inDanger = hpFrac < 0.35;
-    let bestI = opts[0], bestScore = -Infinity;
-    for (const i of opts) {
+    const p = state.players[side];
+    if (committedCount(p) >= 3) return 0;
+
+    // Anchor: what would Lv3 do right now? Lv4 never plays WORSE than
+    // this — the rollout only arbitrates between the baseline and a few
+    // structurally different branches (big block / heavy / draw / wait).
+    const baseline = brain(state, side);
+    if (state.frame < nextThink && baseline === 0) return 0;
+    nextThink = state.frame + THINK_INTERVAL;
+    const now = state.frame * DT;
+
+    // Branch candidates: baseline first (ties keep it), then the biggest
+    // block, the biggest heavy, draw, and wait — only ones the sim gate
+    // actually accepts, deduped.
+    const o = state.players[(side ^ 1) as 0 | 1];
+    let bestBlockFlag: number | null = null, bb = 0;
+    let bestHeavyFlag: number | null = null, bh = 0;
+    const reservedSlots = new Set<number>();
+    for (const r of p.reservations) if (r.kind === "card") reservedSlots.add(r.slotIndex);
+    for (let i = 0; i < p.hand.length; i++) {
+      if (reservedSlots.has(i)) continue;
+      if (!canReserveCard(p, i, now)) continue;
       const def = slotDef(p, i)!;
-      const t = Math.max(0.1, def.cost);
-      const dmg = damageScore(def.effect, p, o);
-      const blk = blockScore(def.effect);
-      const util = utilityScore(def.effect);
-      let raw = 0;
-      if (oppNearDead) raw = dmg * 5 + util;
-      else if (inDanger) raw = blk * 3 + dmg + util;
-      else raw = dmg * 1.5 + blk + util;
-      const s = raw / t;
-      if (s > bestScore || (s === bestScore && r() < 0.5)) { bestScore = s; bestI = i; }
+      const b = blockOf(def.effect, p);
+      if (b > bb) { bb = b; bestBlockFlag = cardFlag(i); }
+      if ((def.prereqQueueTime ?? 0) > 0) {
+        const v = damageOf(def.effect, p, o) + blockOf(def.effect, p);
+        if (v > bh) { bh = v; bestHeavyFlag = cardFlag(i); }
+      }
     }
-    return cardFlag(bestI) ?? 0;
+    const candidates: number[] = [baseline];
+    for (const c of [bestBlockFlag, bestHeavyFlag, INPUT_DRAW, 0]) {
+      if (c !== null && !candidates.includes(c)) candidates.push(c);
+    }
+    // Lv4's unique move: PLAN REVISION. Reservations are cancellable by
+    // design — if the rollout says "scrap the current plan and rebuild"
+    // clearly beats riding it out, press the reset. No other level ever
+    // cancels.
+    if (p.reservations.length > 0) candidates.push(INPUT_RESET_RESERVATIONS);
+    if (candidates.length === 1) return baseline;
+
+    // Roll each branch forward with the REAL reducer. The OPPONENT is
+    // played by a fresh Lv3 (an autopilot enemy model made overcommitting
+    // look free); our own side adds no further manual actions so the
+    // branch's contribution stays isolated. Baseline wins ties.
+    // Deterministic: same state → same rollouts → same choice.
+    // Roll each branch forward with BOTH sides played by fresh Lv3
+    // instances — "force this action now, then everyone keeps playing
+    // competently". A frozen self-model systematically undervalued
+    // chains/setups; an autopilot opponent made overcommitting look free.
+    // The baseline anchor + tie-keeps-baseline prevents the wash-out
+    // degeneracy (all-equal scores) from ever choosing "do nothing".
+    let best = baseline, bestScore = -Infinity, baselineScore = -Infinity;
+    for (const input of candidates) {
+      const sim = snapshot(state);
+      step(sim, side === 0 ? input : 0, side === 1 ? input : 0);
+      const mySim = lv3Tactical(33), oppSim = lv3Tactical(11);
+      const me0 = side === 0;
+      for (let f = 0; f < ROLLOUT_FRAMES && sim.result === 0; f++) {
+        const mi = mySim(sim, side);
+        const oi = oppSim(sim, (side ^ 1) as 0 | 1);
+        step(sim, me0 ? mi : oi, me0 ? oi : mi);
+      }
+      const sc = rolloutScore(sim, side);
+      if (input === baseline) baselineScore = sc;
+      if (sc > bestScore) { bestScore = sc; best = input; }
+    }
+    // Deviate from the Lv3 baseline only on a CLEAR win — noise-level
+    // differences keep the confirmed-good move.
+    if (best !== baseline && bestScore < baselineScore + DEVIATE_MARGIN) return baseline;
+    return best;
   };
 };
+
+// ── registry ──
+// Legacy keys (random/greedyAttack/greedyDefense/heuristic) are aliases so
+// a stored localStorage selection from an older build keeps working.
 
 export const policies: Record<string, PolicyFactory> = {
-  passive, random, greedyAttack, greedyDefense, heuristic,
+  passive,
+  lv1: lv1Random,
+  lv2: lv2Tempo,
+  lv3: lv3Tactical,
+  lv4: lv4Planner,
+  random: lv1Random,
+  greedyAttack: lv2Tempo,
+  greedyDefense: lv2Tempo,
+  heuristic: lv3Tactical,
 };

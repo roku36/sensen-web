@@ -35,6 +35,12 @@ export const BLOCK_DECAY_SEN_PER_STEP = 1;
 // Heal cards subtract their amount from poison too.
 export const POISON_DECAY_SEN_PER_STEP = 1;
 
+// ── 連閃 (combo chain) ──
+// Each consecutively-resolved CARD beyond the first adds +1 attack damage,
+// capped here. A resolving Draw entry resets the chain — refilling costs
+// momentum, not just cast time.
+export const RENZAN_MAX_BONUS = 5;
+
 // ── Draw action ──
 // Pressing the Draw button appends a draw entry to the queue with duration =
 // (count) × DRAW_SEN_PER_CARD 閃. Slot k fills castStartedAt + (k+1) 閃 in.

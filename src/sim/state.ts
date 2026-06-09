@@ -67,6 +67,14 @@ export interface PlayerState {
   poison: number;
   nextPoisonDecayAt: number;
   thorns: number;
+  // 連閃 (combo chain): number of CARD casts resolved consecutively without
+  // a Draw resolving in between. Each card beyond the first adds +1 attack
+  // damage (capped, see RENZAN_MAX_BONUS). A resolving Draw entry resets it
+  // to 0 — so the strategic cost of refilling your hand is not just the
+  // draw's cast time but also losing your chain momentum. Self-contained:
+  // builds only from the player's OWN planning, never touches the
+  // opponent's queue or reservations.
+  renzan: number;
   // Cast queue — head [0] is currently casting. Both peers see each other's
   // queue (it's part of GameState, so reproducible from inputs + seed).
   queue: QueueEntry[];
@@ -143,6 +151,7 @@ const DEFAULT_PLAYER = (
   poison: 0,
   nextPoisonDecayAt: Infinity,
   thorns: 0,
+  renzan: 0,
   queue: [],
   castStartedAt: 0,
   resolvedCards: [],

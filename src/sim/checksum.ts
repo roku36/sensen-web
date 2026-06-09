@@ -44,6 +44,7 @@ function hashPlayer(p: PlayerState) {
   u32(p.poison | 0);
   f(isFinite(p.nextPoisonDecayAt) ? p.nextPoisonDecayAt : 1e9);
   f(p.thorns);
+  u32(p.renzan | 0);
   u32(p.queue.length);
   for (const q of p.queue) {
     if (q.kind === "card") {
