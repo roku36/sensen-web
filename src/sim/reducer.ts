@@ -184,7 +184,18 @@ function armBlockDecay(p: PlayerState, now: number) {
 // which card each count refers to, so any slot change (play, draw fill,
 // effect draw) resets the age implicitly on the next frame instead of
 // every hand-write site needing to know about aging.
+//
+// RESERVED slots are FROZEN: a reserved card is committed to the plan,
+// and reservations never fail (game law) — so a reserved bloom must not
+// rot out from under its own reservation. Flip side: reserving a dying
+// card deliberately stops its clock, at the price of commitment.
 function tickMaturing(p: PlayerState) {
+  let reservedSlots: Set<number> | null = null;
+  for (const r of p.reservations) {
+    if (r.kind !== "card") continue;
+    if (reservedSlots === null) reservedSlots = new Set();
+    reservedSlots.add(r.slotIndex);
+  }
   for (let i = 0; i < p.hand.length; i++) {
     const c = p.hand[i];
     if (c === null || p.handAgeCard[i] !== c) {
@@ -192,6 +203,7 @@ function tickMaturing(p: PlayerState) {
       p.handAge[i] = 0;
       continue;
     }
+    if (reservedSlots !== null && reservedSlots.has(i)) continue; // frozen
     p.handAge[i]++;
     const def = getCardDef(c);
     if (def?.matureInto !== undefined && (def.matureSen ?? 0) > 0

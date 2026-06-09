@@ -32,7 +32,7 @@
 import { CardEffect, getCardDef } from "../sim/cards";
 import { cardFlag, INPUT_DRAW, INPUT_RESET_RESERVATIONS } from "../sim/input";
 import { canReserveCard, queueRemainingFrames, step } from "../sim/reducer";
-import { DT, RENZAN_MAX_BONUS, SEC_PER_SEN } from "../sim/rules";
+import { DT, FRAMES_PER_SEN, RENZAN_MAX_BONUS, SEC_PER_SEN } from "../sim/rules";
 import { GameState, PlayerState, snapshot } from "../sim/state";
 
 export type Policy = (state: GameState, side: 0 | 1) => number;
@@ -214,7 +214,12 @@ export const lv2Tempo: PolicyFactory = (seed = 1) => {
 
 // ── Lv3: tactical — queue reading, just-in-time block, lethal, 連閃 ──
 
-export const lv3Tactical: PolicyFactory = (seed = 1) => {
+// holdMaturing: treat 熟成 cards as investments — keep them out of the
+// ordinary value-greed picks while other plays exist (lethal and the
+// timed-block emergency can still spend them). Exposed as a parameter so
+// the balance harness can measure the HOLD strategy's value by toggling
+// it; gameplay levels always use the default (true).
+export const lv3Tactical: (seed?: number, holdMaturing?: boolean) => Policy = (seed = 1, holdMaturing = true) => {
   const r = mulberry32(seed);
   return (state, side) => {
     const p = state.players[side], o = state.players[(side ^ 1) as 0 | 1];
@@ -267,7 +272,30 @@ export const lv3Tactical: PolicyFactory = (seed = 1) => {
       if (bi >= 0 && bv >= 3) return cardFlag(bi) ?? 0;
     }
 
-    // ③ Third commitment: ONLY to land a heavy (prereq) card whose setup
+    // ③ 使用期限 (use-it-or-lose-it): a card whose NEXT form is junk is
+    // rotting — once it's within 1.5閃 of dying, play the most valuable
+    // one NOW. This ranks ABOVE the commitment-discipline gate: saving a
+    // dying bloom is exactly what the 3rd commitment slot is for (without
+    // this ordering, blooms rotted away during busy stretches — measured
+    // in self-play).
+    const rotPending = (i: number) => {
+      const d = slotDef(p, i)!;
+      if (d.matureInto === undefined) return false;
+      const next = getCardDef(d.matureInto);
+      return next !== undefined && next.cost >= 900;
+    };
+    let rotI = -1, rotV = 0;
+    for (const i of opts) {
+      if (!rotPending(i)) continue;
+      const d = slotDef(p, i)!;
+      const remain = (d.matureSen ?? 0) * FRAMES_PER_SEN - (p.handAge[i] ?? 0);
+      if (remain > 1.5 * FRAMES_PER_SEN) continue;
+      const v = damageOf(d.effect, p, o) + blockOf(d.effect, p);
+      if (v > rotV) { rotV = v; rotI = i; }
+    }
+    if (rotI >= 0) return cardFlag(rotI) ?? 0;
+
+    // ④ Third commitment: ONLY to land a heavy (prereq) card whose setup
     // is complete, and only while nothing is incoming. Otherwise stay at
     // 2 and keep the block-reaction slot open.
     if (committed >= 2) {
@@ -282,14 +310,33 @@ export const lv3Tactical: PolicyFactory = (seed = 1) => {
       return hi >= 0 ? (cardFlag(hi) ?? 0) : 0;
     }
 
-    // ④ 連閃 protection: while momentum is up and we still hold playable
+    // ⑤ 連閃 protection: while momentum is up and we still hold playable
     // cards, do NOT draw (a resolving draw resets the chain).
     if (shouldDraw(p, opts.length) && !(p.renzan >= 2 && opts.length > 0)) return INPUT_DRAW;
     if (opts.length === 0) return 0;
 
-    // ⑤ Otherwise: corrected value-per-閃 greed.
-    let bestI = opts[0], bestS = -Infinity;
-    for (const i of opts) {
+    // ⑥ Otherwise: corrected value-per-閃 greed, with 熟成 strategy:
+    //   hold (default) — keep upgrade-pending cards out of the greed pool
+    //     while other plays exist; a card about to ROT must be spent.
+    //   spend (holdMaturing=false, balance-harness arm) — play seeds on
+    //     sight. The PURE opposite strategy, so the harness measures the
+    //     value of waiting as the gap between the two arms.
+    const isUpgradePending = (i: number) => {
+      const d = slotDef(p, i)!;
+      if (d.matureInto === undefined) return false;
+      const next = getCardDef(d.matureInto);
+      return next !== undefined && next.cost < 900;
+    };
+    let pool = opts;
+    if (holdMaturing) {
+      const nonHold = opts.filter((i) => !isUpgradePending(i));
+      if (nonHold.length > 0) pool = nonHold;
+    } else {
+      const seeds = opts.filter(isUpgradePending);
+      if (seeds.length > 0) pool = seeds;
+    }
+    let bestI = pool[0], bestS = -Infinity;
+    for (const i of pool) {
       const def = slotDef(p, i)!;
       const t = Math.max(1, def.cost);
       const s = (damageOf(def.effect, p, o) * 1.3 + blockOf(def.effect, p) * 0.7 + utilityOf(def.effect)) / t;

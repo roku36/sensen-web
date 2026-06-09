@@ -1286,6 +1286,11 @@ function SimpleCard({ cardId, idx, player, now }: { cardId: number; idx: number;
             const total = (def.matureSen ?? 1) * FRAMES_PER_SEN;
             const age = player.handAge[idx] ?? 0;
             const remainSen = Math.max(0, (total - age) / FRAMES_PER_SEN);
+            // Upgrading (熟成: orange, anticipation) vs rotting (変質:
+            // red, urgency) — the player must read these differently.
+            const next = getCardDef(def.matureInto);
+            const rotting = !next || next.cost >= 900;
+            const color = rotting ? "#ff5252" : "#ffb347";
             return (
               <div aria-hidden style={{
                 position: "absolute", left: 0, right: 0, bottom: 0, zIndex: 2,
@@ -1296,14 +1301,14 @@ function SimpleCard({ cardId, idx, player, now }: { cardId: number; idx: number;
                 }}>
                   <div style={{
                     height: "100%", width: `${Math.min(100, (age / total) * 100)}%`,
-                    background: "#ffb347",
+                    background: color,
                   }} />
                 </div>
                 <div style={{
                   position: "absolute", right: 4, bottom: 6,
-                  fontSize: 9, color: "#ffb347", fontWeight: 700,
+                  fontSize: 9, color, fontWeight: 700,
                   textShadow: "0 1px 2px black",
-                }}>熟成まで {remainSen.toFixed(1)}閃</div>
+                }}>{rotting ? "変質" : "熟成"}まで {remainSen.toFixed(1)}閃</div>
               </div>
             );
           })()

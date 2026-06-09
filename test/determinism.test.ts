@@ -396,6 +396,43 @@ describe("reducer determinism", () => {
     expect(queued && (queued as { cardId: number }).cardId).toBe(CardId.EmberSeed);
   });
 
+  it("熟成: 予約中のカードは時間凍結 — 予約済みの花が腐って予約が死ぬことはない", () => {
+    // Seed matures to a bloom, gets RESERVED behind a long queue, and must
+    // still be the bloom (not rust/ash) when its reservation finally fires
+    // — reservations never fail (game law).
+    const deck = [CardId.EmberSeed, CardId.Bludgeon];
+    const s = initGame({ matchSeed: 1n, hpMax: 1000, deckP0: deck, deckP1: deck });
+    const slot = s.players[0].hand.indexOf(CardId.EmberSeed);
+    expect(slot).toBeGreaterThanOrEqual(0);
+    // Mature the seed (2閃).
+    for (let f = 0; f < 365; f++) step(s, 0, 0);
+    expect(s.players[0].hand[slot]).toBe(CardId.EmberBurst);
+    // Reserve the burst, then idle past its 3閃 rot window. Frozen: stays.
+    step(s, cardFlag(slot)!, 0);
+    // It may fire into the queue immediately (queue empty) — if so, that
+    // IS the reservation succeeding. Otherwise it must survive in hand.
+    let fired = false;
+    for (let f = 0; f < 800; f++) {
+      step(s, 0, 0);
+      if (s.players[0].queue.some((q) => q.kind === "card" && (q as { cardId: number }).cardId === CardId.EmberBurst)
+          || s.players[0].discard.includes(CardId.EmberBurst)) { fired = true; break; }
+      if (s.players[0].hand[slot] === CardId.EmberAsh) break; // rot = fail
+    }
+    expect(fired).toBe(true);
+  });
+
+  it("熟成チェーン: 業火を放置すると3閃で灰に変質する (使用ウィンドウ)", () => {
+    const deck = [CardId.EmberSeed];
+    const s = initGame({ matchSeed: 1n, hpMax: 1000, deckP0: deck, deckP1: deck });
+    const slot = s.players[0].hand.indexOf(CardId.EmberSeed);
+    // 2閃 → 業火.
+    for (let f = 0; f < 365; f++) step(s, 0, 0);
+    expect(s.players[0].hand[slot]).toBe(CardId.EmberBurst);
+    // さらに3閃放置 → 灰 (プレイ不可).
+    for (let f = 0; f < 545; f++) step(s, 0, 0);
+    expect(s.players[0].hand[slot]).toBe(CardId.EmberAsh);
+  });
+
   it("played non-power cards go to discard on resolve", () => {
     const deck = Array(20).fill(CardId.Strike);
     const s = initGame({ matchSeed: 1n, hpMax: 80, deckP0: deck, deckP1: deck });

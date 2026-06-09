@@ -24,9 +24,10 @@ export const enum CardId {
   Rampage = 18, RecklessCharge = 19, SearingBlow = 20, Uppercut = 21,
   Whirlwind = 22, Bludgeon = 23, Feed = 24, FiendFire = 25,
   Immolate = 26, Reaper = 27,
-  // 熟成 (maturing) pairs — the seed form transforms into the bloom form
-  // after sitting in hand for matureSen 閃.
-  EmberSeed = 28, EmberBurst = 29,
+  // 熟成 (maturing) chains — seed → bloom after matureSen 閃 in hand, and
+  // the bloom ROTS into unplayable junk if held too long past that. Both
+  // transitions ride the same tickMaturing chain.
+  EmberSeed = 28, EmberBurst = 29, EmberAsh = 30,
   // Skills 100-199
   Defend = 100, Armaments = 101, Flex = 102, Havoc = 103, ShrugItOff = 104,
   TrueGrit = 105, Warcry = 106, BattleTrance = 107, Bloodletting = 108,
@@ -36,7 +37,7 @@ export const enum CardId {
   Shockwave = 121, SpotWeakness = 122, DoubleTap = 123, Exhume = 124,
   Impervious = 125, LimitBreak = 126, Offering = 127,
   Counter = 128, ToxicSpray = 129,
-  IronBud = 135, IronBloom = 136,  // 熟成 pair (skill)
+  IronBud = 135, IronBloom = 136, IronRust = 137,  // 熟成 chain (skill)
   // Heavy attack tier (3閃 cost, prereq 2+ 閃). All reveal-tagged so the
   // opponent can plan around them.
   Bloodbath = 130,        // 40 dmg, prereq 2閃
@@ -149,10 +150,12 @@ def({ id: CardId.Feed,          name: "捕食",         description: "10ダメ�
 def({ id: CardId.FiendFire,     name: "鬼火",         description: "28ダメージ。半分はブロック貫通。積み2閃必要。1回限り。[開示]", cardType: CardType.Attack, cost: 2, prereqQueueTime: 2, effect: { kind: "Damage", amount: 28, pierceBlock: 0.5 }, exhausts: true, reveal: true });
 def({ id: CardId.Immolate,      name: "焼却",         description: "21ダメージ。捨て札に「火傷」を追加。積み1閃必要。[開示]", cardType: CardType.Attack, cost: 2, prereqQueueTime: 1, effect: { kind: "Combo", effects: [{ kind: "Damage", amount: 21 }, { kind: "AddStatus", cardId: CardId.Burn }] }, reveal: true });
 def({ id: CardId.Reaper,        name: "死神",         description: "8ダメージ(ブロック貫通)+ 6回復。",                    cardType: CardType.Attack, cost: 1, effect: { kind: "Combo", effects: [{ kind: "Damage", amount: 8, pierceBlock: 1 }, { kind: "Heal", amount: 6 }] } });
-// 熟成ペア: 種のまま即撃ちもできるが、2閃寝かせると大化けする。手札
-// スロットを2閃分占有するのが対価 (6枠しかない)。
-def({ id: CardId.EmberSeed,     name: "業火の種",     description: "7ダメージ。熟成2閃:「業火」に変化。",                cardType: CardType.Attack, cost: 1, effect: { kind: "Damage", amount: 7 }, matureInto: CardId.EmberBurst, matureSen: 2 });
-def({ id: CardId.EmberBurst,    name: "業火",         description: "20ダメージ。",                                        cardType: CardType.Attack, cost: 1, effect: { kind: "Damage", amount: 20 } });
+// 熟成チェーン: 種のまま即撃ちは弱いが、2閃寝かせると大化けする。ただし
+// 出来上がった業火は 3閃以内に使わないと灰に変質する — 「いつ仕込み、
+// いつ使うか」の両側タイミング判断。手札6枠の占有も対価。
+def({ id: CardId.EmberSeed,     name: "業火の種",     description: "4ダメージ。熟成2閃:「業火」に変化。",                cardType: CardType.Attack, cost: 1, effect: { kind: "Damage", amount: 4 }, matureInto: CardId.EmberBurst, matureSen: 2 });
+def({ id: CardId.EmberBurst,    name: "業火",         description: "20ダメージ。3閃以内に使わないと「灰」に変質。",      cardType: CardType.Attack, cost: 1, effect: { kind: "Damage", amount: 20 }, matureInto: CardId.EmberAsh, matureSen: 3 });
+def({ id: CardId.EmberAsh,      name: "灰",           description: "プレイ不可。使い時を逃した業火の残骸。",              cardType: CardType.Status, cost: 999, effect: { kind: "Exhaust" }, exhausts: true });
 
 // === 技 (Skills) ===
 def({ id: CardId.Defend,        name: "防御",         description: "ブロック5。",                                          cardType: CardType.Skill,  cost: 1, effect: { kind: "Block", amount: 5 } });
@@ -186,7 +189,8 @@ def({ id: CardId.Offering,      name: "供物",         description: "自分が6
 def({ id: CardId.Counter,       name: "カウンター",   description: "発動中、被ダメージの2倍を相手に返す。[開示]",         cardType: CardType.Skill,  cost: 2, effect: { kind: "Counter" }, reveal: true });
 def({ id: CardId.ToxicSpray,    name: "毒液",         description: "相手に毒6。",                                          cardType: CardType.Skill,  cost: 1, effect: { kind: "Poison", amount: 6 } });
 def({ id: CardId.IronBud,       name: "鉄の蕾",       description: "ブロック4。熟成2閃:「鉄の花」に変化。",              cardType: CardType.Skill,  cost: 1, effect: { kind: "Block", amount: 4 }, matureInto: CardId.IronBloom, matureSen: 2 });
-def({ id: CardId.IronBloom,     name: "鉄の花",       description: "ブロック13。",                                        cardType: CardType.Skill,  cost: 1, effect: { kind: "Block", amount: 13 } });
+def({ id: CardId.IronBloom,     name: "鉄の花",       description: "ブロック13。3閃以内に使わないと「錆」に変質。",      cardType: CardType.Skill,  cost: 1, effect: { kind: "Block", amount: 13 }, matureInto: CardId.IronRust, matureSen: 3 });
+def({ id: CardId.IronRust,      name: "錆",           description: "プレイ不可。咲き時を逃した鉄の花の残骸。",            cardType: CardType.Status, cost: 999, effect: { kind: "Exhaust" }, exhausts: true });
 
 // === 重カード追加 (3閃 cost, prereq付き、全て[開示]) ===
 def({ id: CardId.Bloodbath,     name: "血の宴",       description: "40ダメージ。積み2閃必要。[開示]", cardType: CardType.Attack, cost: 3, prereqQueueTime: 2, effect: { kind: "Damage", amount: 40 }, reveal: true });
