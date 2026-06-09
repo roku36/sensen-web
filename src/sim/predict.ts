@@ -39,6 +39,15 @@ export interface PierceEvent {
 }
 
 export interface PredictResult {
+  /**
+   * Absolute sim seconds of the snapshot this prediction was computed from.
+   * Sample `t`s are relative to THIS time, not to "now". The sim is
+   * deterministic and autonomous (zero inputs), so a trajectory computed at
+   * baseSec stays valid until the underlying state actually changes — the
+   * UI converts with `rel = (baseSec + t) - now` each render instead of
+   * re-simulating every frame.
+   */
+  baseSec: number;
   p0Block: BlockSample[];
   p1Block: BlockSample[];
   p0Poison: PoisonSample[];
@@ -62,11 +71,17 @@ export interface PredictResult {
  */
 export function predictForward(from: GameState, horizonSec: number): PredictResult {
   const s = snapshot(from);
+  // Predict mode suppresses the sim's forced-default auto-Draw /
+  // auto-leftmost-playable. The graph reflects ONLY the player's explicit
+  // plan — auto-fired cards the player didn't author won't appear as
+  // upcoming block changes / poison gains / attacks landing.
+  s.predictMode = true;
   const startFrame = s.frame;
   const startSec = startFrame * DT;
   const stopFrame = startFrame + Math.ceil(horizonSec / DT);
 
   const out: PredictResult = {
+    baseSec: startSec,
     p0Block: [{ t: 0, block: s.players[0].block }],
     p1Block: [{ t: 0, block: s.players[1].block }],
     p0Poison: [{ t: 0, poison: s.players[0].poison }],

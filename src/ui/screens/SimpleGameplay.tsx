@@ -24,7 +24,7 @@ import {
   cardFlag, INPUT_DRAW, INPUT_RESERVE_DRAW, reserveCardFlag,
 } from "../../sim/input";
 import { predictForward } from "../../sim/predict";
-import { queueRemainingTime, reservedSlotSet } from "../../sim/reducer";
+import { canReserveCard, futureEmptyAtDrawPosition } from "../../sim/reducer";
 import {
   DRAW_SEN_PER_CARD, DT, MAX_HAND_SIZE, SEC_PER_SEN, secToSen, senToSec,
 } from "../../sim/rules";
@@ -67,14 +67,25 @@ const BLOCK_HALF = BLOCK_BAND / 2;
 const BOX_HEIGHT = 44;
 const MIN_TIMELINE_SEC = 30;
 const NOW_VIEWPORT_LEFT_PX = 80;
-const TIMELINE_HEIGHT = QUEUE_ROW * 2 + BLOCK_BAND;
+// Outer band between each queue row and the block band — gives poison area
+// and pierce marks somewhere visible to render OUTSIDE the block band
+// without being clipped by the SVG viewbox or overlapping queue chips.
+const OUTER_BAND = 52;
+const TIMELINE_HEIGHT = QUEUE_ROW * 2 + OUTER_BAND * 2 + BLOCK_BAND;
 
 // Y coordinates within the inner timeline div.
 const OPP_QUEUE_Y_TOP = (QUEUE_ROW - BOX_HEIGHT) / 2;
-const BLOCK_TOP = QUEUE_ROW;                    // upper edge of opp's block area
-const BLOCK_CENTER = QUEUE_ROW + BLOCK_HALF;     // horizontal axis (block = 0)
-const BLOCK_BOTTOM = QUEUE_ROW + BLOCK_BAND;     // lower edge of self's block area
-const SELF_QUEUE_Y_TOP = QUEUE_ROW + BLOCK_BAND + (QUEUE_ROW - BOX_HEIGHT) / 2;
+const BLOCK_TOP = QUEUE_ROW + OUTER_BAND;                    // upper edge of opp's block area
+const BLOCK_CENTER = BLOCK_TOP + BLOCK_HALF;                  // horizontal axis (block = 0)
+const BLOCK_BOTTOM = BLOCK_TOP + BLOCK_BAND;                  // lower edge of self's block area
+const SELF_QUEUE_Y_TOP = BLOCK_BOTTOM + OUTER_BAND + (QUEUE_ROW - BOX_HEIGHT) / 2;
+// SVG covers the block band PLUS both outer bands so poison/pierce can
+// render in the outer space without being clipped.
+const SVG_TOP = QUEUE_ROW;                                    // top of opp outer band
+const SVG_HEIGHT = OUTER_BAND + BLOCK_BAND + OUTER_BAND;
+// Within the SVG, these are the outer edges of the block band.
+const BLOCK_OUTER_Y_OPP = OUTER_BAND;                         // opp block grows from here downward
+const BLOCK_OUTER_Y_SELF = OUTER_BAND + BLOCK_BAND;           // self block grows from here upward
 
 // Block height mapping: EXPONENTIAL-NARROWER. The first few block units
 // take big visual chunks; high block values pack tightly so even 30+
@@ -207,6 +218,46 @@ function countCards(hand: (number | null)[]): number {
 
 // ── Battle zone: timeline with center block band ──
 
+// Signature of everything that can change the predicted future. The sim is
+// deterministic and autonomous under zero inputs, so a computed trajectory
+// stays valid (in ABSOLUTE time) until one of these actually changes — a
+// click, a card resolving, a block/poison tick. That happens a few times
+// per 閃, not 60×/sec, so keying the prediction on this string instead of
+// `game.frame` removes a full 30s re-simulation from every render frame.
+//
+// Continuously-decaying values (vulnerableSecs, weakSecs, rage.remaining,
+// demonForm.accumulated) are deliberately EXCLUDED: their decay is itself
+// part of the predicted trajectory and never invalidates it. Including
+// them would force a re-simulation every frame and defeat the cache.
+function predictSignature(g: GameState): string {
+  let sig = "";
+  for (const p of g.players) {
+    sig += Math.ceil(p.hp) + "," + p.block + "," + p.poison + "," + p.strength + ","
+      + p.thorns + "," + p.castStartedAt + ";";
+    for (const q of p.queue) {
+      sig += q.kind === "card"
+        ? "c" + q.cardId + ":" + q.duration
+        : "d" + q.drawSlots.join(".") + ":" + q.drawFilledCount;
+      sig += "|";
+    }
+    sig += ";";
+    for (const r of p.reservations) sig += r.kind === "card" ? r.slotIndex + "|" : "D|";
+    sig += ";";
+    for (const c of p.hand) sig += (c === null ? "_" : c) + ".";
+    sig += ";" + (p.metallicize?.blockPerSec ?? "")
+      + "," + (p.combust ? p.combust.selfPerSec + ":" + p.combust.enemyPerSec : "")
+      + "," + (p.barricade ? 1 : 0)
+      + "," + (p.demonForm?.strengthPerSec ?? "")
+      + "," + (p.brutality ? 1 : 0)
+      + "," + (p.juggernaut?.damageOnBlock ?? "")
+      + "," + (p.rage ? p.rage.blockPerAttack : "")
+      + "#";
+  }
+  return sig;
+}
+
+const ceilToSen = (sec: number) => Math.ceil(sec / SEC_PER_SEN) * SEC_PER_SEN;
+
 function BattleZone({ game, op, me, now }: { game: GameState; op: PlayerState; me: PlayerState; now: number }) {
   // Hide-opp-queue rule: second player (me.handle === 1) shouldn't see
   // first player's queue until they've themselves committed something.
@@ -222,10 +273,14 @@ function BattleZone({ game, op, me, now }: { game: GameState; op: PlayerState; m
 
   const opTotalSec = opQueue.totalSec + opGhosts.reduce((s, g) => s + g.duration, 0);
   const meTotalSec = meQueue.totalSec + meGhosts.reduce((s, g) => s + g.duration, 0);
+  // Quantized to whole 閃 so the timeline width (and the prediction
+  // horizon) changes at most once per 閃 instead of every second —
+  // a constantly-resizing scroll content is itself a source of visual
+  // jitter.
   const maxSec = Math.max(
     MIN_TIMELINE_SEC,
-    Math.ceil(opTotalSec + 2),
-    Math.ceil(meTotalSec + 2),
+    ceilToSen(opTotalSec + 2),
+    ceilToSen(meTotalSec + 2),
   );
   const innerWidth = NOW_OFFSET + maxSec * PX_PER_SEC + EDGE_PAD;
 
@@ -236,8 +291,15 @@ function BattleZone({ game, op, me, now }: { game: GameState; op: PlayerState; m
   //
   // When the opp's queue is hidden, we strip it from the snapshot before
   // simulating so the second player can't see-through to predictions of
-  // unrevealed cards. Memoized on game.frame so we resimulate at most once
-  // per sim step, not on every React render.
+  // unrevealed cards.
+  //
+  // PERFORMANCE: keyed on predictSignature(game), NOT game.frame. The
+  // trajectory is in absolute time (pred.baseSec + sample.t); each render
+  // just shifts it by `predOffset` below. Re-simulation only happens when
+  // the sim state meaningfully changes (a few times per 閃), instead of a
+  // full 30s × 60fps re-simulation every frame — which was eating most of
+  // the frame budget and causing dropped frames.
+  const sig = predictSignature(game);
   const pred = useMemo(() => {
     if (!hideOppQueue) return predictForward(game, maxSec);
     // Build a forecast input where opp's queue is empty (hidden).
@@ -254,7 +316,13 @@ function BattleZone({ game, op, me, now }: { game: GameState; op: PlayerState; m
       ] as [PlayerState, PlayerState],
     };
     return predictForward(masked, maxSec);
-  }, [game.frame, maxSec, hideOppQueue, op.handle]);
+    // `sig` is the memo key standing in for `game`'s prediction-relevant
+    // content; `game` itself is mutated in place by the reducer.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [sig, maxSec, hideOppQueue, op.handle]);
+  // How far the (absolute-time) prediction has drifted behind NOW. All
+  // future-sample `t`s are shifted by this before drawing. Always <= 0.
+  const predOffset = pred.baseSec - now;
   // Pick out each side's trajectory by handle.
   const opBlockPred = op.handle === 0 ? pred.p0Block : pred.p1Block;
   const meBlockPred = me.handle === 0 ? pred.p0Block : pred.p1Block;
@@ -312,19 +380,23 @@ function BattleZone({ game, op, me, now }: { game: GameState; op: PlayerState; m
             boxShadow: "0 0 4px rgba(255,224,102,0.5)",
             pointerEvents: "none",
           }} />
-          {/* SVG block trajectories. innerWidth wide, BLOCK_BAND tall, shifted to start at BLOCK_TOP. */}
+          {/* SVG covers the block band PLUS outer bands above/below so the
+              poison area, pierce marks, and gain/loss labels can render
+              outside the block band without being clipped. */}
           <svg
-            width={innerWidth} height={BLOCK_BAND}
-            style={{ position: "absolute", left: 0, top: BLOCK_TOP, pointerEvents: "none" }}
+            width={innerWidth} height={SVG_HEIGHT}
+            style={{ position: "absolute", left: 0, top: SVG_TOP, pointerEvents: "none", overflow: "visible" }}
           >
-            <BlockArea history={op.blockHistory} future={opBlockPred} side="opp" nowSec={now} maxSec={maxSec} hidden={hideOppQueue} />
-            <BlockArea history={me.blockHistory} future={meBlockPred} side="self" nowSec={now} maxSec={maxSec} />
-            <PoisonArea currentPoison={op.poison} future={opPoisonPred} side="opp" maxSec={maxSec} hidden={hideOppQueue} />
-            <PoisonArea currentPoison={me.poison} future={mePoisonPred} side="self" maxSec={maxSec} />
-            {!hideOppQueue && <PierceMarks events={opPierces} side="opp" />}
-            <PierceMarks events={mePierces} side="self" />
-            <BlockGainLabels history={op.blockHistory} future={opBlockPred} side="opp" nowSec={now} maxSec={maxSec} hidden={hideOppQueue} />
-            <BlockGainLabels history={me.blockHistory} future={meBlockPred} side="self" nowSec={now} maxSec={maxSec} />
+            <BlockArea history={op.blockHistory} future={opBlockPred} offset={predOffset} side="opp" nowSec={now} maxSec={maxSec} hidden={hideOppQueue} />
+            <BlockArea history={me.blockHistory} future={meBlockPred} offset={predOffset} side="self" nowSec={now} maxSec={maxSec} />
+            <PoisonArea currentPoison={op.poison} future={opPoisonPred} offset={predOffset} side="opp" maxSec={maxSec} hidden={hideOppQueue} />
+            <PoisonArea currentPoison={me.poison} future={mePoisonPred} offset={predOffset} side="self" maxSec={maxSec} />
+            {!hideOppQueue && <PierceMarks events={opPierces} offset={predOffset} side="opp" />}
+            <PierceMarks events={mePierces} offset={predOffset} side="self" />
+            <BlockChangeLabels history={op.blockHistory} future={opBlockPred} offset={predOffset} side="opp" nowSec={now} maxSec={maxSec} hidden={hideOppQueue} />
+            <BlockChangeLabels history={me.blockHistory} future={meBlockPred} offset={predOffset} side="self" nowSec={now} maxSec={maxSec} />
+            <PoisonChangeLabels currentPoison={op.poison} future={opPoisonPred} offset={predOffset} side="opp" maxSec={maxSec} hidden={hideOppQueue} />
+            <PoisonChangeLabels currentPoison={me.poison} future={mePoisonPred} offset={predOffset} side="self" maxSec={maxSec} />
           </svg>
           <div style={{ ...nowDivider, left: NOW_OFFSET - 18, top: BLOCK_CENTER - 8 }}>NOW</div>
           <div style={{ ...nowLine, left: NOW_OFFSET, height: TIMELINE_HEIGHT }} />
@@ -437,13 +509,16 @@ function computeReservationGhosts(player: PlayerState, queueTotalSec: number): B
       });
       cum += duration;
     } else {
-      // Draw entry: estimate duration from current empty count (best guess).
-      let n = 0;
-      for (const c of player.hand) if (c === null) n++;
-      const duration = senToSec(Math.max(1, n) * DRAW_SEN_PER_CARD);
+      // Draw entry: count slots that WILL be empty when this draw fires —
+      // every preceding card reservation frees its slot, and any earlier
+      // draw consumes those. Matches what applyDrawAction will see at
+      // fire time, so the ghost chip is the right size.
+      const n = futureEmptyAtDrawPosition(player, i);
+      if (n === 0) continue; // this draw will be a no-op (drop from preview)
+      const duration = senToSec(n * DRAW_SEN_PER_CARD);
       out.push({
         cardId: null,
-        drawSlots: new Array(Math.max(1, n)).fill(0),
+        drawSlots: new Array(n).fill(0),
         drawFilledCount: 0,
         duration,
         startRel: cum,
@@ -527,8 +602,13 @@ function QueueBox({ cardId, drawSlots, drawFilledCount, duration, startRel, endR
     <div
       style={{
         position: "absolute",
-        left, width: w, height: BOX_HEIGHT,
-        top: yTop,
+        // transform (not left/top) so the per-frame ~0.6px slide is GPU-
+        // composited with sub-pixel interpolation instead of relayouting
+        // and snapping to whole pixels — the chips glide instead of
+        // juddering.
+        left: 0, top: 0,
+        transform: `translate3d(${left}px, ${yTop}px, 0)`,
+        width: w, height: BOX_HEIGHT,
         background: color,
         // Ghost: dashed yellow-tinted border so it visually reads as
         // "reserved, not yet committed".
@@ -603,10 +683,12 @@ interface BlockSample { t: number; block: number; }
 // FUTURE samples (t >= 0) come from the trajectory prediction. The past
 // section never changes shape just because the prediction does.
 function BlockArea({
-  history, future, side, nowSec, maxSec, hidden,
+  history, future, offset, side, nowSec, maxSec, hidden,
 }: {
   history: { t: number; block: number }[];
   future: BlockSample[];
+  /** pred.baseSec - now: shifts the cached absolute-time prediction to NOW-relative. */
+  offset: number;
   side: "opp" | "self";
   nowSec: number;
   maxSec: number;
@@ -627,11 +709,11 @@ function BlockArea({
   // already integers from the sim, so Y is naturally crisp too.
   const yForBlock = (b: number) => {
     const h = blockHeight(b);
-    return Math.round(side === "opp" ? 0 + h : BLOCK_BAND - h);
+    return Math.round(side === "opp" ? BLOCK_OUTER_Y_OPP + h : BLOCK_OUTER_Y_SELF - h);
   };
   const xForRel = (relSec: number) =>
     Math.round(NOW_OFFSET + Math.max(-HISTORY_SEC, relSec) * PX_PER_SEC);
-  const outerY = side === "opp" ? 0 : BLOCK_BAND;
+  const outerY = side === "opp" ? BLOCK_OUTER_Y_OPP : BLOCK_OUTER_Y_SELF;
   // The past polygon shouldn't extend BEFORE the game started (t < -nowSec
   // in relative coords). Past-clamp = max(-HISTORY_SEC, -nowSec).
   const pastLimit = Math.max(-HISTORY_SEC, -nowSec);
@@ -660,19 +742,25 @@ function BlockArea({
     const anchorBlock = rel.length > 0 ? rel[0].block : (futureSamples[0]?.block ?? 0);
     rel.unshift({ t: pastLimit, block: anchorBlock });
   }
-  // The "current" sample (at t = 0) is the latest history value (= current
-  // block); the prediction starts there too.
-  const currentBlock = futureSamples.length > 0 ? futureSamples[0].block : rel[rel.length - 1].block;
+  // The "current" sample (at t = 0) is the latest HISTORY value — that's
+  // the player's real block right now. (The prediction's own t=0 sample
+  // may be a few frames stale since it's cached; history is always live.)
+  const currentBlock = history.length > 0
+    ? history[history.length - 1].block
+    : (futureSamples[0]?.block ?? 0);
   // Add a t=0 sample if missing, so the past extends right up to NOW.
   if (rel[rel.length - 1].t < 0) {
     rel.push({ t: 0, block: currentBlock });
   }
-  // Append future samples (excluding the leading t=0 to avoid a duplicate).
+  // Append future samples, shifted from prediction-relative to NOW-relative
+  // time. Samples that have already slid into the past (t <= 0) are dropped
+  // — the live blockHistory covers that region.
   for (let i = 0; i < futureSamples.length; i++) {
     const s = futureSamples[i];
-    if (s.t <= 0) continue;
-    if (s.t > maxSec) break;
-    rel.push({ t: s.t, block: s.block });
+    const t = s.t + offset;
+    if (t <= 0) continue;
+    if (t > maxSec) break;
+    rel.push({ t, block: s.block });
   }
 
   // Now emit a STEP-WISE polygon. Each transition is a horizontal segment
@@ -712,16 +800,19 @@ function BlockArea({
 }
 
 // Poison area: GREEN band growing OUTWARD from the block band's outer
-// edge (opp grows up from y=0, self grows down from y=BLOCK_BAND). Same
-// pixel scale as a pierce mark so it reads as "incoming HP damage".
+// edge (opp grows up, self grows down). Same pixel scale as a pierce mark
+// so it reads as "incoming HP damage". Capped slightly under OUTER_BAND
+// so labels still have room.
 const PIERCE_PX_PER_UNIT = 1.5;
-const PIERCE_MAX_EXTEND = 36;
+const PIERCE_MAX_EXTEND = Math.min(40, OUTER_BAND - 12);
 
 function PoisonArea({
-  currentPoison, future, side, maxSec, hidden,
+  currentPoison, future, offset, side, maxSec, hidden,
 }: {
   currentPoison: number;
   future: { t: number; poison: number }[];
+  /** pred.baseSec - now: shifts the cached absolute-time prediction to NOW-relative. */
+  offset: number;
   side: "opp" | "self";
   maxSec: number;
   hidden?: boolean;
@@ -731,7 +822,7 @@ function PoisonArea({
     ? "rgba(95, 200, 110, 0.18)"
     : "rgba(95, 200, 110, 0.55)";
   const stroke = hidden ? "rgba(95, 200, 110, 0.35)" : "#5fc870";
-  const outerY = side === "opp" ? 0 : BLOCK_BAND;
+  const outerY = side === "opp" ? BLOCK_OUTER_Y_OPP : BLOCK_OUTER_Y_SELF;
   // Past portion: flat at currentPoison from history-left to NOW.
   const xForT = (t: number) =>
     Math.round(NOW_OFFSET + t * PX_PER_SEC);
@@ -744,15 +835,16 @@ function PoisonArea({
   points.push(`${Math.round(leftPastX)},${outerY}`);
   points.push(`${Math.round(leftPastX)},${yForPoison(currentPoison)}`);
   points.push(`${NOW_OFFSET},${yForPoison(currentPoison)}`);
-  // Future samples: step polygon at each transition.
+  // Future samples: step polygon at each transition (shifted to NOW-relative).
   let last = currentPoison;
   for (let i = 0; i < future.length; i++) {
     const s = future[i];
-    if (s.t > maxSec) break;
-    if (s.t <= 0) continue;
+    const t = s.t + offset;
+    if (t > maxSec) break;
+    if (t <= 0) continue;
     if (s.poison !== last) {
-      points.push(`${xForT(s.t)},${yForPoison(last)}`);
-      points.push(`${xForT(s.t)},${yForPoison(s.poison)}`);
+      points.push(`${xForT(t)},${yForPoison(last)}`);
+      points.push(`${xForT(t)},${yForPoison(s.poison)}`);
       last = s.poison;
     }
   }
@@ -771,17 +863,21 @@ function PoisonArea({
 // landed. Derived from the sim prediction (we ran the reducer forward,
 // recorded each frame's HP delta against block delta).
 function PierceMarks({
-  events, side,
+  events, offset, side,
 }: {
   events: { t: number; hpLost: number }[];
+  /** pred.baseSec - now: shifts the cached absolute-time prediction to NOW-relative. */
+  offset: number;
   side: "opp" | "self";
 }) {
   if (events.length === 0) return null;
-  const outerY = side === "opp" ? 0 : BLOCK_BAND;
+  const outerY = side === "opp" ? BLOCK_OUTER_Y_OPP : BLOCK_OUTER_Y_SELF;
   return (
     <>
       {events.map((e, i) => {
-        const x = Math.round(NOW_OFFSET + e.t * PX_PER_SEC);
+        const t = e.t + offset;
+        if (t < 0) return null; // already happened — history shows the result
+        const x = Math.round(NOW_OFFSET + t * PX_PER_SEC);
         const len = Math.min(PIERCE_MAX_EXTEND, e.hpLost * PIERCE_PX_PER_UNIT);
         const y2 = side === "opp" ? outerY - len : outerY + len;
         const labelY = side === "opp" ? y2 - 2 : y2 + 9;
@@ -804,48 +900,52 @@ function PierceMarks({
   );
 }
 
-// Numeric labels at block-gain transitions. Walks (sample[i-1], sample[i])
-// pairs in both history and prediction; whenever block JUMPED UP, drop a
-// "newBlockValue" label at that point on the trajectory curve. Past
-// labels come from blockHistory directly; future labels from prediction
-// samples. Helps the player count the total block they've stacked up.
-function BlockGainLabels({
-  history, future, side, nowSec, maxSec, hidden,
+// Numeric labels at every block transition (gain AND loss). Walks
+// (sample[i-1], sample[i]) pairs in history + prediction; whenever block
+// jumps, drop a "newBlockValue" label at that point on the trajectory
+// curve. Gains use green, losses (attack absorbed) use light blue so the
+// player can read "5→14" (gained from Defend) vs "20→8" (took 12 damage).
+function BlockChangeLabels({
+  history, future, offset, side, nowSec, maxSec, hidden,
 }: {
   history: { t: number; block: number }[];
   future: BlockSample[];
+  /** pred.baseSec - now: shifts the cached absolute-time prediction to NOW-relative. */
+  offset: number;
   side: "opp" | "self";
   nowSec: number;
   maxSec: number;
   hidden?: boolean;
 }) {
   if (hidden) return null;
-  type Gain = { t: number; newBlock: number };
-  const gains: Gain[] = [];
+  type Change = { t: number; newBlock: number; gain: boolean };
+  const changes: Change[] = [];
   // Past: walk blockHistory (absolute t).
   for (let i = 1; i < history.length; i++) {
     const cur = history[i], prev = history[i - 1];
-    if (cur.block > prev.block) {
-      const r = cur.t - nowSec;
-      if (r >= -HISTORY_SEC) gains.push({ t: r, newBlock: cur.block });
-    }
+    if (cur.block === prev.block) continue;
+    const r = cur.t - nowSec;
+    if (r < -HISTORY_SEC) continue;
+    changes.push({ t: r, newBlock: cur.block, gain: cur.block > prev.block });
   }
-  // Future: walk prediction samples (relative t).
+  // Future: walk prediction samples (shifted to NOW-relative).
   for (let i = 1; i < future.length; i++) {
     const cur = future[i], prev = future[i - 1];
-    if (cur.block > prev.block && cur.t <= maxSec) {
-      gains.push({ t: cur.t, newBlock: cur.block });
-    }
+    if (cur.block === prev.block) continue;
+    const t = cur.t + offset;
+    if (t <= 0) continue; // already happened — the history pass labels it
+    if (t > maxSec) break;
+    changes.push({ t, newBlock: cur.block, gain: cur.block > prev.block });
   }
-  if (gains.length === 0) return null;
-  const outerY = side === "opp" ? 0 : BLOCK_BAND;
+  if (changes.length === 0) return null;
+  const outerY = side === "opp" ? BLOCK_OUTER_Y_OPP : BLOCK_OUTER_Y_SELF;
   const yFor = (b: number) => {
     const h = Math.min(BLOCK_HALF, blockHeight(b));
     return Math.round(side === "opp" ? outerY + h : outerY - h);
   };
   return (
     <>
-      {gains.map((g, i) => {
+      {changes.map((g, i) => {
         const x = Math.round(NOW_OFFSET + g.t * PX_PER_SEC);
         const y = yFor(g.newBlock);
         // Label sits just BEYOND the tip (inward, toward the centre axis).
@@ -854,9 +954,66 @@ function BlockGainLabels({
           <g key={i}>
             <text
               x={x + 3} y={labelY}
-              fill="#7fe3a4" fontSize={11} fontWeight={700}
+              fill={g.gain ? "#7fe3a4" : "#9ec8ff"} fontSize={11} fontWeight={700}
               fontFamily="ui-monospace, monospace"
             >{g.newBlock}</text>
+          </g>
+        );
+      })}
+    </>
+  );
+}
+
+// Numeric labels at every poison transition (gain or decay). Predicted
+// only — no poisonHistory in sim state — but past poison is shown by the
+// PoisonArea as a flat band at currentPoison, so any label outside the
+// prediction would be misleading.
+function PoisonChangeLabels({
+  currentPoison, future, offset, side, maxSec, hidden,
+}: {
+  currentPoison: number;
+  future: { t: number; poison: number }[];
+  /** pred.baseSec - now: shifts the cached absolute-time prediction to NOW-relative. */
+  offset: number;
+  side: "opp" | "self";
+  maxSec: number;
+  hidden?: boolean;
+}) {
+  if (hidden) return null;
+  type Change = { t: number; newPoison: number; gain: boolean };
+  const changes: Change[] = [];
+  let last = currentPoison;
+  for (let i = 0; i < future.length; i++) {
+    const cur = future[i];
+    const t = cur.t + offset;
+    if (t > maxSec) break;
+    if (t <= 0) continue;
+    if (cur.poison !== last) {
+      changes.push({ t, newPoison: cur.poison, gain: cur.poison > last });
+      last = cur.poison;
+    }
+  }
+  if (changes.length === 0) return null;
+  const outerY = side === "opp" ? BLOCK_OUTER_Y_OPP : BLOCK_OUTER_Y_SELF;
+  const yForPoison = (p: number) => {
+    const h = Math.min(PIERCE_MAX_EXTEND, p * PIERCE_PX_PER_UNIT);
+    return Math.round(side === "opp" ? outerY - h : outerY + h);
+  };
+  return (
+    <>
+      {changes.map((g, i) => {
+        const x = Math.round(NOW_OFFSET + g.t * PX_PER_SEC);
+        const y = yForPoison(g.newPoison);
+        // Place label BEYOND the tip (outward — opposite side of the block
+        // labels which sit inward).
+        const labelY = side === "opp" ? y - 3 : y + 10;
+        return (
+          <g key={i}>
+            <text
+              x={x + 3} y={labelY}
+              fill={g.gain ? "#5fc870" : "#6fa080"} fontSize={11} fontWeight={700}
+              fontFamily="ui-monospace, monospace"
+            >毒{g.newPoison}</text>
           </g>
         );
       })}
@@ -978,7 +1135,9 @@ function PendingSlot({ info, now }: { info: { startedAt: number; fillsAt: number
         position: "absolute", left: 0, right: 0, bottom: 0,
         height: `${fillPct * 100}%`,
         background: "linear-gradient(180deg, rgba(95,160,224,0.25) 0%, rgba(95,160,224,0.55) 100%)",
-        transition: "height 80ms linear", pointerEvents: "none",
+        // No transition: height is recomputed every frame already; a CSS
+        // transition on top of that just lags behind and stutters.
+        pointerEvents: "none",
       }} />
       <div style={pendingSlotLabel}>引いてる</div>
       <div style={pendingSlotCountdown}>{remainingSen.toFixed(1)}閃</div>
@@ -997,7 +1156,9 @@ function PendingBack({ info, now }: { info: { startedAt: number; fillsAt: number
         position: "absolute", left: 0, right: 0, bottom: 0,
         height: `${fillPct * 100}%`,
         background: "linear-gradient(180deg, rgba(122,93,184,0.35) 0%, rgba(122,93,184,0.55) 100%)",
-        transition: "height 80ms linear", pointerEvents: "none",
+        // No transition: height is recomputed every frame already; a CSS
+        // transition on top of that just lags behind and stutters.
+        pointerEvents: "none",
       }} />
       <div style={{ fontSize: 11, fontWeight: 700, color: "#a899ff", textShadow: "0 1px 2px black", zIndex: 1 }}>
         {remainingSen.toFixed(1)}閃
@@ -1011,11 +1172,6 @@ function SimpleCard({ cardId, idx, player, now }: { cardId: number; idx: number;
   const [hover, setHover] = useState(false);
   if (!def) return null;
   const unplayable = def.cost >= 900;
-  // prereq is in 閃 in card def; queue remaining is in seconds.
-  const queuedSec = queueRemainingTime(player, now);
-  const prereqSen = def.prereqQueueTime ?? 0;
-  const prereqOk = prereqSen * SEC_PER_SEN <= queuedSec;
-  const clickable = !unplayable && prereqOk;
   // Reservation order: 1-based index in the manual reservations list, or 0
   // if not reserved. Shown as a yellow numbered badge on the card so the
   // player can see the planned play sequence.
@@ -1024,6 +1180,14 @@ function SimpleCard({ cardId, idx, player, now }: { cardId: number; idx: number;
   );
   const reserved = reservationIdx >= 0;
   const reservationOrder = reservationIdx + 1;
+  // Click gate: canReserveCard IS the sim's own reservation gate (single
+  // source of truth — empty slot / status junk / heavy prereq feasibility,
+  // frame-exact). The UI never disables a click the sim would accept, and
+  // never allows one the sim would drop. Already-reserved cards stay
+  // clickable: the same click CANCELS (toggle semantics).
+  const prereqOk = (def.prereqQueueTime ?? 0) === 0 || reserved
+    || canReserveCard(player, idx, now);
+  const clickable = !unplayable && (reserved || canReserveCard(player, idx, now));
 
   const onClick = () => {
     if (!clickable) return;
@@ -1066,9 +1230,9 @@ function SimpleCard({ cardId, idx, player, now }: { cardId: number; idx: number;
         )}
         <div style={{ ...cardCostStyle, color: clickable ? "#ffe580" : "#cfd6e0" }}>
           {unplayable ? "✗" : def.cost + "閃"}
-          {prereqSen > 0 && (
+          {(def.prereqQueueTime ?? 0) > 0 && (
             <span style={{ fontSize: 10, marginLeft: 4, color: prereqOk ? "#80ffa0" : "#ff9a40" }}>
-              要{prereqSen}閃
+              要{def.prereqQueueTime}閃
             </span>
           )}
         </div>
@@ -1088,14 +1252,16 @@ function SimpleCard({ cardId, idx, player, now }: { cardId: number; idx: number;
 }
 
 function DrawButton({ player }: { player: PlayerState }) {
-  const reserved = reservedSlotSet(player);
-  let emptyCount = 0;
-  for (let i = 0; i < player.hand.length; i++) {
-    if (player.hand[i] === null && !reserved.has(i)) emptyCount++;
-  }
+  // Count slots that will be empty WHEN A NEW DRAW FIRES — i.e., future-empty
+  // after all currently-reserved cards have fired. So with reservations
+  // [card, card, card] (none fired yet), the Draw button shows "3枚" because
+  // by the time the new draw reaches the head, those 3 slots are empty.
+  const emptyCount = futureEmptyAtDrawPosition(player, player.reservations.length);
   let drawing = false;
   for (const q of player.queue) if (q.kind === "draw") { drawing = true; break; }
-  const enabled = emptyCount > 0 && !drawing;
+  // Stay clickable while a draw is already casting: the new draw goes onto
+  // the reservation list and fires after the current draw drains.
+  const enabled = emptyCount > 0;
   const costSen = emptyCount * DRAW_SEN_PER_CARD;
   // Draw is the DEFAULT forced reservation — shown only when the manual
   // reservation list is empty. Right-clicking the Draw button (or pressing

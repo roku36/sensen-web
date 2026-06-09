@@ -23,6 +23,7 @@ import {
   BLOCK_HISTORY_SEC,
   DRAW_SEN_PER_CARD,
   DT,
+  FRAMES_PER_SEN,
   MAX_HAND_SIZE,
   PLAYED_TO_DISCARD,
   POISON_DECAY_SEN_PER_STEP,
@@ -298,10 +299,6 @@ function applyBlockOnStart(idx: 0 | 1, effect: CardEffect, bus: Bus) {
   }
 }
 
-// Per-frame draw timer: when sim time crosses nextDrawAt and the hand isn't
-// full, draw 1 and re-arm with (handSize + 1) seconds. Hand size 6 → no draws
-// (the timer is pushed forward to "now" so it doesn't bank). Card-effect
-// draws (受け流し etc.) bypass this and just call drawCards directly.
 // Apply a Draw action: snapshot every currently-empty non-reserved slot
 // and APPEND a draw entry to the cast queue. Duration = N * DRAW_SEC_PER_CARD
 // where N is the number of targets. Slots fill sequentially during the
@@ -327,6 +324,32 @@ function applyDrawAction(p: PlayerState, now: number): boolean {
   return true;
 }
 
+// How many empty slots a Draw at position `drawResIdx` in the reservation
+// list will see when it fires. Walks the reservations in order: each
+// preceding CARD reservation will free its slot (count it as future-empty);
+// each preceding DRAW reservation will CONSUME the currently-empty slots
+// (clear them). Used by the Draw button + ghost preview so a draw planned
+// after 3 card reservations is shown as a 3-card draw, not 0.
+//
+// drawResIdx === reservations.length means "if I appended a draw RIGHT
+// NOW, how many slots would it draw into?" — used by the Draw button.
+export function futureEmptyAtDrawPosition(p: PlayerState, drawResIdx: number): number {
+  const empties = new Set<number>();
+  const queueDrawReserved = reservedSlotSet(p);
+  for (let i = 0; i < p.hand.length; i++) {
+    if (p.hand[i] === null && !queueDrawReserved.has(i)) empties.add(i);
+  }
+  for (let i = 0; i < drawResIdx && i < p.reservations.length; i++) {
+    const r = p.reservations[i];
+    if (r.kind === "card") {
+      empties.add(r.slotIndex); // becomes empty when this card fires
+    } else {
+      empties.clear(); // an earlier draw will consume all currently-empty slots
+    }
+  }
+  return empties.size;
+}
+
 // Set of slot indices currently reserved by a queued draw entry.
 export function reservedSlotSet(p: PlayerState): Set<number> {
   const out = new Set<number>();
@@ -345,34 +368,85 @@ export function reservedSlotSet(p: PlayerState): Set<number> {
 // plan). The opponent sees your queue too — that's the whole point of the
 // mechanic: visible commitment they can read and respond to.
 
-// Actual remaining cast time (in seconds) for everything currently in the
-// queue. Head's remaining = duration - (now - castStartedAt); tail entries
-// contribute their full duration. Used to gate prereqQueueTime cards: a
-// finisher with prereq=6 needs at least 6 sec of pending work in the queue
-// at the moment of attempted play.
-export function queueRemainingTime(p: PlayerState, now: number): number {
+// ── Exact-timing helpers (integer frames; 1閃 = FRAMES_PER_SEN frames) ──
+// Card costs / prereqs are authored in WHOLE 閃, and the sim's true integer
+// clock is the FRAME. Durations and castStartedAt are all frame-aligned
+// seconds, so dividing by DT and rounding recovers exact integers — no FP
+// drift, no DT/2 tolerance hacks, and no ceil-to-閃 inflation (a head with
+// 5.0s left is 300 frames, NOT "2閃": ceil'ing made the gate accept heavies
+// that could never get their full prereq, so they confirmed instantly with
+// a short chain instead of exactly prereq閃 before their cast).
+
+/** Remaining cast chain in FRAMES. Decrements by exactly 1 per frame. */
+export function queueRemainingFrames(p: PlayerState, now: number): number {
   if (p.queue.length === 0) return 0;
-  let total = Math.max(0, p.queue[0].duration - (now - p.castStartedAt));
-  for (let i = 1; i < p.queue.length; i++) total += p.queue[i].duration;
+  let total = 0;
+  for (const q of p.queue) total += Math.round(q.duration / DT);
+  const elapsed = Math.max(0, Math.round((now - p.castStartedAt) / DT));
+  return Math.max(0, total - elapsed);
+}
+
+/**
+ * Total cast cost (in WHOLE 閃) of reservations[0..endIdx). Draw entries
+ * are sized with futureEmptyAtDrawPosition — the same slot-walk that
+ * applyDrawAction performs at fire time — so the gate, the scheduler and
+ * the actual fire all agree even when preceding card reservations free up
+ * slots before a draw fires. (Counting "currently empty slots" here was a
+ * bug: it shifted the heavy's atomic-fire moment whenever a draw sat in
+ * the setup chain.)
+ */
+export function reservationSetupSen(p: PlayerState, endIdx: number): number {
+  let total = 0;
+  for (let i = 0; i < endIdx && i < p.reservations.length; i++) {
+    const r = p.reservations[i];
+    if (r.kind === "card") {
+      const c = p.hand[r.slotIndex];
+      const d = c !== null && c !== undefined ? getCardDef(c) : null;
+      if (d) total += d.cost;
+    } else {
+      total += futureEmptyAtDrawPosition(p, i) * DRAW_SEN_PER_CARD;
+    }
+  }
   return total;
 }
 
-/** @deprecated retained for source compat; same as queueRemainingTime. */
-export function queueTotalCost(p: PlayerState, now: number = 0): number {
-  return queueRemainingTime(p, now);
+/**
+ * Feasibility gate for appending hand[slotIndex] as a NEW reservation.
+ * Single source of truth shared by the sim (toggleCardReservation), the
+ * AI policy and the UI's clickable check — a click the UI allows is never
+ * silently dropped by the sim, and vice versa.
+ *
+ * Heavy cards (prereqQueueTime > 0):
+ *   - as the FIRST reservation they fire against the live queue chain
+ *     (mechanism 1), so the chain must REALLY have ≥ prereq remaining;
+ *   - behind other reservations their chain at fire time is exactly the
+ *     setup built from those reservations (mechanism 2).
+ */
+export function canReserveCard(p: PlayerState, slotIndex: number, now: number): boolean {
+  const cardId = p.hand[slotIndex];
+  if (cardId === null || cardId === undefined) return false;
+  const def = getCardDef(cardId);
+  if (!def || def.cost >= 900) return false;
+  const prereqSen = def.prereqQueueTime ?? 0;
+  if (prereqSen === 0) return true;
+  if (p.reservations.length === 0) {
+    return queueRemainingFrames(p, now) >= prereqSen * FRAMES_PER_SEN;
+  }
+  return reservationSetupSen(p, p.reservations.length) >= prereqSen;
 }
 
-// Try to queue the card in hand[slotIndex] immediately. Returns true on
-// success. Returns false if the slot is empty, the card is unplayable, or
-// the prereq isn't currently satisfied.
+// Move the card in hand[slotIndex] into the cast queue NOW. Returns false
+// only if the slot is empty/unplayable. Prereq timing is NOT re-checked
+// here: the reservation gate (canReserveCard) decides feasibility at click
+// time and the scheduler (tickReservationOnce) decides the exact fire
+// frame — once they say fire, the fire must succeed, or an accepted
+// reservation could strand forever (spec: reservations never fail).
 function queueCardImmediate(p: PlayerState, slotIndex: number, now: number, bus: Bus): boolean {
   const cardId = p.hand[slotIndex];
   if (cardId === null || cardId === undefined) return false;
   const def = getCardDef(cardId);
   if (!def) return false;
   if (def.cost >= 900) return false;
-  const prereq = senToSec(def.prereqQueueTime ?? 0);
-  if (prereq > 0 && queueRemainingTime(p, now) < prereq) return false;
   let duration = senToSec(def.cost);
   if (p.corruption && def.cardType === CardType.Skill) duration = 0;
   p.hand[slotIndex] = null;
@@ -394,28 +468,6 @@ const RESERVE_FLAGS = [
   INPUT_RESERVE_CARD_4, INPUT_RESERVE_CARD_5, INPUT_RESERVE_CARD_6,
 ];
 
-// Cumulative cast time committed to the future (queue remaining + sum of
-// the reservation list's durations). Used to gate heavy-card reservations.
-function committedTime(p: PlayerState, now: number): number {
-  let total = queueRemainingTime(p, now);
-  for (const r of p.reservations) {
-    if (r.kind === "card") {
-      const c = p.hand[r.slotIndex];
-      if (c === null || c === undefined) continue;
-      const d = getCardDef(c);
-      if (!d) continue;
-      total += senToSec(d.cost);
-    } else {
-      // Draw entry: pessimistic — count current empties (slots may shift
-      // by fire time but this is just a UI gate, sim re-checks at fire).
-      let n = 0;
-      for (const c of p.hand) if (c === null) n++;
-      total += senToSec(n * DRAW_SEN_PER_CARD);
-    }
-  }
-  return total;
-}
-
 // LEFT-click on a card: TOGGLE its reservation. If already reserved,
 // cascade-release from that position (drop later entries too). Otherwise
 // append, with the heavy-card cumulative committed-time gate. This makes
@@ -430,21 +482,20 @@ function toggleCardReservation(p: PlayerState, slotIndex: number, now: number): 
     p.reservations.length = existing;
     return true;
   }
-  const cardId = p.hand[slotIndex];
-  if (cardId === null || cardId === undefined) return false;
-  const def = getCardDef(cardId);
-  if (!def || def.cost >= 900) return false;
-  const prereqSec = senToSec(def.prereqQueueTime ?? 0);
-  if (prereqSec > 0 && committedTime(p, now) < prereqSec) return false;
+  if (!canReserveCard(p, slotIndex, now)) return false;
   p.reservations.push({ kind: "card", slotIndex });
   return true;
 }
 
 // LEFT-click on the Draw button: append a draw reservation.
+//
+// Always succeeds (even if a draw is already in the queue OR in the
+// reservation list). The classic "no-op draw" — one with zero future-empty
+// slots at fire time — is auto-DROPPED by tickReservationOnce when its
+// turn comes, so spammy duplicates clean themselves up. Blocking here
+// silently swallowed legitimate clicks (e.g., "queue another draw on top
+// of the one currently casting"), which the player read as broken.
 function appendDrawReservation(p: PlayerState): boolean {
-  // No-op if there's already a trailing draw reservation (avoids spam).
-  const last = p.reservations[p.reservations.length - 1];
-  if (last && last.kind === "draw") return false;
   p.reservations.push({ kind: "draw" });
   return true;
 }
@@ -502,37 +553,74 @@ function applyInput(s: GameState, idx: 0 | 1, flags: number, _bus: Bus) {
 // remaining == prereq for prereq cards). Falls back to "default" (Draw or
 // leftmost playable) only when the manual list is EMPTY.
 function tickReservation(s: GameState, now: number, bus: Bus) {
+  const predictMode = s.predictMode ?? false;
   for (const idx of [0, 1] as const) {
     const p = s.players[idx];
     // Loop: a fire may make the next reservation eligible (cascade through
     // same-frame fires). Bounded for safety.
     for (let safety = 0; safety < 8; safety++) {
-      if (!tickReservationOnce(p, now, bus)) break;
+      if (!tickReservationOnce(p, now, bus, predictMode)) break;
     }
   }
 }
 
-function tickReservationOnce(p: PlayerState, now: number, bus: Bus): boolean {
-  // Forced default: when there's NOTHING manually reserved and the queue
-  // is empty, auto-append a Draw reservation IF there's a slot to fill.
-  // We DO NOT auto-fire the leftmost playable card any more — that would
-  // play cards the player never reserved (e.g., Defends giving block, or
-  // Bloodletting eating their own block), and the predicted block bar
-  // would show changes the player didn't author.
+function tickReservationOnce(p: PlayerState, now: number, bus: Bus, predictMode: boolean): boolean {
+  // Forced default: never leave the player idle. When nothing is reserved
+  // AND the queue is empty:
+  //   - if there's an empty slot we can draw into → push a Draw
+  //   - else (hand full of cards) → push the leftmost playable card
+  // So the queue is always doing SOMETHING.
   //
-  // Stalls (full hand, queue empty, no auto-Draw possible) are intentional:
-  // the player must reserve a card to make progress. If their hand is full
-  // of UNPLAYABLE cards, isStuck() forfeits the match — same as before.
-  if (p.reservations.length === 0 && p.queue.length === 0 && hasEmptyOpenSlot(p)) {
-    p.reservations.push({ kind: "draw" });
+  // SKIPPED in predict mode: the future graph would otherwise show cards
+  // the player never authored (auto-Draw, auto-leftmost-playable), and
+  // that drives the read of "what will happen" away from "what I planned".
+  // In predict mode the projection ends at the player's explicit plan.
+  if (!predictMode && p.reservations.length === 0 && p.queue.length === 0) {
+    if (hasEmptyOpenSlot(p)) {
+      p.reservations.push({ kind: "draw" });
+    } else {
+      const idx = leftmostPlayableSlot(p, now);
+      if (idx >= 0) p.reservations.push({ kind: "card", slotIndex: idx });
+    }
   }
   if (p.reservations.length === 0) return false;
 
+  // ── Heavy-card scheduling ──
+  //
+  // Game spec (per player's wording):
+  //   • Reservation order is sacred — heavy never overtakes preceding.
+  //   • Reservations never fail; once accepted by the gate they fire.
+  //   • Nothing "confirms early" — preceding stays cancellable until
+  //     the chain actually NEEDS it for the heavy's prereq.
+  //
+  // Three firing mechanisms, all 閃-unit:
+  //
+  // (1) Heavy at HEAD with chain ≤ prereq:
+  //       fire heavy (queue draws down to the heavy's prereq depth).
+  //
+  // (2) Non-prereq at head WITH a heavy later in the reservation list:
+  //       - wait while chain > 0 (preceding stays untouched).
+  //       - when chain == 0 (queue empty): compare remaining setupSen
+  //         (cost of every reservation BEFORE the heavy, in 閃) against
+  //         the heavy's prereqSen.
+  //           setupSen >  prereqSen → surplus. Fire JUST the head card
+  //             alone (queue-empty advance). This drains it one 閃
+  //             later, then setupSen has decreased and we re-check.
+  //           setupSen == prereqSen → ATOMIC fire: push every reservation
+  //             up to AND including the heavy into the queue, in order,
+  //             in the same frame. Heavy's prereq is then met exactly:
+  //             chain after preceding = 0 + setupSen = prereqSen.
+  //
+  // (3) Non-prereq at head with NO heavy in reservation:
+  //       fire when queue empty (normal one-at-a-time advance).
+  //
+  // The gate at toggleCardReservation enforces feasibility upstream so
+  // setupSen < prereqSen never reaches mech (2) (would be a dead-stuck
+  // heavy).
   const head = p.reservations[0];
   if (head.kind === "card") {
     const cardId = p.hand[head.slotIndex];
     if (cardId === null || cardId === undefined) {
-      // Slot was emptied somehow; drop this reservation and try the next.
       p.reservations.shift();
       return true;
     }
@@ -541,10 +629,15 @@ function tickReservationOnce(p: PlayerState, now: number, bus: Bus): boolean {
       p.reservations.shift();
       return true;
     }
-    const prereqSec = senToSec(def.prereqQueueTime ?? 0);
-    if (prereqSec > 0) {
-      const remaining = queueRemainingTime(p, now);
-      if (remaining <= prereqSec + DT / 2 && remaining >= prereqSec - DT / 2) {
+    const prereqSen = def.prereqQueueTime ?? 0;
+
+    if (prereqSen > 0) {
+      // (1) Heavy at head: fire at the EXACT frame the chain drains down
+      // to the prereq. queueRemainingFrames is an integer that decrements
+      // by exactly 1 per frame, so the == crossing always exists; <= also
+      // catches any rollback-replay edge so an accepted reservation can
+      // never strand.
+      if (queueRemainingFrames(p, now) <= prereqSen * FRAMES_PER_SEN) {
         if (queueCardImmediate(p, head.slotIndex, now, bus)) {
           p.reservations.shift();
           return true;
@@ -552,13 +645,68 @@ function tickReservationOnce(p: PlayerState, now: number, bus: Bus): boolean {
       }
       return false;
     }
-    // Non-prereq: fire when queue empty.
-    if (p.queue.length === 0) {
+
+    // Non-prereq head. Look for the FIRST heavy later in reservations.
+    let heavyIdx = -1;
+    let heavyPrereq = 0;
+    for (let i = 1; i < p.reservations.length; i++) {
+      const r = p.reservations[i];
+      if (r.kind !== "card") continue;
+      const c = p.hand[r.slotIndex];
+      const d = c != null && c !== undefined ? getCardDef(c) : null;
+      if (d && (d.prereqQueueTime ?? 0) > 0) {
+        heavyIdx = i;
+        heavyPrereq = d.prereqQueueTime ?? 0;
+        break;
+      }
+    }
+
+    if (heavyIdx === -1) {
+      // (3) No heavy in plan — normal one-at-a-time advance.
+      if (p.queue.length === 0) {
+        if (queueCardImmediate(p, head.slotIndex, now, bus)) {
+          p.reservations.shift();
+          return true;
+        }
+      }
+      return false;
+    }
+
+    // (2) Heavy in reservation. Wait for queue to empty before deciding.
+    if (p.queue.length > 0) return false;
+
+    // Queue empty. setupSen = cost of reservations [0..heavyIdx-1], with
+    // draw entries sized exactly as applyDrawAction will see them.
+    const setupSen = reservationSetupSen(p, heavyIdx);
+
+    if (setupSen > heavyPrereq) {
+      // Surplus — fire JUST the head card alone, reducing setupSen by
+      // its cost. The heavy still sits in reservations cancellable.
       if (queueCardImmediate(p, head.slotIndex, now, bus)) {
         p.reservations.shift();
         return true;
       }
+      return false;
     }
+    if (setupSen === heavyPrereq) {
+      // Exact match — atomic fire everything up to and including the heavy.
+      for (let i = 0; i < heavyIdx; i++) {
+        const r = p.reservations[i];
+        if (r.kind === "card") {
+          queueCardImmediate(p, r.slotIndex, now, bus);
+        } else {
+          applyDrawAction(p, now);
+        }
+      }
+      const heavyRes = p.reservations[heavyIdx];
+      if (heavyRes.kind === "card") {
+        queueCardImmediate(p, heavyRes.slotIndex, now, bus);
+      }
+      p.reservations.splice(0, heavyIdx + 1);
+      return true;
+    }
+    // setupSen < heavyPrereq: stuck (would only happen if the gate let
+    // through a non-fireable plan). Bail out so we don't loop.
     return false;
   }
   // head.kind === "draw"
@@ -586,8 +734,8 @@ function leftmostPlayableSlot(p: PlayerState, now: number): number {
     if (c === null || c === undefined) continue;
     const def = getCardDef(c);
     if (!def || def.cost >= 900) continue;
-    const prereq = senToSec(def.prereqQueueTime ?? 0);
-    if (prereq > 0 && queueRemainingTime(p, now) < prereq) continue;
+    const prereqSen = def.prereqQueueTime ?? 0;
+    if (prereqSen > 0 && queueRemainingFrames(p, now) < prereqSen * FRAMES_PER_SEN) continue;
     return i;
   }
   return -1;
@@ -690,11 +838,9 @@ function drawCards(s: GameState, idx: 0 | 1, count: number, bus: Bus) {
 
 // ── Card effect resolution ──
 
-// Returns INTEGER damage. Multipliers (weak / vulnerable) are applied to
-// the DEFENDER (target takes more) and rounded so block absorbs whole
-// integer units.
-//   - Weak on defender:        damage ×2
-//   - Vulnerable on defender:  damage ×1.5
+// 整数ダメージを返す。弱体・脆弱はどちらも防御側にかかり、被ダメージが増える。
+//   - 弱体（防御側）:   被ダメージ ×2
+//   - 脆弱（防御側）:   被ダメージ ×1.5
 function attackDamage(base: number, attacker: PlayerState, defender: PlayerState | null): number {
   let dmg = base + attacker.strength;
   if (defender && defender.weakSecs > 0) dmg *= 2;

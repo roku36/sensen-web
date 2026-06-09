@@ -62,6 +62,10 @@ export const PLAYED_TO_DISCARD = true;
 // ── Sim cadence ──
 export const SIM_HZ = 60;
 export const DT = 1 / SIM_HZ;
+// 1 閃 in frames — the sim's TRUE integer clock. Frame counts are exact
+// integers (no FP drift), so exact-timing comparisons (heavy-card prereq
+// crossings etc.) are done in frames, never in float seconds.
+export const FRAMES_PER_SEN = SEC_PER_SEN * SIM_HZ;
 
 // ── Rollback ──
 export const INPUT_DELAY = 6;
