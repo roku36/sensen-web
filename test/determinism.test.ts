@@ -179,10 +179,160 @@ describe("reducer determinism", () => {
     const bludIdxNow = s.players[0].hand.indexOf(CardId.Bludgeon);
     step(s, cardFlag(bludIdxNow)!, 0);
     expect(totalCommittedCards(s, 0)).toBe(4);
-    // The Bludgeon should be the LAST reservation.
+    // Bludgeon must NOT be in the queue yet — heavy cards window-fire,
+    // and they only stack just-in-time (so most preceding strikes also
+    // remain in reservations until needed). What matters here is the
+    // GATE: Bludgeon was accepted into the plan, not silently dropped.
+    const queueCardIdsInitial = s.players[0].queue.filter((q) => q.kind === "card")
+      .map((q) => (q as { cardId: number }).cardId);
+    expect(queueCardIdsInitial).not.toContain(CardId.Bludgeon);
     const lastRes = s.players[0].reservations[s.players[0].reservations.length - 1];
     expect(lastRes.kind === "card"
       && s.players[0].hand[lastRes.slotIndex] === CardId.Bludgeon).toBe(true);
+  });
+
+  it("reserving a heavy never confirms preceding reservations early (atomic-only)", () => {
+    // Hand: 5 Strikes + Bludgeon (prereq 2閃 = 6 sec). S1 auto-fires into
+    // the queue from the first click. The remaining strikes + Bludgeon
+    // ALL sit in reservations after Bludgeon is clicked: nothing about
+    // reserving a heavy should "confirm" preceding non-prereq cards into
+    // the queue. They wait for the atomic-fire moment together.
+    const deck = [CardId.Strike, CardId.Strike, CardId.Strike, CardId.Strike, CardId.Strike, CardId.Bludgeon];
+    const s = initGame({ matchSeed: 1n, hpMax: 80, deckP0: deck, deckP1: deck });
+    queueAnyStrike(s, 0); // S1 → queue
+    queueAnyStrike(s, 0); // S2 → reservation
+    queueAnyStrike(s, 0); // S3 → reservation
+    queueAnyStrike(s, 0); // S4 → reservation
+    expect(s.players[0].reservations.length).toBe(3);
+    const bludIdx = s.players[0].hand.indexOf(CardId.Bludgeon);
+    expect(bludIdx).toBeGreaterThanOrEqual(0);
+    step(s, cardFlag(bludIdx)!, 0);
+
+    // Critical: NO preceding non-prereq confirmed early. Queue still has
+    // only the auto-fired S1; all four (S2, S3, S4, Bludgeon) wait.
+    expect(s.players[0].queue.filter((q) => q.kind === "card").length).toBe(1);
+    expect(s.players[0].reservations.length).toBe(4);
+    expect(totalCommittedCards(s, 0)).toBe(5);
+  });
+
+  it("Draw can be reserved while another Draw is casting in the queue", () => {
+    // Sim: a draw is already in the queue (forced default). The player
+    // pushes INPUT_DRAW — the new draw must NOT be silently rejected; it
+    // sits in reservations and fires once the queue's draw drains.
+    const deck = Array(20).fill(CardId.Strike);
+    const s = initGame({ matchSeed: 1n, hpMax: 80, deckP0: deck, deckP1: deck });
+    step(s, 0, 0); // let the forced default queue its auto-Draw
+    const queueHasDraw = s.players[0].queue.some((q) => q.kind === "draw");
+    expect(queueHasDraw).toBe(true);
+
+    // 1st draw click → goes to reservations.
+    step(s, 1 /* INPUT_DRAW */, 0);
+    let drawsInRes = s.players[0].reservations.filter((r) => r.kind === "draw").length;
+    expect(drawsInRes).toBe(1);
+
+    // 2nd draw click ALSO succeeds — consecutive draws are allowed (no-op
+    // duplicates self-clean at fire time when they have nothing to draw).
+    step(s, 1, 0);
+    drawsInRes = s.players[0].reservations.filter((r) => r.kind === "draw").length;
+    expect(drawsInRes).toBe(2);
+  });
+
+  it("heavy + preceding reservations atomic-fire when chain drains to trigger", () => {
+    // Hand seeded with 3 Strikes + Bludgeon (prereq 2 閃 = 6 sec).
+    // After Strike1 fires (queue empty rule), the reservation list holds
+    // [S2, S3, Bludgeon] with setupCost = 6 sec. Atomic trigger = prereq
+    // − setupCost = 0. So the entire block sits in reservations until the
+    // queue's lone Strike drains all the way out, THEN all three fire
+    // together — in original order — into the queue.
+    const deck = [CardId.Strike, CardId.Strike, CardId.Strike, CardId.Bludgeon, CardId.Strike];
+    const s = initGame({ matchSeed: 1n, hpMax: 80, deckP0: deck, deckP1: deck });
+    queueAnyStrike(s, 0); // S1 fires into queue
+    queueAnyStrike(s, 0); // S2 sits in reservations
+    queueAnyStrike(s, 0); // S3 sits in reservations
+    const bludIdx = s.players[0].hand.indexOf(CardId.Bludgeon);
+    expect(bludIdx).toBeGreaterThanOrEqual(0);
+    step(s, cardFlag(bludIdx)!, 0);
+    expect(totalCommittedCards(s, 0)).toBe(4);
+    // RIGHT AFTER click: only the auto-fired Strike1 is in queue. S2, S3,
+    // Bludgeon all sit in reservations untouched (atomic trigger not met).
+    expect(s.players[0].queue.filter((q) => q.kind === "card").length).toBe(1);
+    expect(s.players[0].reservations.length).toBe(3);
+
+    // Advance until Strike1 fully drains (≈ 180 frames). The instant the
+    // queue's chain hits 0 (= atomic trigger), the WHOLE block atomic-fires
+    // in original order: S2, S3, then Bludgeon.
+    for (let f = 0; f < 200; f++) step(s, 0, 0);
+    const queueIds = s.players[0].queue.filter((q) => q.kind === "card")
+      .map((q) => (q as { cardId: number }).cardId);
+    expect(queueIds).toContain(CardId.Bludgeon);
+    // Bludgeon must be LAST — preceding reservations come first in order.
+    expect(queueIds[queueIds.length - 1]).toBe(CardId.Bludgeon);
+    // Reservation list now empty.
+    expect(s.players[0].reservations.length).toBe(0);
+  });
+
+  // Build the post-atomic state used by the two confirm-timing tests:
+  // S1 fires at t=0, [S2,S3,B1] atomic-fire when S1 drains (t=3.0s), so the
+  // queue holds a 12s chain ending at t=15.0s. Returns the game state.
+  function buildAtomicChain() {
+    const deck = [CardId.Strike, CardId.Strike, CardId.Strike, CardId.Strike, CardId.Bludgeon, CardId.Bludgeon];
+    const s = initGame({ matchSeed: 1n, hpMax: 1000, deckP0: deck, deckP1: deck });
+    queueAnyStrike(s, 0); // S1 → queue (fires immediately)
+    queueAnyStrike(s, 0); // S2 → reservation
+    queueAnyStrike(s, 0); // S3 → reservation
+    const b1 = s.players[0].hand.indexOf(CardId.Bludgeon);
+    expect(b1).toBeGreaterThanOrEqual(0);
+    step(s, cardFlag(b1)!, 0); // B1 → reservation (setup 2閃 == prereq 2閃)
+    // Advance until the atomic fire lands [S2,S3,B1] into the queue.
+    for (let f = 0; f < 240 && cardCount(s, 0) < 3; f++) step(s, 0, 0);
+    expect(cardCount(s, 0)).toBe(3);
+    expect(s.players[0].reservations.length).toBe(0);
+    return s;
+  }
+
+  it("heavy reserved mid-chain confirms at EXACTLY prereq 閃 before its cast starts", () => {
+    const s = buildAtomicChain();
+    // Advance to t = 7.0s: chain remaining = 8.0s (> prereq 6s).
+    while (s.frame * (1 / 60) < 7.0) step(s, 0, 0);
+    const b2 = s.players[0].hand.indexOf(CardId.Bludgeon);
+    expect(b2).toBeGreaterThanOrEqual(0);
+    step(s, cardFlag(b2)!, 0); // reserve B2
+    expect(s.players[0].reservations.length).toBe(1); // accepted, waiting
+
+    // B2 must enter the queue at the exact frame the chain ahead of it
+    // drains to 6.0s (= 2閃, its prereq) — no earlier, no later. Fire is
+    // detected as the reservation list emptying (B2 moved to the queue).
+    let fireFrame = -1;
+    for (let f = 0; f < 600 && fireFrame < 0; f++) {
+      step(s, 0, 0);
+      if (s.players[0].reservations.length === 0) fireFrame = s.frame - 1;
+    }
+    expect(fireFrame).toBeGreaterThan(0);
+    const p = s.players[0];
+    // Time-ahead-of-B2 at the fire frame: head remaining + middle durations.
+    const fireSec = fireFrame * (1 / 60);
+    let ahead = p.queue[0].duration - (fireSec - p.castStartedAt);
+    for (let i = 1; i < p.queue.length - 1; i++) ahead += p.queue[i].duration;
+    expect(ahead).toBeCloseTo(6.0, 3);
+  });
+
+  it("heavy reservation is rejected when the real remaining chain is below its prereq", () => {
+    const s = buildAtomicChain();
+    // Advance to t = 10.0s: chain remaining = 5.0s < prereq 6.0s. The 閃-ceil
+    // view says "2閃" but the heavy can never get a full 2閃 of setup from
+    // this chain — accepting it would instantly confirm with only 5s ahead
+    // (the「発動まで丁度2閃で確定しない」bug). It must be REJECTED.
+    while (s.frame * (1 / 60) < 10.0) step(s, 0, 0);
+    // By t=10 the strikes have resolved; only B1 (head, 5.0s left) remains.
+    const cardsBefore = cardCount(s, 0);
+    const b2 = s.players[0].hand.indexOf(CardId.Bludgeon);
+    expect(b2).toBeGreaterThanOrEqual(0);
+    step(s, cardFlag(b2)!, 0);
+    // Rejected: not in reservations AND not instantly queued with a short
+    // chain (the bug fired it immediately with only 5s = 1.67閃 ahead).
+    expect(s.players[0].reservations.length).toBe(0);
+    expect(cardCount(s, 0)).toBe(cardsBefore);
+    expect(s.players[0].hand.indexOf(CardId.Bludgeon)).toBe(b2); // still in hand
   });
 
   it("played non-power cards go to discard on resolve", () => {

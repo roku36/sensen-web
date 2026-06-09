@@ -9,8 +9,8 @@
 
 import { CardEffect, getCardDef } from "../sim/cards";
 import { cardFlag, INPUT_DRAW } from "../sim/input";
-import { queueRemainingTime } from "../sim/reducer";
-import { DT, senToSec } from "../sim/rules";
+import { canReserveCard } from "../sim/reducer";
+import { DT } from "../sim/rules";
 import { GameState, PlayerState } from "../sim/state";
 
 export type Policy = (state: GameState, side: 0 | 1) => number;
@@ -31,7 +31,6 @@ function mulberry32(seed: number) {
 
 function playableIndices(p: PlayerState, now: number): number[] {
   const out: number[] = [];
-  const queuedSec = queueRemainingTime(p, now); // SECONDS
   // CRITICAL: skip slots that are already in the manual reservation list.
   // With left-click TOGGLE semantics, returning the same cardFlag for an
   // already-reserved slot would CANCEL the reservation — causing the AI
@@ -42,14 +41,11 @@ function playableIndices(p: PlayerState, now: number): number[] {
   }
   for (let i = 0; i < p.hand.length; i++) {
     if (reservedSlots.has(i)) continue;
-    const cardId = p.hand[i];
-    if (cardId === null) continue; // empty slot
-    const d = getCardDef(cardId);
-    if (!d) continue;
-    if (d.cost >= 900) continue; // status junk
-    // prereqQueueTime is in 閃 — convert before comparing to seconds.
-    const prereqSec = senToSec(d.prereqQueueTime ?? 0);
-    if (prereqSec > queuedSec) continue; // not enough setup
+    // canReserveCard is the SIM's own reservation gate (empty slot, status
+    // junk, heavy-card prereq feasibility). Using it directly means the AI
+    // never clicks something the sim would reject — a mismatch here would
+    // make the AI spam doomed clicks every frame.
+    if (!canReserveCard(p, i, now)) continue;
     out.push(i);
   }
   return out;
