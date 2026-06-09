@@ -26,7 +26,8 @@ import {
 import { predictForward } from "../../sim/predict";
 import { canReserveCard, futureEmptyAtDrawPosition } from "../../sim/reducer";
 import {
-  DRAW_SEN_PER_CARD, DT, FRAMES_PER_SEN, MAX_HAND_SIZE, SEC_PER_SEN, secToSen, senToSec,
+  DRAW_SEN_PER_CARD, DT, FRAMES_PER_SEN, MAX_HAND_SIZE, SEC_PER_SEN,
+  secToSen, senToSec, SUDDEN_DEATH_RAMP_SEN, SUDDEN_DEATH_START_SEN,
 } from "../../sim/rules";
 import { GameState, PlayerState, ResolvedEntry } from "../../sim/state";
 
@@ -136,7 +137,20 @@ export function SimpleGameplay() {
       <div style={topBar}>
         <button style={ghostBtn} onClick={() => setScreen("title")}>← タイトル</button>
         <span style={{ opacity: 0.6, fontSize: 12, fontFamily: "ui-monospace, monospace" }}>
-          第{Math.floor(game.frame / FRAMES_PER_SEN)}閃
+          {(() => {
+            const sen = Math.floor(game.frame / FRAMES_PER_SEN);
+            const sd = sen >= SUDDEN_DEATH_START_SEN;
+            const dmg = sd ? 1 + Math.floor((sen - SUDDEN_DEATH_START_SEN) / SUDDEN_DEATH_RAMP_SEN) : 0;
+            return (
+              <>
+                <span style={sd ? { color: "#ff6b5e", fontWeight: 700 } : undefined}>第{sen}閃</span>
+                {sd && <span style={{ color: "#ff6b5e", marginLeft: 8 }}>焦土 −{dmg}HP/閃</span>}
+                {!sd && sen >= SUDDEN_DEATH_START_SEN - 5 && (
+                  <span style={{ color: "#ffb347", marginLeft: 8 }}>焦土まで {SUDDEN_DEATH_START_SEN - sen}閃</span>
+                )}
+              </>
+            );
+          })()}
           {typeof window !== "undefined" && window.location.search.includes("debug")
             ? ` · frame ${game.frame}` : ""}
         </span>
@@ -159,6 +173,7 @@ export function SimpleGameplay() {
           </div>
           <div style={controlsHint}>
             連閃: カードを連続発動するたび攻撃+1（最大+5）· ドローが発動するとリセット
+            　|　焦土: 第{SUDDEN_DEATH_START_SEN}閃から両者に毎閃ダメージ（加速・ブロック無視）
           </div>
         </div>
       </div>

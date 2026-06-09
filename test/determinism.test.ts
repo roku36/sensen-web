@@ -433,6 +433,27 @@ describe("reducer determinism", () => {
     expect(s.players[0].hand[slot]).toBe(CardId.EmberAsh);
   });
 
+  it("サドンデス: 第30閃から両者に毎閃ダメージ、10閃ごとに加速、試合は必ず終わる", () => {
+    // Defend-only decks: no combat damage, so HP changes come ONLY from
+    // sudden death. Both players symmetric.
+    const deck = Array(20).fill(CardId.Defend);
+    const s = initGame({ matchSeed: 1n, hpMax: 80, deckP0: deck, deckP1: deck });
+    // Up to (but not including) frame 5400 (= 第30閃): untouched.
+    while (s.frame < 5400) step(s, 0, 0);
+    expect(s.players[0].hp).toBe(80);
+    expect(s.players[1].hp).toBe(80);
+    // 30..39閃: 1 damage per 閃 boundary (10 ticks).
+    while (s.frame < 7200) step(s, 0, 0);
+    expect(s.players[0].hp).toBe(70);
+    expect(s.players[1].hp).toBe(70);
+    // 40閃 boundary: escalated to 2.
+    step(s, 0, 0);
+    expect(s.players[0].hp).toBe(68);
+    // And the match ALWAYS ends (symmetric burn → draw here).
+    for (let f = 0; f < 8000 && s.result === 0; f++) step(s, 0, 0);
+    expect(s.result).not.toBe(0);
+  });
+
   it("played non-power cards go to discard on resolve", () => {
     const deck = Array(20).fill(CardId.Strike);
     const s = initGame({ matchSeed: 1n, hpMax: 80, deckP0: deck, deckP1: deck });

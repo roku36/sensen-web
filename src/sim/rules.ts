@@ -61,6 +61,15 @@ export const BLOCK_HISTORY_SEC = 18;
 export const SECOND_PLAYER_INITIAL_BLOCK = 3;
 export const SECOND_PLAYER_OFFSET_SEN = 0.5;
 
+// ── サドンデス (焦土) ──
+// From SUDDEN_DEATH_START_SEN onward, BOTH players take escalating damage
+// every 閃 (ignores block, like poison). Symmetric environmental pressure:
+// guarantees every match ends, punishes turtling, and adds late-game
+// urgency without touching either player's plan.
+//   damage per 閃 = 1 + floor(elapsed_sen_since_start / SUDDEN_DEATH_RAMP_SEN)
+export const SUDDEN_DEATH_START_SEN = 30;
+export const SUDDEN_DEATH_RAMP_SEN = 10;
+
 // ── Card return policy ──
 // Slay-style: played cards go to the discard pile after their cast resolves.
 export const PLAYED_TO_DISCARD = true;

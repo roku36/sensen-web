@@ -31,6 +31,8 @@ import {
   RESOLVED_HISTORY_MAX,
   SEC_PER_SEN,
   senToSec,
+  SUDDEN_DEATH_RAMP_SEN,
+  SUDDEN_DEATH_START_SEN,
 } from "./rules";
 import { rangeU64 } from "./rng";
 import type { GameState, PlayerState, QueueEntry } from "./state";
@@ -1218,6 +1220,16 @@ export function step(s: GameState, p0Input: number, p1Input: number, dt: number 
   for (const p of s.players) tickBlockDecay(p, now);
   for (const p of s.players) tickPoison(p, now);
   for (const p of s.players) tickMaturing(p);
+  // サドンデス: from 第SUDDEN_DEATH_START_SEN閃, both players burn every
+  // 閃 boundary (block ignored), escalating — every match ends. Purely
+  // symmetric; frame-exact so it's identical for both peers.
+  if (s.frame % FRAMES_PER_SEN === 0) {
+    const sen = s.frame / FRAMES_PER_SEN;
+    if (sen >= SUDDEN_DEATH_START_SEN) {
+      const dmg = 1 + Math.floor((sen - SUDDEN_DEATH_START_SEN) / SUDDEN_DEATH_RAMP_SEN);
+      for (const p of s.players) p.hp = Math.max(0, p.hp - dmg);
+    }
+  }
 
   // 2. Cast slots: card casts resolve, draw-entry slots fill sequentially.
   tickCasting(s, now, bus);
