@@ -28,6 +28,8 @@ export function LabDashboard() {
   const [matches, setMatches] = useState<LabMatch[]>(() => loadLabMatches());
   const [runs, setRuns] = useState<Record<string, RunState>>({});
   const [filter, setFilter] = useState<string>("all");
+  const [pairA, setPairA] = useState("lv4");
+  const [pairB, setPairB] = useState("lv3");
   const cancelled = useRef(false);
 
   // Reset on (re)mount — React StrictMode mounts→cleans→remounts, and the
@@ -38,21 +40,24 @@ export function LabDashboard() {
     return () => { cancelled.current = true; };
   }, []);
 
-  const startRun = (level: string) => {
-    if (runs[level]?.running) return;
-    setRuns((r) => ({ ...r, [level]: { running: true, done: 0, total: RUN_COUNT } }));
+  // Run RUN_COUNT headless matches of `level` vs `opponent`, chunked per
+  // macrotask. `runKey` identifies the progress slot in the UI.
+  const startRun = (level: string, opponent = "lv1", runKey = level) => {
+    if (runs[runKey]?.running) return;
+    setRuns((r) => ({ ...r, [runKey]: { running: true, done: 0, total: RUN_COUNT } }));
     const baseSeed = BigInt(Date.now()) * 1000n;
     const fresh: LabMatch[] = [];
     let i = 0;
+    const heavy = level === "lv4" || opponent === "lv4";
     const tick = () => {
       if (cancelled.current) return;
       // A couple of matches per macrotask keeps fast levels snappy while
       // never blocking the frame for long on lv4.
-      const batch = level === "lv4" ? 1 : 4;
+      const batch = heavy ? 1 : 4;
       for (let b = 0; b < batch && i < RUN_COUNT; b++, i++) {
-        fresh.push(runLabMatch(level, baseSeed + BigInt(i), (i % 2) as 0 | 1));
+        fresh.push(runLabMatch(level, baseSeed + BigInt(i), (i % 2) as 0 | 1, opponent));
       }
-      setRuns((r) => ({ ...r, [level]: { running: i < RUN_COUNT, done: i, total: RUN_COUNT } }));
+      setRuns((r) => ({ ...r, [runKey]: { running: i < RUN_COUNT, done: i, total: RUN_COUNT } }));
       if (i < RUN_COUNT) {
         setTimeout(tick, 0);
       } else {
@@ -71,8 +76,8 @@ export function LabDashboard() {
     setScreen("replay");
   };
 
-  const statsFor = (level: string) => {
-    const ms = matches.filter((m) => m.level === level);
+  const statsFor = (level: string, opponent = "lv1") => {
+    const ms = matches.filter((m) => m.level === level && (m.opponent ?? "lv1") === opponent);
     const wins = ms.filter((m) => m.won).length;
     const draws = ms.filter((m) => m.draw).length;
     const losses = ms.length - wins - draws;
@@ -141,6 +146,37 @@ export function LabDashboard() {
         })}
       </div>
 
+      {/* Pair comparison: any level vs any level (ladder verification). */}
+      <div style={{ ...levelCard, display: "flex", alignItems: "center", gap: 12, flexWrap: "wrap" }}>
+        <span style={{ fontSize: 13, fontWeight: 700 }}>ペア比較</span>
+        <select style={pairSelect} value={pairA} onChange={(e) => setPairA(e.target.value)}>
+          {LEVELS.map((l) => <option key={l.key} value={l.key}>{l.label}</option>)}
+        </select>
+        <span style={{ opacity: 0.6, fontSize: 12 }}>vs</span>
+        <select style={pairSelect} value={pairB} onChange={(e) => setPairB(e.target.value)}>
+          {LEVELS.map((l) => <option key={l.key} value={l.key}>{l.label}</option>)}
+        </select>
+        <button
+          style={{ ...runBtn, opacity: runs.pair?.running ? 0.5 : 1 }}
+          disabled={runs.pair?.running}
+          onClick={() => startRun(pairA, pairB, "pair")}
+        >
+          {runs.pair?.running ? `実行中 ${runs.pair.done}/${runs.pair.total}` : `${RUN_COUNT}戦実行`}
+        </button>
+        {(() => {
+          const st = statsFor(pairA, pairB);
+          if (st.rate === null) return <span style={{ fontSize: 11, opacity: 0.4 }}>未計測のペアです</span>;
+          return (
+            <span style={{ fontSize: 13 }}>
+              <b style={{ color: rateColor(st.rate), fontSize: 18 }}>{st.rate.toFixed(1)}%</b>
+              <span style={{ opacity: 0.6, marginLeft: 8, fontSize: 11 }}>
+                {pairA} 視点 · {st.wins}勝 {st.losses}敗 {st.draws}分 / {st.n}戦
+              </span>
+            </span>
+          );
+        })()}
+      </div>
+
       {/* Match list */}
       <div style={listHeader}>
         <span style={{ fontSize: 13, fontWeight: 700 }}>プレイ履歴 (新しい順・最大60件表示)</span>
@@ -158,7 +194,7 @@ export function LabDashboard() {
         {shown.length === 0 && <div style={{ opacity: 0.4, fontSize: 12, padding: 12 }}>まだ対戦履歴がありません。「{RUN_COUNT}戦実行」を押してください。</div>}
         {shown.map((m) => (
           <div key={m.id} style={listRow}>
-            <span style={{ width: 90, fontWeight: 700 }}>{m.level}</span>
+            <span style={{ width: 110, fontWeight: 700 }}>{m.level} <span style={{ opacity: 0.5, fontWeight: 400 }}>vs {m.opponent ?? "lv1"}</span></span>
             <span style={{ width: 64, opacity: 0.7 }}>{m.side === 0 ? "先手" : "後手"}</span>
             <span style={{
               width: 44, fontWeight: 800,
@@ -224,6 +260,10 @@ const listRow: React.CSSProperties = {
   display: "flex", alignItems: "center", gap: 10, fontSize: 12,
   background: "#16161e", border: "1px solid #23232d", borderRadius: 6,
   padding: "6px 10px",
+};
+const pairSelect: React.CSSProperties = {
+  background: "#1a1a22", color: "white", border: "1px solid #444",
+  borderRadius: 6, padding: "5px 8px", fontSize: 12,
 };
 const viewBtn: React.CSSProperties = {
   background: "#1f3a5c", color: "#bdd6f0", border: "1px solid #3a7fbf",

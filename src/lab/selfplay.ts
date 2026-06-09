@@ -14,8 +14,10 @@ export const LAB_FRAME_CAP = 5400; // 90s of sim time
 
 export interface LabMatch {
   id: string;
-  /** Tested level key (lv1..lv4). Opponent is always lv1. */
+  /** Tested level key (lv1..lv4). */
   level: string;
+  /** Opponent level key. Older stored entries omit it (= "lv1"). */
+  opponent?: string;
   /** Which side the tested level played (alternates to cancel side advantage). */
   side: 0 | 1;
   /** Sim result: 0 timeout, 1 p0 win, 2 p1 win, 3 draw. */
@@ -28,13 +30,13 @@ export interface LabMatch {
   replay: Replay;
 }
 
-/** Run one headless match: `level` (on `side`) vs lv1. Deterministic per seed. */
-export function runLabMatch(level: string, seed: bigint, side: 0 | 1): LabMatch {
+/** Run one headless match: `level` (on `side`) vs `opponent`. Deterministic per seed. */
+export function runLabMatch(level: string, seed: bigint, side: 0 | 1, opponent = "lv1"): LabMatch {
   const deck = createTestDeck();
   const s = initGame({ matchSeed: seed, hpMax: 80, deckP0: deck, deckP1: deck });
   const seedNum = Number(seed & 0xffffn);
   const tested = (policies[level] ?? policies.lv1)(seedNum ^ 0x1111);
-  const baseline = policies.lv1(seedNum ^ 0x2222);
+  const baseline = (policies[opponent] ?? policies.lv1)(seedNum ^ 0x2222);
   const p0 = side === 0 ? tested : baseline;
   const p1 = side === 0 ? baseline : tested;
 
@@ -69,8 +71,9 @@ export function runLabMatch(level: string, seed: bigint, side: 0 | 1): LabMatch 
     recordedAt: Date.now(),
   };
   return {
-    id: `${level}-${seed.toString(16)}-${side}`,
+    id: `${level}-${opponent}-${seed.toString(16)}-${side}`,
     level,
+    opponent,
     side,
     result: s.result,
     won: winnerSide === side,

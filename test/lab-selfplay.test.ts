@@ -22,6 +22,17 @@ describe("lab self-play runner", () => {
     expect(s.frame).toBe(m.replay.finalFrame);
   });
 
+  it("pair mode: opponent level is selectable and deterministic", () => {
+    const a = runLabMatch("lv3", 5n, 0, "lv2");
+    const b = runLabMatch("lv3", 5n, 0, "lv2");
+    expect(a.opponent).toBe("lv2");
+    expect(a.result).toBe(b.result);
+    expect(a.replay.inputs).toEqual(b.replay.inputs);
+    // Different opponent → different game.
+    const c = runLabMatch("lv3", 5n, 0, "lv1");
+    expect(c.replay.inputs).not.toEqual(a.replay.inputs);
+  });
+
   it("a decided match marks exactly one of won/draw for the tested side", () => {
     const m = runLabMatch("lv3", 11n, 0);
     expect(m.draw ? !m.won : true).toBe(true);
