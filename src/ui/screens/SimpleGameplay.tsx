@@ -24,6 +24,7 @@ import {
   cardFlag, INPUT_DRAW, INPUT_RESERVE_DRAW, reserveCardFlag,
 } from "../../sim/input";
 import { predictForward } from "../../sim/predict";
+import { isSurgeSen } from "../../sim/events";
 import { canReserveCard, futureEmptyAtDrawPosition } from "../../sim/reducer";
 import {
   DRAW_SEN_PER_CARD, DT, FRAMES_PER_SEN, MAX_HAND_SIZE, SEC_PER_SEN,
@@ -417,6 +418,39 @@ function BattleZone({ game, op, me, now }: { game: GameState; op: PlayerState; m
           {Array.from({ length: Math.ceil(maxSec / SEC_PER_SEN) + 1 }).map((_, s) => (
             <TimeTick key={`f${s}`} sen={s} totalHeight={TIMELINE_HEIGHT} />
           ))}
+          {/* 烈閃 markers: surge 閃s are PUBLIC terrain, identical for both
+              players, known from frame 0 — gold bands on the timeline.
+              Attacks RESOLVING inside one hit +4. */}
+          {(() => {
+            const nowSen = Math.floor(now / SEC_PER_SEN);
+            const fromSen = nowSen - Math.ceil(HISTORY_SEC / SEC_PER_SEN);
+            const toSen = nowSen + Math.ceil(maxSec / SEC_PER_SEN) + 1;
+            const bands = [];
+            for (let abs = Math.max(0, fromSen); abs <= toSen; abs++) {
+              if (!isSurgeSen(game.matchSeed, abs)) continue;
+              const x = NOW_OFFSET + (abs * SEC_PER_SEN - now) * PX_PER_SEC;
+              const past = abs < nowSen;
+              bands.push(
+                <div key={`rs${abs}`} style={{
+                  position: "absolute", top: 0, height: TIMELINE_HEIGHT,
+                  left: 0, transform: `translate3d(${x}px, 0, 0)`,
+                  width: SEC_PER_SEN * PX_PER_SEC,
+                  background: past ? "rgba(255, 200, 60, 0.04)" : "rgba(255, 200, 60, 0.10)",
+                  borderLeft: `1px solid rgba(255, 200, 60, ${past ? 0.15 : 0.45})`,
+                  pointerEvents: "none",
+                }}>
+                  <div style={{
+                    position: "absolute", top: 16, left: 3,
+                    fontSize: 9, fontWeight: 700,
+                    color: past ? "rgba(255,200,60,0.3)" : "#ffc83c",
+                    fontFamily: "ui-monospace, monospace",
+                    whiteSpace: "nowrap",
+                  }}>烈閃 攻撃+4</div>
+                </div>,
+              );
+            }
+            return bands;
+          })()}
           {/* Block band background. */}
           <div style={{
             position: "absolute", left: 0, right: 0,

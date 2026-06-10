@@ -61,6 +61,12 @@ export const BLOCK_HISTORY_SEC = 18;
 export const SECOND_PLAYER_INITIAL_BLOCK = 3;
 export const SECOND_PLAYER_OFFSET_SEN = 0.5;
 
+// ── 烈閃 (surge 閃) ──
+// Attack cards RESOLVING during a surge 閃 deal this much bonus damage
+// (applied once per card, not per multi-hit). Schedule is derived from the
+// matchSeed — see sim/events.ts.
+export const RETSU_SEN_BONUS = 4;
+
 // ── サドンデス (焦土) ──
 // From SUDDEN_DEATH_START_SEN onward, BOTH players take escalating damage
 // every 閃 (ignores block, like poison). Symmetric environmental pressure:

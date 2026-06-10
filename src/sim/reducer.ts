@@ -29,12 +29,14 @@ import {
   POISON_DECAY_SEN_PER_STEP,
   RENZAN_MAX_BONUS,
   RESOLVED_HISTORY_MAX,
+  RETSU_SEN_BONUS,
   SEC_PER_SEN,
   senToSec,
   SUDDEN_DEATH_RAMP_SEN,
   SUDDEN_DEATH_START_SEN,
 } from "./rules";
 import { rangeU64 } from "./rng";
+import { isSurgeSen } from "./events";
 import type { GameState, PlayerState, QueueEntry } from "./state";
 
 const enum DamageKind { Attack = 0, Power = 1, Thorns = 2 }
@@ -1044,6 +1046,9 @@ function applyEffect(
 }
 
 function processCardPlayed(s: GameState, bus: Bus) {
+  // 烈閃: attacks resolving during a surge 閃 hit harder. Applied ONCE per
+  // card (to its first damage message), so multi-hits don't multiply it.
+  const surge = isSurgeSen(s.matchSeed, Math.floor(s.frame / FRAMES_PER_SEN));
   while (bus.cardPlayed.length > 0 || bus.exhausted.length > 0) {
     const played = bus.cardPlayed.splice(0, bus.cardPlayed.length);
     const exhausted = bus.exhausted.splice(0, bus.exhausted.length);
@@ -1051,7 +1056,19 @@ function processCardPlayed(s: GameState, bus: Bus) {
     for (const ev of played) {
       const def = getCardDef(ev.cardId);
       if (!def) continue;
+      const damageStart = bus.damage.length;
       applyEffect(s, ev.player, def.effect, bus, ev.skipBlock);
+      if (surge) {
+        // First ATTACK-kind message only — self-damage riders (瀉血 etc.)
+        // must not get the bonus.
+        for (let di = damageStart; di < bus.damage.length; di++) {
+          const dm = bus.damage[di];
+          if (dm.kind === DamageKind.Attack && dm.source === ev.player) {
+            dm.amount += RETSU_SEN_BONUS;
+            break;
+          }
+        }
+      }
       if (def.cardType === CardType.Attack) {
         const p = s.players[ev.player];
         if (p.rage && p.rage.remaining > 0) {

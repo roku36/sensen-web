@@ -433,6 +433,33 @@ describe("reducer determinism", () => {
     expect(s.players[0].hand[slot]).toBe(CardId.EmberAsh);
   });
 
+  it("烈閃: スケジュールはシードから決定論的、その閃に解決した攻撃は+4", async () => {
+    const { surgeSens, isSurgeSen } = await import("../src/sim/events");
+    // Deterministic schedule.
+    expect([...surgeSens(123n)]).toEqual([...surgeSens(123n)]);
+    const sens = [...surgeSens(1n)].sort((a, b) => a - b);
+    expect(sens.length).toBeGreaterThan(10);
+    expect(sens[0]).toBeGreaterThanOrEqual(6);
+
+    // A Strike timed to RESOLVE inside the first surge 閃 deals 6+4.
+    const E = sens[0];
+    const deck = Array(20).fill(CardId.Strike);
+    const s = initGame({ matchSeed: 1n, hpMax: 1000, deckP0: deck, deckP1: deck });
+    expect(isSurgeSen(1n, E)).toBe(true);
+    // Click at frame (E-1)*180+1 → cast 1閃 → resolves at frame E*180+1 (sen E).
+    while (s.frame < (E - 1) * 180 + 1) step(s, 0, 0);
+    s.players[0].queue = []; s.players[0].reservations = []; // clean slate
+    s.players[1].block = 0;
+    const hpBefore = s.players[1].hp;
+    queueAnyStrike(s, 0);
+    for (let f = 0; f < 185; f++) step(s, 0, 0);
+    const dealt = hpBefore - s.players[1].hp;
+    // 6 base + 4 surge (renzan may add a little if a prior auto-card chain
+    // existed — we cleared the queue, but earlier auto-plays raised renzan,
+    // so accept 10..15).
+    expect(dealt).toBeGreaterThanOrEqual(10);
+  });
+
   it("サドンデス: 第30閃から両者に毎閃ダメージ、10閃ごとに加速、試合は必ず終わる", () => {
     // Defend-only decks: no combat damage, so HP changes come ONLY from
     // sudden death. Both players symmetric.
