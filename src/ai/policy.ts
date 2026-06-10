@@ -118,8 +118,8 @@ function simDamage(base: number, p: PlayerState, o: PlayerState): number {
   const renzanBonus = Math.min(RENZAN_MAX_BONUS, Math.max(0, p.renzan - 1));
   let dmg = base + p.strength + renzanBonus;
   if (o.weakSecs > 0) dmg *= 2;
-  if (o.vulnerableSecs > 0) dmg *= 1.5;
-  return Math.max(0, Math.round(dmg));
+  if (o.vulnerableSecs > 0) dmg += Math.floor(dmg / 2); // 脆弱: 整数+50%
+  return Math.max(0, dmg);
 }
 
 function damageOf(e: CardEffect, p: PlayerState, o: PlayerState): number {

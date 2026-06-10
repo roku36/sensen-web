@@ -888,16 +888,18 @@ function drawCards(s: GameState, idx: 0 | 1, count: number, bus: Bus) {
 
 // ── Card effect resolution ──
 
-// 整数ダメージを返す。弱体・脆弱はどちらも防御側にかかり、被ダメージが増える。
+// 整数ダメージを返す — 全行程が整数演算 (小数・丸めなし)。
 //   - 弱体（防御側）:   被ダメージ ×2
-//   - 脆弱（防御側）:   被ダメージ ×1.5
+//   - 脆弱（防御側）:   被ダメージ +floor(現在値/2)  (=×1.5 の整数版。
+//                       偶数値では従来の×1.5と完全一致)
 //   - 連閃（攻撃側）:   連続発動2枚目以降 +1ずつ（上限 RENZAN_MAX_BONUS）
+// 重ね掛けは 弱体→脆弱 の順で、×2 した整数に半分切り捨てを足す。
 function attackDamage(base: number, attacker: PlayerState, defender: PlayerState | null): number {
   const renzanBonus = Math.min(RENZAN_MAX_BONUS, Math.max(0, attacker.renzan - 1));
   let dmg = base + attacker.strength + renzanBonus;
   if (defender && defender.weakSecs > 0) dmg *= 2;
-  if (defender && defender.vulnerableSecs > 0) dmg *= 1.5;
-  return Math.max(0, Math.round(dmg));
+  if (defender && defender.vulnerableSecs > 0) dmg += Math.floor(dmg / 2);
+  return Math.max(0, dmg);
 }
 
 function applyEffect(

@@ -433,6 +433,28 @@ describe("reducer determinism", () => {
     expect(s.players[0].hand[slot]).toBe(CardId.EmberAsh);
   });
 
+  it("脆弱は整数演算 (+floor(dmg/2))、弱体×2との重ね掛けも全整数", () => {
+    const deck = Array(20).fill(CardId.Strike);
+    const s = initGame({ matchSeed: 1n, hpMax: 1000, deckP0: deck, deckP1: deck });
+    s.players[1].block = 0;
+    s.players[1].vulnerableSecs = 60; // 脆弱のみ
+    const hp0 = s.players[1].hp;
+    queueAnyStrike(s, 0);
+    for (let f = 0; f < 185; f++) step(s, 0, 0);
+    // Strike 6 → 6 + floor(6/2) = 9 (整数のまま)。
+    expect(hp0 - s.players[1].hp).toBe(9);
+
+    const s2 = initGame({ matchSeed: 1n, hpMax: 1000, deckP0: deck, deckP1: deck });
+    s2.players[1].block = 0;
+    s2.players[1].vulnerableSecs = 60;
+    s2.players[1].weakSecs = 60; // 弱体+脆弱
+    const hp1 = s2.players[1].hp;
+    queueAnyStrike(s2, 0);
+    for (let f = 0; f < 185; f++) step(s2, 0, 0);
+    // 6 ×2(弱体) = 12 → +floor(12/2) = 18。
+    expect(hp1 - s2.players[1].hp).toBe(18);
+  });
+
   it("烈閃: スケジュールはシードから決定論的、その閃に解決した攻撃は+4", async () => {
     const { surgeSens, isSurgeSen } = await import("../src/sim/events");
     // Deterministic schedule.
