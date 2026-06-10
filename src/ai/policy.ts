@@ -30,9 +30,10 @@
 // Policies receive a seed for reproducibility (used by tie-breaks).
 
 import { CardEffect, getCardDef } from "../sim/cards";
+import { isSurgeSen } from "../sim/events";
 import { cardFlag, INPUT_DRAW, INPUT_RESET_RESERVATIONS } from "../sim/input";
-import { canReserveCard, queueRemainingFrames, step } from "../sim/reducer";
-import { DT, FRAMES_PER_SEN, RENZAN_MAX_BONUS, SEC_PER_SEN } from "../sim/rules";
+import { canReserveCard, queueRemainingFrames, reservationSetupSen, step } from "../sim/reducer";
+import { DT, FRAMES_PER_SEN, RENZAN_MAX_BONUS, RETSU_SEN_BONUS, SEC_PER_SEN } from "../sim/rules";
 import { GameState, PlayerState, snapshot } from "../sim/state";
 
 export type Policy = (state: GameState, side: 0 | 1) => number;
@@ -335,11 +336,23 @@ export const lv3Tactical: (seed?: number, holdMaturing?: boolean) => Policy = (s
       const seeds = opts.filter(isUpgradePending);
       if (seeds.length > 0) pool = seeds;
     }
+    // 烈閃合わせ: estimate when each candidate would RESOLVE (after my
+    // queue + reservations + its own cast) and credit attacks that land
+    // inside a surge 閃. Same read a human makes from the gold bands.
+    const queueRemF = queueRemainingFrames(p, now);
+    const resvSen = reservationSetupSen(p, p.reservations.length);
     let bestI = pool[0], bestS = -Infinity;
     for (const i of pool) {
       const def = slotDef(p, i)!;
       const t = Math.max(1, def.cost);
-      const s = (damageOf(def.effect, p, o) * 1.3 + blockOf(def.effect, p) * 0.7 + utilityOf(def.effect)) / t;
+      let dmg = damageOf(def.effect, p, o);
+      if (dmg > 0) {
+        const resolveFrame = state.frame + queueRemF + (resvSen + def.cost) * FRAMES_PER_SEN;
+        if (isSurgeSen(state.matchSeed, Math.floor(resolveFrame / FRAMES_PER_SEN))) {
+          dmg += RETSU_SEN_BONUS;
+        }
+      }
+      const s = (dmg * 1.3 + blockOf(def.effect, p) * 0.7 + utilityOf(def.effect)) / t;
       if (s > bestS || (s === bestS && r() < 0.5)) { bestS = s; bestI = i; }
     }
     return cardFlag(bestI) ?? 0;
