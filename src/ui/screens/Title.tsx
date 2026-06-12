@@ -46,10 +46,11 @@ export function Title() {
           </div>
         )}
 
-        {/* View toggle */}
+        {/* View toggle — 3D は v1 世代の表示で、連閃・熟成・烈閃・焦土
+            などの新ルールを表示できない (issue #5)。誤解を防ぐため明記。 */}
         <div style={toggleRow}>
-          <button style={toggleBtn(viewMode === "rich3d")} onClick={() => setViewMode("rich3d")}>3D Rich</button>
-          <button style={toggleBtn(viewMode === "simple")} onClick={() => setViewMode("simple")}>2D Simple</button>
+          <button style={toggleBtn(viewMode === "rich3d")} onClick={() => setViewMode("rich3d")} title="旧版ビュー: 新ルール (連閃・熟成・烈閃・焦土) は表示されません">3D (旧版)</button>
+          <button style={toggleBtn(viewMode === "simple")} onClick={() => setViewMode("simple")}>2D Simple (推奨)</button>
         </div>
 
         {/* AI opponent picker */}
