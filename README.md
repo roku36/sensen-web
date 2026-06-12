@@ -54,7 +54,7 @@ docker run -p 3536:3536 ghcr.io/johanhelsing/matchbox_server
 | Screens | `src/ui/screens/` | Title / Lobby / SimpleGameplay + Timeline / DeckBuilder / ReplayViewer / LabDashboard / PuzzleScreen |
 | Tests | `test/` | determinism, P2P consistency, AI ladder win rates, mature balance, puzzles, lab runner + Playwright scripts (`test/integration/`) |
 
-注: 3D ビュー (`src/ui/scene/`) は v1 世代のまま新ルール未対応 — issue #5 参照。2D Simple が正。
+注: v1 世代の 3D ビューは新ルールに追従できていなかったため撤去済み (issue #5)。2D タイムラインビューが唯一の対戦画面。
 
 ## How P2P consistency is guaranteed
 

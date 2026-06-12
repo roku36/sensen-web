@@ -9,7 +9,6 @@ page.on("console", (m) => { if (m.type() === "error") errs.push("[ce] " + m.text
 
 await page.goto("http://localhost:5173?simple");
 await page.waitForFunction(() => window.__sensen != null);
-await page.click("button:has-text('2D Simple')");
 
 // Open the deck builder
 await page.click("button:has-text('デッキ編集')");

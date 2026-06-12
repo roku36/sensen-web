@@ -6,21 +6,10 @@ import { Replay } from "../replay/format";
 import { GameState } from "../sim/state";
 
 export type Screen = "title" | "lobby" | "gameplay" | "deck" | "replay" | "lab" | "puzzle";
-export type ViewMode = "rich3d" | "simple";
-
-const persistedViewMode = (): ViewMode => {
-  if (typeof window === "undefined") return "rich3d";
-  if (window.location.search.includes("simple")) return "simple";
-  if (window.location.search.includes("rich")) return "rich3d";
-  return (localStorage.getItem("sensen.viewMode") as ViewMode) || "rich3d";
-};
 
 interface UiStore {
   screen: Screen;
   setScreen: (s: Screen) => void;
-
-  viewMode: ViewMode;
-  setViewMode: (v: ViewMode) => void;
 
   game: GameState | null;
   // Live frame counter — primitive, so subscribers re-render on every sim step
@@ -58,12 +47,6 @@ interface UiStore {
 export const useStore = create<UiStore>((set) => ({
   screen: "title",
   setScreen: (s) => set({ screen: s }),
-
-  viewMode: persistedViewMode(),
-  setViewMode: (v) => {
-    if (typeof window !== "undefined") localStorage.setItem("sensen.viewMode", v);
-    set({ viewMode: v });
-  },
 
   game: null,
   gameFrame: 0,

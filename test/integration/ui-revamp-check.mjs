@@ -13,7 +13,6 @@ page.on("console", (m) => { if (m.type() === "error") errs.push("[ce] " + m.text
 
 await page.goto("http://localhost:5173?simple");
 await page.waitForFunction(() => window.__sensen != null);
-await page.click("button:has-text('2D Simple')");
 await page.click("button:has-text('Practice (offline)')");
 await page.waitForTimeout(400);
 await page.screenshot({ path: "/tmp/ui-1-fresh.png", fullPage: false });

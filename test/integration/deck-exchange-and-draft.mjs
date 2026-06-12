@@ -18,7 +18,6 @@ async function open(label, deckJson) {
   await page.addInitScript(`localStorage.setItem("sensen.deck.v1", ${JSON.stringify(deckJson)});`);
   await page.goto("http://localhost:5173?simple");
   await page.waitForFunction(() => window.__sensen != null);
-  await page.click("button:has-text('2D Simple')");
   return { browser, page };
 }
 

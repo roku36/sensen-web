@@ -18,7 +18,6 @@ async function open(label) {
   });
   await page.goto("http://localhost:5173?simple");
   await page.waitForFunction(() => window.__sensen != null);
-  await page.click("button:has-text('2D Simple')");
   await page.fill("input[placeholder='matchbox signaling URL']", "ws://localhost:3536/sensen?next=2").catch(() => {});
   return { browser, page };
 }

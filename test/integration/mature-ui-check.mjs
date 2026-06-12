@@ -28,7 +28,6 @@ await page.goto("http://localhost:5175?simple");
 await page.waitForFunction(() => window.__sensen != null);
 
 // 2. Start a CPU match (passive opponent), inject a seed into hand.
-await page.click("button:has-text('2D Simple')").catch(() => {});
 await page.selectOption("select", "passive");
 await page.click("button:has-text('CPU と対戦')");
 await wait(500);

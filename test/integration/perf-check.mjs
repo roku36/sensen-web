@@ -12,7 +12,6 @@ page.on("pageerror", (e) => console.log("[err]", e.message));
 
 await page.goto("http://localhost:5175?simple");
 await page.waitForFunction(() => window.__sensen != null);
-await page.click("button:has-text('2D Simple')");
 await page.selectOption("select", "lv3");
 await page.click("button:has-text('CPU と対戦')");
 await wait(2500); // let combat develop

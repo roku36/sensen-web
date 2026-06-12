@@ -1,7 +1,6 @@
 import { useEffect } from "react";
 import { buildCurrentReplay, getSession } from "./ui/hooks";
 import { DeckBuilder } from "./ui/screens/DeckBuilder";
-import { Gameplay } from "./ui/screens/Gameplay";
 import { LabDashboard } from "./ui/screens/LabDashboard";
 import { PuzzleScreen } from "./ui/screens/PuzzleScreen";
 import { Lobby } from "./ui/screens/Lobby";
@@ -39,7 +38,6 @@ if (typeof window !== "undefined") {
 
 export default function App() {
   const screen = useStore((s) => s.screen);
-  const viewMode = useStore((s) => s.viewMode);
   // Subscribe to gameFrame so any HUD that reads from `game` re-renders on
   // every sim step (60Hz). No more 33ms polling interval.
   useStore((s) => s.gameFrame);
@@ -51,7 +49,7 @@ export default function App() {
       {screen === "lab" && <LabDashboard />}
       {screen === "puzzle" && <PuzzleScreen />}
       {screen === "lobby" && <Lobby />}
-      {screen === "gameplay" && (viewMode === "simple" ? <SimpleGameplay /> : <Gameplay />)}
+      {screen === "gameplay" && <SimpleGameplay />}
       {screen === "replay" && (() => {
         const replay = useStore.getState().loadedReplay;
         if (!replay) { useStore.getState().setScreen("title"); return null; }

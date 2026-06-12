@@ -11,7 +11,6 @@ page.on("console", (m) => { if (m.type() === "error") console.log("[ce]", m.text
 
 await page.goto("http://localhost:5173?simple");
 await page.waitForFunction(() => window.__sensen != null);
-await page.click("button:has-text('2D Simple')");
 await page.selectOption("select", "passive");
 // Enable beginner mode via checkbox
 await page.check("input[type='checkbox'] >> nth=1");

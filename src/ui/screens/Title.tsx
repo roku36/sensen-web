@@ -9,8 +9,6 @@ import { pickReplayFile } from "./ReplayViewer";
 export function Title() {
   const remembered = useStore((s) => s.lastSignalUrl);
   const [signalUrl, setSignalUrl] = useState(remembered);
-  const viewMode = useStore((s) => s.viewMode);
-  const setViewMode = useStore((s) => s.setViewMode);
   const setScreen = useStore((s) => s.setScreen);
   // Stored key may be a legacy alias (heuristic etc.) — normalize ONCE so
   // the select, the button label and the actual opponent always agree
@@ -38,20 +36,13 @@ export function Title() {
     <div style={overlay}>
       <div style={panel}>
         <h1 style={{ fontSize: 56, margin: 0, letterSpacing: 8 }}>SENSEN</h1>
-        <p style={{ opacity: 0.6, margin: "0 0 12px" }}>web port — react three fiber + p2p rollback</p>
+        <p style={{ opacity: 0.6, margin: "0 0 12px" }}>web port — deterministic sim + p2p rollback</p>
         {streak > 0 && (
           <div style={streakChip}>
             🔥 連勝 {streak}
             <span style={streakBucketHint}>(マッチング帯: {streakBucket(streak)})</span>
           </div>
         )}
-
-        {/* View toggle — 3D は v1 世代の表示で、連閃・熟成・烈閃・焦土
-            などの新ルールを表示できない (issue #5)。誤解を防ぐため明記。 */}
-        <div style={toggleRow}>
-          <button style={toggleBtn(viewMode === "rich3d")} onClick={() => setViewMode("rich3d")} title="旧版ビュー: 新ルール (連閃・熟成・烈閃・焦土) は表示されません">3D (旧版)</button>
-          <button style={toggleBtn(viewMode === "simple")} onClick={() => setViewMode("simple")}>2D Simple (推奨)</button>
-        </div>
 
         {/* AI opponent picker */}
         <div style={{ marginTop: 8, marginBottom: 10, textAlign: "left" }}>
