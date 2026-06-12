@@ -486,3 +486,24 @@ export const policies: Record<string, PolicyFactory> = {
   greedyDefense: lv2Tempo,
   heuristic: lv3Tactical,
 };
+
+// Display metadata — single source of truth for every screen that names
+// AI levels (Title picker, gameplay header, lab dashboard).
+export const AI_LEVELS: { key: string; label: string; desc: string }[] = [
+  { key: "passive", label: "なし",          desc: "相手は何もしない (練習用)" },
+  { key: "lv1",     label: "Lv1 ランダム",  desc: "出せる手から無作為にプレイ" },
+  { key: "lv2",     label: "Lv2 テンポ型",  desc: "閃あたりの価値効率だけで選ぶ" },
+  { key: "lv3",     label: "Lv3 読み型",    desc: "相手キューを読み、着弾に合わせてブロック" },
+  { key: "lv4",     label: "Lv4 先読み型",  desc: "数閃先までシミュレートして最善手 (最強)" },
+];
+
+/** Level key → display label, legacy keys included. */
+export function aiLabel(key: string): string {
+  const found = AI_LEVELS.find((l) => l.key === key);
+  if (found) return found.label;
+  const legacy: Record<string, string> = {
+    random: "Lv1 ランダム", greedyDefense: "Lv2 テンポ型",
+    greedyAttack: "Lv2 テンポ型", heuristic: "Lv3 読み型",
+  };
+  return legacy[key] ?? key;
+}

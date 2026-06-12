@@ -19,6 +19,7 @@
 //   └──────────┴────────────────────────────────────────┘
 
 import { useState } from "react";
+import { aiLabel } from "../../ai/policy";
 import { CardEffect, CardType, getCardDef } from "../../sim/cards";
 import {
   cardFlag, INPUT_DRAW, INPUT_RESERVE_DRAW, reserveCardFlag,
@@ -36,13 +37,6 @@ import { BattleZone, dim } from "./Timeline";
 import { useStore } from "../store";
 import { PilePeek } from "./PilePeek";
 import { ResultPanel } from "./ResultPanel";
-
-const AI_LABEL: Record<string, string> = {
-  passive: "なし",
-  lv1: "Lv1 ランダム", lv2: "Lv2 テンポ型", lv3: "Lv3 読み型", lv4: "Lv4 先読み型",
-  // legacy keys from older saved settings
-  random: "Lv1 ランダム", greedyDefense: "Lv2 テンポ型", greedyAttack: "Lv2 テンポ型", heuristic: "Lv3 読み型",
-};
 
 type Peek =
   | { kind: "deck"; side: 0 | 1 }
@@ -74,9 +68,9 @@ export function SimpleGameplay() {
 
   const mode = getActiveMode();
   const opponentTitle =
-    mode === "offline" ? `CPU 相手 (${AI_LABEL[aiName] ?? aiName})` : "相手";
+    mode === "offline" ? `CPU 相手 (${aiLabel(aiName)})` : "相手";
   const selfTitle =
-    mode === "offline" && aiSpectate ? `CPU 自分 (${AI_LABEL[aiName] ?? aiName})` : "自分";
+    mode === "offline" && aiSpectate ? `CPU 自分 (${aiLabel(aiName)})` : "自分";
 
   if (!game) return null;
   const me = game.players[localPlayer];
