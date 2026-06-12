@@ -96,6 +96,28 @@ export const PUZZLES: PuzzleDef[] = [
     ],
   },
   {
+    id: "p4-mature",
+    title: "其の四: 熟成の刻",
+    goal: "4閃以内に 36 ダメージを削り切れ",
+    hint: "業火の種は即撃ち4。だが2閃寝かせれば業火20に化ける。種は予約すると熟成が止まるぞ — 他のカードで繋いで時間を稼げ。",
+    budgetSen: 4,
+    matchSeed: SEED_LATE_SURGE,
+    // 種は手札に置いたまま熟成させ (予約すると時計が凍結する!)、
+    // 打撃×2+防御の橋渡しでキューを途切れさせず、変化した業火を
+    // 4枚目に差し込む。橋渡しがないと強制デフォルトのドローが捨札を
+    // 回収して連閃が切れる — その理解自体がこの問題の主題。
+    hand: [CardId.EmberSeed, CardId.Strike, CardId.Strike, CardId.Defend, CardId.Defend, CardId.Defend],
+    oppHp: 36, // 打撃6 + 打撃7(連閃) + 防御0 + 業火20+3(連閃4枚目) = 36
+    solution: [
+      { f: 0, flags: F(1) },
+      { f: 1, flags: F(2) },
+      { f: 2, flags: F(3) },
+      // 種は f360 に業火へ変化。防御が解決する f540 までの約1閃の間の
+      // どこかで予約すれば良い (人間でも余裕のあるウィンドウ)。
+      { f: 400, flags: F(0) },
+    ],
+  },
+  {
     id: "p3-retsusen",
     title: "其の三: 烈閃合わせ",
     goal: "6閃以内に 19 ダメージを削り切れ",

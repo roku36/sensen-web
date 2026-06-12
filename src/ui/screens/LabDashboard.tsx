@@ -9,6 +9,7 @@
 import { useEffect, useRef, useState } from "react";
 import { LabMatch, runLabMatch } from "../../lab/selfplay";
 import { clearLabMatches, loadLabMatches, saveLabMatches } from "../../lab/replay-store";
+import { downloadReplay } from "../../replay/format";
 import { useStore } from "../store";
 
 const LEVELS: { key: string; label: string; desc: string }[] = [
@@ -207,6 +208,11 @@ export function LabDashboard() {
               seed {m.replay.matchSeed}
             </span>
             <button style={viewBtn} onClick={() => openReplay(m)}>▶ リプレイを見る</button>
+            <button
+              style={{ ...viewBtn, background: "#262630", borderColor: "#3a3a4a", color: "#aab" }}
+              title="リプレイをJSONとして保存"
+              onClick={() => downloadReplay(m.replay, `sensen-lab-${m.id}.json`)}
+            >⬇</button>
           </div>
         ))}
       </div>
