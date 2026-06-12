@@ -115,11 +115,11 @@ export function SimpleGameplay() {
           <DrawButton player={me} />
           <AdvanceButton />
           <div style={controlsHint}>
-            左クリック: 予約（もう一度で取消） · 右クリック: そのカード以降を取消 · Space: 全取消 · D: ドロー · 1〜6: カード選択
-            　|　無操作 = 休息（1閃 · HP+1 · 連閃リセット）
+            左クリック: 予約（もう一度で取消） · 右クリック: そのカード以降を取消 · Space: 全取消 · D: 1枚ドロー · 1〜6: カード選択
+            　|　無操作 = 1枚ドロー（満杯なら休息 · HP+1）
           </div>
           <div style={controlsHint}>
-            連閃: カードを連続発動するたび攻撃+1（最大+5）· ドローが発動するとリセット
+            連閃: カードを連続発動するたび攻撃+1（最大+5）· ドローで−1 · 休息で全リセット
             　|　焦土: 第{SUDDEN_DEATH_START_SEN}閃から両者に毎閃ダメージ（加速・ブロック無視）
           </div>
         </div>
@@ -503,20 +503,16 @@ function SimpleCard({ cardId, idx, player, now }: { cardId: number; idx: number;
 }
 
 function DrawButton({ player }: { player: PlayerState }) {
-  // Count slots that will be empty WHEN A NEW DRAW FIRES — i.e., future-empty
-  // after all currently-reserved cards have fired. So with reservations
-  // [card, card, card] (none fired yet), the Draw button shows "3枚" because
-  // by the time the new draw reaches the head, those 3 slots are empty.
+  // 1枚ドロー: 新しいドローが発火する時点でスロットが確保できるか
+  // (先行予約のスロット解放・先行ドローの1枠消費を織り込む)。
   const emptyCount = futureEmptyAtDrawPosition(player, player.reservations.length);
   let drawing = false;
   for (const q of player.queue) if (q.kind === "draw") { drawing = true; break; }
   // Stay clickable while a draw is already casting: the new draw goes onto
   // the reservation list and fires after the current draw drains.
   const enabled = emptyCount > 0;
-  const costSen = emptyCount * DRAW_SEN_PER_CARD;
-  // 予約中バッジ = 実際にドロー予約が積まれているとき (オートパイロット
-  // 廃止後、ドローは常に明示的な意思)。
-  const isReservation = player.reservations.some((r) => r.kind === "draw");
+  const reservedDraws = player.reservations.filter((r) => r.kind === "draw").length;
+  const isReservation = reservedDraws > 0;
 
   const onClick = () => {
     if (!enabled) return;
@@ -544,19 +540,19 @@ function DrawButton({ player }: { player: PlayerState }) {
         borderColor: isReservation ? SHU : enabled ? "rgba(232,228,218,0.22)" : "rgba(232,228,218,0.08)",
         outline: "none",
       }}
-      title={enabled ? `${emptyCount}枚 / ${costSen}閃` : "空きなし"}
+      title={enabled ? "1枚ドロー · 1閃 (連打で続けて予約)" : "空きなし"}
     >
       {isReservation && (
         <span style={{
           background: SHU, color: KAMI, padding: "1px 8px",
           fontSize: 10, fontWeight: 800, letterSpacing: 1, marginRight: 8, fontFamily: MINCHO,
-        }}>予約中</span>
+        }}>予約 ×{reservedDraws}</span>
       )}
-      <span style={{ fontSize: 16, fontWeight: 700, letterSpacing: 2 }}>⇊ ドロー (D)</span>
+      <span style={{ fontSize: 16, fontWeight: 700, letterSpacing: 2 }}>⇊ 1枚ドロー (D)</span>
       <span style={{ fontSize: 12, opacity: 0.85, marginLeft: 12, fontFamily: "ui-monospace, monospace" }}>
         {drawing
-          ? (enabled ? `実行中 · さらに予約 ${emptyCount}枚 (${costSen}閃)` : "実行中")
-          : enabled ? `${emptyCount}枚 (合計 ${costSen}閃)` : "(空きなし)"}
+          ? (enabled ? "実行中 · 連打で続けて引く" : "実行中")
+          : enabled ? `1閃 · 空き${emptyCount}枠` : "(空きなし)"}
       </span>
     </button>
   );

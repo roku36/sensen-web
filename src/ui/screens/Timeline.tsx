@@ -429,16 +429,14 @@ function computeReservationGhosts(player: PlayerState, queueTotalSec: number): B
       });
       cum += duration;
     } else {
-      // Draw entry: count slots that WILL be empty when this draw fires —
-      // every preceding card reservation frees its slot, and any earlier
-      // draw consumes those. Matches what applyDrawAction will see at
-      // fire time, so the ghost chip is the right size.
+      // 1枚ドロー: 発火時にスロットが確保できるか (先行予約のスロット
+      // 解放と先行ドローの1枠消費を織り込む)。確保できなければ no-op。
       const n = futureEmptyAtDrawPosition(player, i);
       if (n === 0) continue; // this draw will be a no-op (drop from preview)
-      const duration = senToSec(n * DRAW_SEN_PER_CARD);
+      const duration = senToSec(DRAW_SEN_PER_CARD);
       out.push({
         cardId: null,
-        drawSlots: new Array(n).fill(0),
+        drawSlots: [0],
         drawFilledCount: 0,
         duration,
         startRel: cum,

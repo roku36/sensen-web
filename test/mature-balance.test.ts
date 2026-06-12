@@ -13,7 +13,7 @@ import { CardId, createTestDeck } from "../src/sim/cards";
 import { initGame } from "../src/sim/init";
 import { step } from "../src/sim/reducer";
 
-const FRAME_CAP = 5400; // 90s cap
+const FRAME_CAP = 14400; // 80閃 — 焦土込みで決着させる
 
 function createMatureDeck(): CardId[] {
   const d = createTestDeck();

@@ -325,12 +325,14 @@ function tickCasting(s: GameState, now: number, bus: Bus) {
         if (countsAsExhaust) bus.exhausted.push({ player: idx, cardId: entry.cardId });
       }
       if (entry.kind === "draw") {
-        // 連閃 reset: a Draw resolving breaks the card chain. Refill costs
-        // momentum, not just the draw's cast time.
-        p.renzan = 0;
+        // 連閃の減衰: 1枚ドローは勢いを 1 削る (全リセットではない)。
+        // 旧・一括ドロー時代の「ドロー = 全リセット」は、1枚粒度では
+        // 1枚引くたびに全チェーンを失う過酷さになるため、コストを
+        // 粒度に合わせてスケールした。休息だけが全リセット。
+        p.renzan = Math.max(0, p.renzan - 1);
       }
       if (entry.kind === "rest") {
-        // 休息の解決: HP+1。行動の中断なので連閃もリセット。
+        // 休息の解決: HP+1。行動の完全な中断なので連閃は全リセット。
         bus.heal.push({ target: idx, amount: REST_HEAL });
         p.renzan = 0;
       }
@@ -355,40 +357,35 @@ function applyBlockOnStart(idx: 0 | 1, effect: CardEffect, bus: Bus) {
   }
 }
 
-// Apply a Draw action: snapshot every currently-empty non-reserved slot
-// and APPEND a draw entry to the cast queue. Duration = N * DRAW_SEC_PER_CARD
-// where N is the number of targets. Slots fill sequentially during the
-// entry's cast (handled in tickCasting). No-op if no eligible slots OR if
-// a draw is already queued (one Draw at a time per player).
+// Apply a Draw action — **1枚ドロー** (1閃)。最も左の空き非予約スロット
+// 1つだけを対象にする。深く引き直したければ連打で予約が並ぶ — 「もう
+// 1枚引くか、ここで止めて撃つか」が 1閃ごとの意思決定になる。
+// No-op if no eligible slot (一括ドローは廃止)。
 function applyDrawAction(p: PlayerState, now: number): boolean {
-  // Refuse if there's already a draw entry in the queue.
-  for (const q of p.queue) if (q.kind === "draw") return false;
   const reserved = reservedSlotSet(p);
-  const eligible: number[] = [];
+  let slot = -1;
   for (let i = 0; i < p.hand.length; i++) {
-    if (p.hand[i] === null && !reserved.has(i)) eligible.push(i);
+    if (p.hand[i] === null && !reserved.has(i)) { slot = i; break; }
   }
-  if (eligible.length === 0) return false;
-  const duration = senToSec(eligible.length * DRAW_SEN_PER_CARD);
+  if (slot < 0) return false;
   if (p.queue.length === 0) p.castStartedAt = Math.max(p.castStartedAt, now);
   p.queue.push({
     kind: "draw",
-    drawSlots: eligible,
+    drawSlots: [slot],
     drawFilledCount: 0,
-    duration,
+    duration: senToSec(DRAW_SEN_PER_CARD),
   });
   return true;
 }
 
 // How many empty slots a Draw at position `drawResIdx` in the reservation
-// list will see when it fires. Walks the reservations in order: each
-// preceding CARD reservation will free its slot (count it as future-empty);
-// each preceding DRAW reservation will CONSUME the currently-empty slots
-// (clear them). Used by the Draw button + ghost preview so a draw planned
-// after 3 card reservations is shown as a 3-card draw, not 0.
+// list will see when it fires (1枚ドロー: a preceding draw consumes exactly
+// ONE slot). Walks the reservations in order: each preceding CARD
+// reservation frees its slot; each preceding DRAW removes one. Used by the
+// Draw button + ghost preview + setup estimation.
 //
 // drawResIdx === reservations.length means "if I appended a draw RIGHT
-// NOW, how many slots would it draw into?" — used by the Draw button.
+// NOW, would it have a slot?" — used by the Draw button.
 export function futureEmptyAtDrawPosition(p: PlayerState, drawResIdx: number): number {
   const empties = new Set<number>();
   const queueDrawReserved = reservedSlotSet(p);
@@ -399,8 +396,9 @@ export function futureEmptyAtDrawPosition(p: PlayerState, drawResIdx: number): n
     const r = p.reservations[i];
     if (r.kind === "card") {
       empties.add(r.slotIndex); // becomes empty when this card fires
-    } else {
-      empties.clear(); // an earlier draw will consume all currently-empty slots
+    } else if (empties.size > 0) {
+      // 1枚ドロー: 最小indexのスロットを1つだけ消費する。
+      empties.delete(Math.min(...empties));
     }
   }
   return empties.size;
@@ -460,7 +458,8 @@ export function reservationSetupSen(p: PlayerState, endIdx: number): number {
       const d = c !== null && c !== undefined ? getCardDef(c) : null;
       if (d) total += d.cost;
     } else {
-      total += futureEmptyAtDrawPosition(p, i) * DRAW_SEN_PER_CARD;
+      // 1枚ドロー: スロットが確保できるなら 1閃、できなければ no-op (0閃)。
+      total += (futureEmptyAtDrawPosition(p, i) > 0 ? 1 : 0) * DRAW_SEN_PER_CARD;
     }
   }
   return total;
@@ -623,10 +622,14 @@ function tickReservation(s: GameState, now: number, bus: Bus) {
     for (let safety = 0; safety < 8; safety++) {
       if (!tickReservationOnce(p, now, bus)) break;
     }
-    // 休息の自動補充 — このフレームで何も積まれなければ。
+    // 既定行動の自動補充 — このフレームで何も積まれなければ:
+    // 手札に空きがあれば「1枚ドロー」、満杯 (or 引く山がない) なら「休息」。
     if (p.queue.length === 0 && p.reservations.length === 0) {
-      p.castStartedAt = Math.max(p.castStartedAt, now);
-      p.queue.push({ kind: "rest", duration: SEC_PER_SEN });
+      const drew = (p.deck.length + p.discard.length) > 0 && applyDrawAction(p, now);
+      if (!drew) {
+        p.castStartedAt = Math.max(p.castStartedAt, now);
+        p.queue.push({ kind: "rest", duration: SEC_PER_SEN });
+      }
     }
   }
 }

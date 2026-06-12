@@ -311,9 +311,10 @@ export const lv3Tactical: (seed?: number, holdMaturing?: boolean) => Policy = (s
       return hi >= 0 ? (cardFlag(hi) ?? 0) : 0;
     }
 
-    // ⑤ 連閃 protection: while momentum is up and we still hold playable
-    // cards, do NOT draw (a resolving draw resets the chain).
-    if (shouldDraw(p, opts.length) && !(p.renzan >= 2 && opts.length > 0)) return INPUT_DRAW;
+    // ⑤ Draw decision。1枚ドロー化で「ドロー = 連閃−1」に緩和されたため、
+    // 旧・連閃保護 (チェーン中はドロー我慢) は撤廃 — 我慢の価値が小さく、
+    // 手札枯渇のコストの方が大きい。
+    if (shouldDraw(p, opts.length)) return INPUT_DRAW;
     if (opts.length === 0) return 0;
 
     // ⑥ Otherwise: corrected value-per-閃 greed, with 熟成 strategy:

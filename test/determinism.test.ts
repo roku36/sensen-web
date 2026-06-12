@@ -522,15 +522,24 @@ describe("reducer determinism", () => {
     expect(early).toBe(late); // 90フレームの入力差が完全に消える
   });
 
-  it("休息: 無操作なら自動で積まれ、解決時に HP+1 と連閃リセット", () => {
+  it("既定行動: 空きがあれば1枚ドロー、満杯なら休息 (HP+1)", () => {
+    // 空きスロットあり → 自動で1枚ドローが積まれる。
     const deck = Array(20).fill(CardId.Strike);
     const s = initGame({ matchSeed: 1n, hpMax: 80, deckP0: deck, deckP1: deck });
-    s.players[0].hp = 50; // 回復が見えるように削っておく
     step(s, 0, 0);
-    expect(s.players[0].queue[0]?.kind).toBe("rest");
-    // 1閃後に解決 → HP+1。
-    for (let f = 0; f < 185; f++) step(s, 0, 0);
-    expect(s.players[0].hp).toBe(51);
+    const head = s.players[0].queue[0];
+    expect(head?.kind).toBe("draw");
+    expect(head?.kind === "draw" && head.drawSlots.length).toBe(1); // 1枚ドロー
+
+    // 手札満杯 → 休息が積まれ、1閃後に HP+1。
+    const s2 = initGame({ matchSeed: 1n, hpMax: 80, deckP0: deck, deckP1: deck });
+    const p = s2.players[0];
+    for (let i = 0; i < 6; i++) p.hand[i] = CardId.Strike;
+    p.hp = 50;
+    step(s2, 0, 0);
+    expect(s2.players[0].queue[0]?.kind).toBe("rest");
+    for (let f = 0; f < 185; f++) step(s2, 0, 0);
+    expect(s2.players[0].hp).toBe(51);
   });
 
   it("played non-power cards go to discard on resolve", () => {
