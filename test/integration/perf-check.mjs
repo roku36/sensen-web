@@ -50,26 +50,25 @@ const pacing = await page.evaluate(() => new Promise((resolve) => {
 }));
 console.log("frame pacing:", pacing);
 
-// 3. Prediction responds to a click within a frame or two.
-const before = await page.evaluate(() => {
+// 3. A card click commits an action. オートパイロット廃止後はキューが
+// 空のことが多く、予約は即キューに発火する — committed (queue+res) で数える。
+const committed = () => page.evaluate(() => {
   const g = window.__sensen.getState();
-  return g.players[0].reservations.length;
+  const p = g.players[0];
+  return p.queue.filter((q) => q.kind === "card").length
+    + p.reservations.filter((r) => r.kind === "card").length;
 });
-// Click the first clickable hand card.
+const before = await committed();
+// Click the first clickable hand card (hand-card class = 手札のみ確実)。
 const clicked = await page.evaluate(() => {
-  const btns = [...document.querySelectorAll("button")].filter(
-    (b) => !b.disabled && b.querySelector("div") && b.textContent.includes("閃"),
-  );
+  const btns = [...document.querySelectorAll("button.hand-card")].filter((b) => !b.disabled);
   if (btns.length === 0) return false;
   btns[0].click();
   return true;
 });
 await wait(150);
-const after = await page.evaluate(() => {
-  const g = window.__sensen.getState();
-  return g.players[0].reservations.length;
-});
-console.log(`reservation click: clicked=${clicked} before=${before} after=${after}`);
+const after = await committed();
+console.log(`card click: clicked=${clicked} before=${before} after=${after} (committed cards)`);
 
 await page.screenshot({ path: "/tmp/perf-check.png" });
 await browser.close();
