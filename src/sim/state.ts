@@ -14,7 +14,12 @@ import { MAX_HAND_SIZE } from "./rules";
 //     elapsed time crosses (k+1) seconds. drawFilledCount tracks progress.
 export type QueueEntry =
   | { kind: "card"; cardId: CardId; duration: number; blockApplied: boolean }
-  | { kind: "draw"; drawSlots: number[]; drawFilledCount: number; duration: number };
+  | { kind: "draw"; drawSlots: number[]; drawFilledCount: number; duration: number }
+  // 休息 — キューと予約が空のとき、シムが自動で積む 1閃 の行動。
+  // 解決時に HP+1、連閃リセット。キューを決して空白にしないことで
+  // 時間グリッド (行動は閃境界からのみ始まる) を保証する。
+  // docs/game-design.md の不変条件を参照。
+  | { kind: "rest"; duration: number };
 
 // A card that recently resolved. Kept around so the timeline can show it as
 // a dimmed chip drifting off to the left of the NOW line ("just played").

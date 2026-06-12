@@ -28,6 +28,7 @@ import {
   PLAYED_TO_DISCARD,
   POISON_DECAY_SEN_PER_STEP,
   RENZAN_MAX_BONUS,
+  REST_HEAL,
   RESOLVED_HISTORY_MAX,
   RETSU_SEN_BONUS,
   SEC_PER_SEN,
@@ -328,6 +329,11 @@ function tickCasting(s: GameState, now: number, bus: Bus) {
         // momentum, not just the draw's cast time.
         p.renzan = 0;
       }
+      if (entry.kind === "rest") {
+        // 休息の解決: HP+1。行動の中断なので連閃もリセット。
+        bus.heal.push({ target: idx, amount: REST_HEAL });
+        p.renzan = 0;
+      }
       // Draw entries leave no history mark — the slot fills themselves
       // make the action visible in the hand row.
     }
@@ -602,9 +608,13 @@ function applyInput(s: GameState, idx: 0 | 1, flags: number, _bus: Bus) {
 // head's trigger condition is met (queue empty for non-prereq, queue
 // remaining == prereq for prereq cards).
 //
-// 強制オートパイロットは廃止 (docs/game-design.md): 無操作なら時間だけが
-// 流れる。怠惰の自動補正はスキル差を圧縮し、「キューを空に保つ = 手の内を
-// 見せない」というブラフを構造的に不可能にしていた。膠着防止は焦土が担う。
+// 不変条件「キューは決して空白にならない」(docs/game-design.md):
+// 予約もキューも空なら「休息」(1閃・HP+1・連閃リセット) を自動で積む。
+// キューが常に埋まっている限り、あらゆる行動は現在のエントリの区切り
+// (= 閃境界) からしか始まらず、入力の 0.001 秒差は次の閃境界に吸収される
+// — 反射神経が構造的に意味を持たない。旧オートパイロット (自動ドロー/
+// 自動カード発動) との違いは、休息が「明確に弱い既定行動」であること:
+// スキル差は保存され、時間グリッドだけが保証される。
 function tickReservation(s: GameState, now: number, bus: Bus) {
   for (const idx of [0, 1] as const) {
     const p = s.players[idx];
@@ -612,6 +622,11 @@ function tickReservation(s: GameState, now: number, bus: Bus) {
     // same-frame fires). Bounded for safety.
     for (let safety = 0; safety < 8; safety++) {
       if (!tickReservationOnce(p, now, bus)) break;
+    }
+    // 休息の自動補充 — このフレームで何も積まれなければ。
+    if (p.queue.length === 0 && p.reservations.length === 0) {
+      p.castStartedAt = Math.max(p.castStartedAt, now);
+      p.queue.push({ kind: "rest", duration: SEC_PER_SEN });
     }
   }
 }

@@ -35,6 +35,12 @@ export const BLOCK_DECAY_SEN_PER_STEP = 1;
 // Heal cards subtract their amount from poison too.
 export const POISON_DECAY_SEN_PER_STEP = 1;
 
+// ── 休息 (auto-rest) ──
+// キューと予約が空のとき、シムが自動で積む既定行動。1閃かけて HP を
+// REST_HEAL 回復し、連閃をリセットする。「キューは決して空白にならない」
+// 不変条件の担い手 (docs/game-design.md)。
+export const REST_HEAL = 1;
+
 // ── 連閃 (combo chain) ──
 // Each consecutively-resolved CARD beyond the first adds +1 attack damage,
 // capped here. A resolving Draw entry resets the chain — refilling costs

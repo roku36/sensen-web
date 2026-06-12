@@ -84,9 +84,9 @@ function predictSignature(g: GameState): string {
     sig += Math.ceil(p.hp) + "," + p.block + "," + p.poison + "," + p.strength + ","
       + p.thorns + "," + p.renzan + "," + p.castStartedAt + ";";
     for (const q of p.queue) {
-      sig += q.kind === "card"
-        ? "c" + q.cardId + ":" + q.duration
-        : "d" + q.drawSlots.join(".") + ":" + q.drawFilledCount;
+      sig += q.kind === "card" ? "c" + q.cardId + ":" + q.duration
+        : q.kind === "draw" ? "d" + q.drawSlots.join(".") + ":" + q.drawFilledCount
+        : "r";
       sig += "|";
     }
     sig += ";";
@@ -360,9 +360,10 @@ export function BattleZone({ game, op, me, now }: { game: GameState; op: PlayerS
 // ── Queue / history box layout ──
 
 interface BoxLayout {
-  cardId: number | null;     // null for draw entries
+  cardId: number | null;     // null for draw/rest entries
   drawSlots?: number[] | null;
   drawFilledCount?: number;
+  isRest?: boolean;
   duration: number;
   startRel: number;
   endRel: number;
@@ -386,11 +387,11 @@ function computeQueueLayout(player: PlayerState, now: number): QueueLayout {
   let endRel = Math.max(0, player.queue[0].duration - (now - player.castStartedAt));
   const boxes: BoxLayout[] = player.queue.map((q, i) => {
     if (i > 0) endRel += q.duration;
-    const isCard = q.kind === "card";
     return {
-      cardId: isCard ? (q as { cardId: CardId }).cardId : null,
-      drawSlots: !isCard ? (q as { drawSlots: number[] }).drawSlots : null,
-      drawFilledCount: !isCard ? (q as { drawFilledCount: number }).drawFilledCount : undefined,
+      cardId: q.kind === "card" ? q.cardId : null,
+      drawSlots: q.kind === "draw" ? q.drawSlots : null,
+      drawFilledCount: q.kind === "draw" ? q.drawFilledCount : undefined,
+      isRest: q.kind === "rest",
       duration: q.duration,
       endRel,
       startRel: endRel - q.duration,
@@ -493,12 +494,13 @@ function TimeTick({ sen, totalHeight }: { sen: number; totalHeight: number }) {
   );
 }
 
-function QueueBox({ cardId, drawSlots, drawFilledCount, duration, startRel, endRel, isHead, yTop, resolved, ghost, reservationOrder }: BoxLayout & { yTop: number }) {
+function QueueBox({ cardId, drawSlots, drawFilledCount, isRest, duration, startRel, endRel, isHead, yTop, resolved, ghost, reservationOrder }: BoxLayout & { yTop: number }) {
   const isDraw = drawSlots != null;
   const def = !isDraw && cardId != null ? getCardDef(cardId) : null;
 
-  // 機能色 flat (設計言語: 弁柄/藍鉄/紫紺、ドロー=藍鉄の暗)。
-  const baseColor = isDraw ? "#2c4258"
+  // 機能色 flat (設計言語: 弁柄/藍鉄/紫紺、ドロー=藍鉄の暗、休息=墨)。
+  const baseColor = isRest ? "#26262b"
+    : isDraw ? "#2c4258"
     : def?.cardType === CardType.Attack ? "#8e3a30"
     : def?.cardType === CardType.Power ? "#544668"
     : "#33526e";
@@ -506,11 +508,13 @@ function QueueBox({ cardId, drawSlots, drawFilledCount, duration, startRel, endR
   const bg = resolved ? dim(baseColor, 0.5) : ghost ? "rgba(232,71,43,0.08)" : baseColor;
   const left = NOW_OFFSET + startRel * PX_PER_SEC;
   const w = duration * PX_PER_SEC;
-  const glow = !resolved && !ghost && isHead && endRel < 0.4;
+  const glow = !resolved && !ghost && isHead && endRel < 0.4 && !isRest;
   const glowIntensity = glow ? 1 - endRel / 0.4 : 0;
 
   let label: string;
-  if (isDraw) {
+  if (isRest) {
+    label = "休息";
+  } else if (isDraw) {
     const remaining = (drawSlots!.length - (drawFilledCount ?? 0));
     label = `ドロー ${remaining}枚`;
   } else {
@@ -568,6 +572,7 @@ function QueueBox({ cardId, drawSlots, drawFilledCount, duration, startRel, endR
       <div style={queueBoxMeta}>
         {resolved ? "発動済"
           : ghost ? `予約 · ${durSen}閃`
+          : isRest ? "HP+1"
           : isHead ? `あと ${secToSen(Math.max(0, endRel)).toFixed(1)}閃`
           : `${durSen}閃`}
       </div>

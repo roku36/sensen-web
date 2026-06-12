@@ -67,12 +67,12 @@ export const PUZZLES: PuzzleDef[] = [
   {
     id: "p1-renzan",
     title: "其の一: 連閃の基本",
-    goal: "3閃以内に 21 ダメージを削り切れ",
+    goal: "3閃以内に削り切れ (相手は休息で回復する)",
     hint: "打撃は素の6ダメージ。だが連閃を切らさなければ……",
     budgetSen: 3,
     matchSeed: SEED_LATE_SURGE,
     hand: [CardId.Defend, CardId.Strike, CardId.Strike, CardId.Strike, CardId.Defend, CardId.Defend],
-    oppHp: 21, // 6+7+8 (連閃) — 防御を1枚でも挟むと届かない
+    oppHp: 19, // 与21 (6+7+8 連閃) − 相手の休息回復2 — 防御を挟むと届かない
     solution: [
       { f: 0, flags: F(1) },
       { f: 1, flags: F(2) },
@@ -82,12 +82,12 @@ export const PUZZLES: PuzzleDef[] = [
   {
     id: "p2-heavy",
     title: "其の二: 重撃の積み",
-    goal: "5閃以内に 56 ダメージを削り切れ",
+    goal: "5閃以内に削り切れ (相手は休息で回復する)",
     hint: "重撃は積み2閃が必要。打撃2枚を先に予約すれば……",
     budgetSen: 5,
     matchSeed: SEED_LATE_SURGE,
     hand: [CardId.Defend, CardId.Strike, CardId.Strike, CardId.Strike, CardId.Bludgeon, CardId.Defend],
-    oppHp: 56, // 6+7+8 + 重撃(32+連閃3) = 56
+    oppHp: 52, // 与56 (6+7+8+重撃35) − 休息回復4
     solution: [
       { f: 0, flags: F(1) },
       { f: 1, flags: F(2) },
@@ -98,7 +98,7 @@ export const PUZZLES: PuzzleDef[] = [
   {
     id: "p4-mature",
     title: "其の四: 熟成の刻",
-    goal: "4閃以内に 36 ダメージを削り切れ",
+    goal: "4閃以内に削り切れ (相手は休息で回復する)",
     hint: "業火の種は即撃ち4。だが2閃寝かせれば業火20に化ける。種は予約すると熟成が止まるぞ — 他のカードで繋いで時間を稼げ。",
     budgetSen: 4,
     matchSeed: SEED_LATE_SURGE,
@@ -107,7 +107,7 @@ export const PUZZLES: PuzzleDef[] = [
     // 4枚目に差し込む。橋渡しがないと強制デフォルトのドローが捨札を
     // 回収して連閃が切れる — その理解自体がこの問題の主題。
     hand: [CardId.EmberSeed, CardId.Strike, CardId.Strike, CardId.Defend, CardId.Defend, CardId.Defend],
-    oppHp: 36, // 打撃6 + 打撃7(連閃) + 防御0 + 業火20+3(連閃4枚目) = 36
+    oppHp: 33, // 与36 (6+7+0+業火23) − 休息回復3
     solution: [
       { f: 0, flags: F(1) },
       { f: 1, flags: F(2) },
@@ -120,7 +120,7 @@ export const PUZZLES: PuzzleDef[] = [
   {
     id: "p5-finisher",
     title: "其の五: 烈閃重撃",
-    goal: "6閃以内に 57 ダメージを削り切れ",
+    goal: "6閃以内に削り切れ (相手は休息で回復する)",
     hint: "重撃の解決を第6閃の烈閃に重ねろ。防御2枚は時間あわせの布石だ。",
     budgetSen: 6,
     matchSeed: SEED_SURGE_AT_6,
@@ -128,7 +128,7 @@ export const PUZZLES: PuzzleDef[] = [
     // ちょうど烈閃 (第6閃) に着地させる総合問題。連閃5枚目の重撃は
     // 32+4、烈閃でさらに+4。
     hand: [CardId.Defend, CardId.Defend, CardId.Strike, CardId.Strike, CardId.Bludgeon, CardId.Defend],
-    oppHp: 57, // 8 + 9 (連閃打撃) + 重撃32+連閃4+烈閃4 = 57
+    oppHp: 54, // 与57 (8+9+重撃40) − 休息回復3 (満タン中の回復は無効)
     solution: [
       { f: 0, flags: F(0) },
       { f: 1, flags: F(1) },

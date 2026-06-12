@@ -116,7 +116,7 @@ export function SimpleGameplay() {
           <AdvanceButton />
           <div style={controlsHint}>
             左クリック: 予約（もう一度で取消） · 右クリック: そのカード以降を取消 · Space: 全取消 · D: ドロー · 1〜6: カード選択
-            　|　無操作なら時間だけが流れる — 引くのも撃つのも、すべてあなたの意思
+            　|　無操作 = 休息（1閃 · HP+1 · 連閃リセット）
           </div>
           <div style={controlsHint}>
             連閃: カードを連続発動するたび攻撃+1（最大+5）· ドローが発動するとリセット

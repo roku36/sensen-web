@@ -49,10 +49,12 @@ function hashPlayer(p: PlayerState) {
   for (const q of p.queue) {
     if (q.kind === "card") {
       byte(0); u32(q.cardId); f(q.duration); byte(q.blockApplied ? 1 : 0);
-    } else {
+    } else if (q.kind === "draw") {
       byte(1); f(q.duration); u32(q.drawFilledCount);
       u32(q.drawSlots.length);
       for (const s of q.drawSlots) u32(s);
+    } else {
+      byte(2); f(q.duration); // rest
     }
   }
   f(p.castStartedAt);

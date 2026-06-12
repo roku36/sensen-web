@@ -351,17 +351,18 @@ describe("reducer determinism", () => {
     expect(d1).toBeGreaterThanOrEqual(6);
     expect(d1).toBeLessThanOrEqual(6.5);
 
-    // S2 resolves: renzan 2 → +1 (deals 7).
+    // S2 resolves: renzan 2 → +1 (deals 7)。アイドルの相手は休息で +1
+    // 回復する (4.5s 時点) ので、ウィンドウの正味は 7−1 = 6。
     const hp1 = s.players[1].hp;
     for (let f = 0; f < 180; f++) step(s, 0, 0);
     expect(s.players[0].renzan).toBe(2);
-    expect(hp1 - s.players[1].hp).toBeGreaterThanOrEqual(7);
+    expect(hp1 - s.players[1].hp).toBeGreaterThanOrEqual(6);
 
-    // S3 resolves: renzan 3 → +2 (deals 8).
+    // S3 resolves: renzan 3 → +2 (deals 8)。休息回復 −1 で正味 7。
     const hp2 = s.players[1].hp;
     for (let f = 0; f < 180; f++) step(s, 0, 0);
     expect(s.players[0].renzan).toBe(3);
-    expect(hp2 - s.players[1].hp).toBeGreaterThanOrEqual(8);
+    expect(hp2 - s.players[1].hp).toBeGreaterThanOrEqual(7);
 
     // Explicit Draw press (オートパイロット廃止 — 無操作なら連閃は保持
     // されたまま時間だけが流れる)。When that draw RESOLVES the chain
@@ -485,25 +486,51 @@ describe("reducer determinism", () => {
     expect(dealt).toBeGreaterThanOrEqual(10);
   });
 
-  it("サドンデス: 第30閃から両者に毎閃ダメージ、10閃ごとに加速、試合は必ず終わる", () => {
-    // Defend-only decks: no combat damage, so HP changes come ONLY from
-    // sudden death. Both players symmetric.
+  it("サドンデス: 第30閃から毎閃ダメージ (休息回復と相殺)、加速で必ず終わる", () => {
+    // 両者アイドル → 休息 (+1/閃) が焦土の第1段階 (−1/閃) を相殺する。
+    // これは意図された駆け引き: 休息で焦土を凌げるのは加速されるまで。
     const deck = Array(20).fill(CardId.Defend);
     const s = initGame({ matchSeed: 1n, hpMax: 80, deckP0: deck, deckP1: deck });
     // Up to (but not including) frame 5400 (= 第30閃): untouched.
     while (s.frame < 5400) step(s, 0, 0);
     expect(s.players[0].hp).toBe(80);
     expect(s.players[1].hp).toBe(80);
-    // 30..39閃: 1 damage per 閃 boundary (10 ticks).
+    // 30..39閃: 焦土1 vs 休息1 — 振動するがほぼ満タンに留まる。
     while (s.frame < 7200) step(s, 0, 0);
-    expect(s.players[0].hp).toBe(70);
-    expect(s.players[1].hp).toBe(70);
-    // 40閃 boundary: escalated to 2.
-    step(s, 0, 0);
-    expect(s.players[0].hp).toBe(68);
-    // And the match ALWAYS ends (symmetric burn → draw here).
-    for (let f = 0; f < 8000 && s.result === 0; f++) step(s, 0, 0);
+    expect(s.players[0].hp).toBeGreaterThanOrEqual(78);
+    // 40閃以降は焦土が加速 (2,3,…) して休息を上回る → 必ず終局する。
+    for (let f = 0; f < 25000 && s.result === 0; f++) step(s, 0, 0);
     expect(s.result).not.toBe(0);
+  });
+
+  it("時間グリッド: 入力タイミングの差は閃境界に吸収される (反射神経の排除)", () => {
+    // 休息がキューを常に埋めるため、行動は現在のエントリの区切りからしか
+    // 始まらない。休息中のどのフレームでクリックしても (f=10 でも f=100
+    // でも)、カードは同じ閃境界で発火し、同じフレームで解決する。
+    const deck = Array(20).fill(CardId.Strike);
+    const resolveFrame = (clickFrame: number): number => {
+      const s = initGame({ matchSeed: 1n, hpMax: 80, deckP0: deck, deckP1: deck });
+      for (let f = 0; f < 1000; f++) {
+        step(s, s.frame === clickFrame ? cardFlag(0)! : 0, 0);
+        if (s.players[0].resolvedCards.some((r) => r.cardId === CardId.Strike)) return s.frame;
+      }
+      return -1;
+    };
+    const early = resolveFrame(10);
+    const late = resolveFrame(100);
+    expect(early).toBeGreaterThan(0);
+    expect(early).toBe(late); // 90フレームの入力差が完全に消える
+  });
+
+  it("休息: 無操作なら自動で積まれ、解決時に HP+1 と連閃リセット", () => {
+    const deck = Array(20).fill(CardId.Strike);
+    const s = initGame({ matchSeed: 1n, hpMax: 80, deckP0: deck, deckP1: deck });
+    s.players[0].hp = 50; // 回復が見えるように削っておく
+    step(s, 0, 0);
+    expect(s.players[0].queue[0]?.kind).toBe("rest");
+    // 1閃後に解決 → HP+1。
+    for (let f = 0; f < 185; f++) step(s, 0, 0);
+    expect(s.players[0].hp).toBe(51);
   });
 
   it("played non-power cards go to discard on resolve", () => {
