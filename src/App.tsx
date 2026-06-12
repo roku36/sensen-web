@@ -3,6 +3,7 @@ import { buildCurrentReplay, getSession } from "./ui/hooks";
 import { DeckBuilder } from "./ui/screens/DeckBuilder";
 import { Gameplay } from "./ui/screens/Gameplay";
 import { LabDashboard } from "./ui/screens/LabDashboard";
+import { PuzzleScreen } from "./ui/screens/PuzzleScreen";
 import { Lobby } from "./ui/screens/Lobby";
 import { ReplayViewer } from "./ui/screens/ReplayViewer";
 import { SimpleGameplay } from "./ui/screens/SimpleGameplay";
@@ -48,6 +49,7 @@ export default function App() {
       {screen === "title" && <Title />}
       {screen === "deck" && <DeckBuilder />}
       {screen === "lab" && <LabDashboard />}
+      {screen === "puzzle" && <PuzzleScreen />}
       {screen === "lobby" && <Lobby />}
       {screen === "gameplay" && (viewMode === "simple" ? <SimpleGameplay /> : <Gameplay />)}
       {screen === "replay" && (() => {

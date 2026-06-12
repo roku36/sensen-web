@@ -100,6 +100,10 @@ export function Title() {
           リプレイを開く…
         </button>
         <div style={{ height: 8 }} />
+        <button style={deckBtn} onClick={() => setScreen("puzzle")}>
+          パズル — 閃の詰め将棋
+        </button>
+        <div style={{ height: 8 }} />
         <button style={deckBtn} onClick={() => setScreen("lab")}>
           AI 検証ラボ (headless 自己対戦)
         </button>

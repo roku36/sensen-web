@@ -32,6 +32,7 @@ import {
 } from "../../sim/rules";
 import { GameState, PlayerState, ResolvedEntry } from "../../sim/state";
 
+import { OfflineSession } from "../../net/offline";
 import { advanceFrames, getActiveMode, getSession, useKeyboardInput } from "../hooks";
 import { useStore } from "../store";
 import { PilePeek } from "./PilePeek";
@@ -116,6 +117,7 @@ export function SimpleGameplay() {
   const game = useStore((s) => s.game);
   useStore((s) => s.gameFrame);
   const localPlayer = useStore((s) => s.localPlayer);
+  const screen = useStore((s) => s.screen);
   const setScreen = useStore((s) => s.setScreen);
   const aiName = useStore((s) => s.aiOpponentName);
   const aiSpectate = useStore((s) => s.aiSpectate);
@@ -196,7 +198,11 @@ export function SimpleGameplay() {
         />
       )}
 
-      {game.result !== 0 && (
+      {/* ResultPanel は通常対戦 (screen "gameplay") 限定。パズルやリプレイ
+          画面も SimpleGameplay を下敷きにするが、そこで描画すると連勝
+          加算・敗北時の resetProfile (デッキ初期化!) という副作用まで
+          発火してしまう (issue #2)。 */}
+      {game.result !== 0 && screen === "gameplay" && (
         <ResultPanel result={game.result as 1 | 2 | 3} localPlayer={localPlayer} />
       )}
     </div>
@@ -1377,7 +1383,12 @@ function SimpleCard({ cardId, idx, player, now }: { cardId: number; idx: number;
           {def.exhausts && " · 1回限り"}
         </div>
         <div style={{ ...cardHeader, position: "relative" }}>{def.name}</div>
-        <div style={{ ...cardEffect, position: "relative" }}>{def.description}</div>
+        <div style={{
+          ...cardEffect, position: "relative",
+          // 熟成/変質カードは下部にカウントダウンバー+ラベルが乗るので、
+          // 説明文がそれと重ならないよう余白を確保する (issue #3)。
+          ...(def.matureInto !== undefined ? { paddingBottom: 18 } : {}),
+        }}>{def.description}</div>
         <div style={cardKeyHint}>{idx === 9 ? "0" : (idx + 1).toString()}</div>
       </button>
       {hover && <Tooltip def={def} />}
@@ -1450,10 +1461,15 @@ function DrawButton({ player }: { player: PlayerState }) {
 // Beginner-mode "次の閃" button. Only renders when the active session is
 // an OfflineSession with beginnerMode = true. Each click advances the sim
 // by exactly 1 閃 (= SEC_PER_SEN seconds = SEC_PER_SEN/DT frames).
+//
+// Source of truth is the SESSION's option, not the title-screen checkbox
+// in the store — puzzle mode creates beginner sessions directly without
+// touching the checkbox, and the two must not disagree.
 function AdvanceButton() {
-  const beginner = useStore((s) => s.beginnerMode);
-  const mode = getActiveMode();
-  if (!beginner || mode !== "offline") return null;
+  useStore((s) => s.gameFrame); // re-check when a session starts ticking
+  const sess = getSession();
+  const beginner = sess instanceof OfflineSession && !!sess.opts.beginnerMode;
+  if (!beginner || getActiveMode() !== "offline") return null;
   const onClick = () => {
     advanceFrames(Math.round(SEC_PER_SEN / DT));
   };

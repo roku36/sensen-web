@@ -26,6 +26,8 @@ export interface OfflineOptions {
   selfPolicy?: PolicyFactory;
   /** Beginner mode: sim is FROZEN until the player calls advance(frames). */
   beginnerMode?: boolean;
+  /** Fixed match seed (puzzles need deterministic 烈閃 schedules etc.). */
+  matchSeed?: bigint;
 }
 
 export class OfflineSession {
@@ -45,7 +47,8 @@ export class OfflineSession {
 
   constructor(opts: OfflineOptions) {
     this.opts = opts;
-    this.matchSeed = fnv1a64(new TextEncoder().encode("offline-" + Math.random()));
+    this.matchSeed = opts.matchSeed
+      ?? fnv1a64(new TextEncoder().encode("offline-" + Math.random()));
     this.state = initGame({
       matchSeed: this.matchSeed,
       hpMax: opts.hpMax ?? INITIAL_HP,

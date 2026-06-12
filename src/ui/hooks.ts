@@ -9,6 +9,7 @@ export interface AiOptions {
   opponentPolicy?: PolicyFactory;
   selfPolicy?: PolicyFactory;
   beginnerMode?: boolean;
+  matchSeed?: bigint;
 }
 
 // Remembered across rematches so '次のマッチへ' keeps the chosen CPU.
@@ -72,6 +73,7 @@ export async function startOffline(deck: CardId[], ai: AiOptions = {}) {
     opponentPolicy: ai.opponentPolicy,
     selfPolicy: ai.selfPolicy,
     beginnerMode: ai.beginnerMode,
+    matchSeed: ai.matchSeed,
   });
   setSession(s);
   activeMode = "offline";

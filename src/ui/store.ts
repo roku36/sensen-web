@@ -5,7 +5,7 @@ import { create } from "zustand";
 import { Replay } from "../replay/format";
 import { GameState } from "../sim/state";
 
-export type Screen = "title" | "lobby" | "gameplay" | "deck" | "replay" | "lab";
+export type Screen = "title" | "lobby" | "gameplay" | "deck" | "replay" | "lab" | "puzzle";
 export type ViewMode = "rich3d" | "simple";
 
 const persistedViewMode = (): ViewMode => {
