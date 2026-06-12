@@ -58,7 +58,10 @@ function series(holdMaturing: boolean, seeds: bigint[]): { points: number; games
   return { points, games };
 }
 
-const SEEDS = Array.from({ length: 10 }, (_, i) => BigInt(i + 1));
+// 40 seeds × 2 sides = 80 games per series. At 10 seeds the hold-vs-naive
+// ordering is within sample noise (a single flipped game inverts it); 80
+// games is where the premium measurably stabilizes.
+const SEEDS = Array.from({ length: 40 }, (_, i) => BigInt(i + 1));
 
 describe("熟成カードのバランス", () => {
   it("hold strategy ≥ naive play, and the mature deck is competitive but not dominant", () => {

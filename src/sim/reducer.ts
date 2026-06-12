@@ -1220,17 +1220,6 @@ export function step(s: GameState, p0Input: number, p1Input: number, dt: number 
   for (const p of s.players) tickBlockDecay(p, now);
   for (const p of s.players) tickPoison(p, now);
   for (const p of s.players) tickMaturing(p);
-  // サドンデス: from 第SUDDEN_DEATH_START_SEN閃, both players burn every
-  // 閃 boundary (block ignored), escalating — every match ends. Purely
-  // symmetric; frame-exact so it's identical for both peers.
-  if (s.frame % FRAMES_PER_SEN === 0) {
-    const sen = s.frame / FRAMES_PER_SEN;
-    if (sen >= SUDDEN_DEATH_START_SEN) {
-      const dmg = 1 + Math.floor((sen - SUDDEN_DEATH_START_SEN) / SUDDEN_DEATH_RAMP_SEN);
-      for (const p of s.players) p.hp = Math.max(0, p.hp - dmg);
-    }
-  }
-
   // 2. Cast slots: card casts resolve, draw-entry slots fill sequentially.
   tickCasting(s, now, bus);
 
@@ -1254,10 +1243,26 @@ export function step(s: GameState, p0Input: number, p1Input: number, dt: number 
     processCardPlayed(s, bus);
     processStatusBus(s, bus);
     processBlockGains(s, bus);
-    processDamage(s, bus);
+    // 同一境界の規則: 回復が先、ダメージが後。休息の回復は同じ閃に着弾する
+    // 攻撃や焦土と相殺できるが、致死を後から覆す「同フレーム蘇生」はない。
+    // (完全対称グリッドでは両者のイベントが同一フレームに重なるのが常態 —
+    // この順序が決定的・対称な決着を保証する。)
     processHeal(s, bus);
+    processDamage(s, bus);
     processPoison(s, bus);
     processDraw(s, bus);
+  }
+  // サドンデス (焦土): from 第SUDDEN_DEATH_START_SEN閃, both players burn
+  // every 閃 boundary (block ignored), escalating — every match ends.
+  // Applied AFTER the bus drain so a rest resolving at this boundary heals
+  // FIRST (heal-before-damage rule) and cannot resurrect a player the
+  // scorch already killed. Purely symmetric and frame-exact.
+  if (s.frame % FRAMES_PER_SEN === 0) {
+    const sen = s.frame / FRAMES_PER_SEN;
+    if (sen >= SUDDEN_DEATH_START_SEN) {
+      const dmg = 1 + Math.floor((sen - SUDDEN_DEATH_START_SEN) / SUDDEN_DEATH_RAMP_SEN);
+      for (const p of s.players) p.hp = Math.max(0, p.hp - dmg);
+    }
   }
   // Re-arm block decay for both players (idempotent if block unchanged).
   for (const p of s.players) armBlockDecay(p, now);

@@ -186,17 +186,16 @@ describe("P2P state consistency", () => {
   });
 
   it("simultaneous card plays at same frame stay consistent (low latency)", () => {
-    // Both peers play a different slot every 60 frames (slot 0, 1, 2, 3, 4)
-    // so each press lands on a still-occupied slot. With the fixed-slot
-    // hand, re-pressing slot 0 after it became null is a no-op — so we
-    // step through slot indices 0..4 instead.
+    // Both peers cycle through hand slots every 60 frames, indefinitely.
+    // Presses on empty / already-reserved slots are no-ops, so the pattern
+    // keeps committing whatever is available — enough attacks land on both
+    // sides over 10閃 regardless of where blocks happen to be standing.
     const slotForFrame = (f: number): number | null => {
       if (f <= 60 || f % 60 !== 0) return null;
-      const k = (f / 60) - 1; // 1..N
-      return k >= 0 && k < 5 ? k : null;
+      return ((f / 60) | 0) % 6;
     };
     const { a, b, desyncs } = runP2P({
-      frames: 600,
+      frames: 1800,
       latency: 2,
       inputs: (f) => {
         const slot = slotForFrame(f);

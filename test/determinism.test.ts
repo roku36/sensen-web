@@ -604,3 +604,37 @@ describe("reducer determinism", () => {
       .toBe("ws://localhost:3536/sensen-streak-3to5?next=2");
   });
 });
+
+// 完全対称: 両者は同じ閃グリッドを共有し、先手/後手の区別 (初期ブロック・
+// 半閃オフセット) は存在しない。ミラー入力はミラー状態を生み、同時致死は
+// 引き分けになる — パリィ等の「同一境界の相互作用」を成立させる土台。
+describe("完全対称 (perfect symmetry)", () => {
+  // Mono-card decks make both players' hands identical regardless of the
+  // per-handle shuffle seed, so identical inputs are a true mirror.
+  const mirrorInit = () => ({
+    matchSeed: 7n,
+    hpMax: 30,
+    deckP0: Array.from({ length: 20 }, () => CardId.Strike),
+    deckP1: Array.from({ length: 20 }, () => CardId.Strike),
+  });
+
+  it("ミラー入力は全フレームで鏡像状態を保ち、同時致死で引き分けになる", () => {
+    const s = initGame(mirrorInit());
+    expect(s.players[0].block).toBe(s.players[1].block);
+    expect(s.players[0].castStartedAt).toBe(s.players[1].castStartedAt);
+    for (let f = 0; f < 36000 && s.result === 0; f++) {
+      // Both sides press slot 1 every 2 閃 — same flag, same frame.
+      const flag = f % 360 === 0 ? cardFlag(0)! : 0;
+      step(s, flag, flag);
+      expect(s.players[0].hp).toBe(s.players[1].hp);
+      expect(s.players[0].block).toBe(s.players[1].block);
+    }
+    expect(s.result).toBe(3); // 同時にHP0 → 引き分け (どちらかの勝ちではない)
+  });
+
+  it("無入力でも完全鏡像 — 既定行動と焦土だけで両者同時に決着する", () => {
+    const s = initGame(mirrorInit());
+    for (let f = 0; f < 60000 && s.result === 0; f++) step(s, 0, 0);
+    expect(s.result).toBe(3);
+  });
+});

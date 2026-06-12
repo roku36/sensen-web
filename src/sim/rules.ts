@@ -60,12 +60,12 @@ export const RESOLVED_HISTORY_MAX = 8;
 // visible HISTORY budget so the past area always has data to draw.
 export const BLOCK_HISTORY_SEC = 18;
 
-// Second-player advantages.
-// The second-to-act player (handle 1) starts with this much block, and their
-// cast clock is offset by SECOND_PLAYER_OFFSET_SEN 閃 — first card resolves
-// half-an-閃 later than otherwise.
-export const SECOND_PLAYER_INITIAL_BLOCK = 3;
-export const SECOND_PLAYER_OFFSET_SEN = 0.5;
+// 完全対称 (perfect symmetry): both players share the SAME 閃 grid with no
+// offset. There is no first/second player — identical decks + identical
+// inputs produce a mirror match that ends in a draw. Simultaneous lethal
+// resolutions are a draw (result decided after the frame's bus drains).
+// This alignment is what makes same-boundary interactions (パリィ等) a
+// well-defined design space.
 
 // ── 烈閃 (surge 閃) ──
 // Attack cards RESOLVING during a surge 閃 deal this much bonus damage
