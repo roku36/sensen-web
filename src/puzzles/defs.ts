@@ -118,6 +118,26 @@ export const PUZZLES: PuzzleDef[] = [
     ],
   },
   {
+    id: "p5-finisher",
+    title: "其の五: 烈閃重撃",
+    goal: "6閃以内に 57 ダメージを削り切れ",
+    hint: "重撃の解決を第6閃の烈閃に重ねろ。防御2枚は時間あわせの布石だ。",
+    budgetSen: 6,
+    matchSeed: SEED_SURGE_AT_6,
+    // 防御2枚で開始をずらし、[打撃,打撃,重撃] の原子発火で重撃の解決を
+    // ちょうど烈閃 (第6閃) に着地させる総合問題。連閃5枚目の重撃は
+    // 32+4、烈閃でさらに+4。
+    hand: [CardId.Defend, CardId.Defend, CardId.Strike, CardId.Strike, CardId.Bludgeon, CardId.Defend],
+    oppHp: 57, // 8 + 9 (連閃打撃) + 重撃32+連閃4+烈閃4 = 57
+    solution: [
+      { f: 0, flags: F(0) },
+      { f: 1, flags: F(1) },
+      { f: 2, flags: F(2) },
+      { f: 3, flags: F(3) },
+      { f: 4, flags: F(4) },
+    ],
+  },
+  {
     id: "p3-retsusen",
     title: "其の三: 烈閃合わせ",
     goal: "6閃以内に 19 ダメージを削り切れ",

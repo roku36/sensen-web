@@ -497,13 +497,19 @@ export const AI_LEVELS: { key: string; label: string; desc: string }[] = [
   { key: "lv4",     label: "Lv4 先読み型",  desc: "数閃先までシミュレートして最善手 (最強)" },
 ];
 
-/** Level key → display label, legacy keys included. */
+// Legacy stored keys (pre-ladder builds) → current level keys.
+const LEGACY_KEYS: Record<string, string> = {
+  random: "lv1", greedyDefense: "lv2", greedyAttack: "lv2", heuristic: "lv3",
+};
+
+/** Normalize a stored AI key: legacy aliases map to the current level key. */
+export function normalizeAiKey(key: string): string {
+  if (AI_LEVELS.some((l) => l.key === key)) return key;
+  return LEGACY_KEYS[key] ?? "lv3";
+}
+
+/** Level key → display label (legacy keys normalized first). */
 export function aiLabel(key: string): string {
-  const found = AI_LEVELS.find((l) => l.key === key);
-  if (found) return found.label;
-  const legacy: Record<string, string> = {
-    random: "Lv1 ランダム", greedyDefense: "Lv2 テンポ型",
-    greedyAttack: "Lv2 テンポ型", heuristic: "Lv3 読み型",
-  };
-  return legacy[key] ?? key;
+  const k = normalizeAiKey(key);
+  return AI_LEVELS.find((l) => l.key === k)?.label ?? k;
 }

@@ -1,5 +1,5 @@
 import { useState } from "react";
-import { AI_LEVELS, policies } from "../../ai/policy";
+import { AI_LEVELS, normalizeAiKey, policies } from "../../ai/policy";
 import { loadDeck, loadStreak, streakBucket } from "../../sim/deck-storage";
 import { startOffline, startOnline } from "../hooks";
 import { useStore } from "../store";
@@ -12,7 +12,10 @@ export function Title() {
   const viewMode = useStore((s) => s.viewMode);
   const setViewMode = useStore((s) => s.setViewMode);
   const setScreen = useStore((s) => s.setScreen);
-  const aiName = useStore((s) => s.aiOpponentName);
+  // Stored key may be a legacy alias (heuristic etc.) — normalize ONCE so
+  // the select, the button label and the actual opponent always agree
+  // (issue #4: legacy keys showed "undefined" and a mismatched select).
+  const aiName = normalizeAiKey(useStore((s) => s.aiOpponentName));
   const setAiName = useStore((s) => s.setAiOpponentName);
   const spectate = useStore((s) => s.aiSpectate);
   const setSpectate = useStore((s) => s.setAiSpectate);
@@ -22,7 +25,7 @@ export function Title() {
   const streak = loadStreak();
 
   const startSolo = () => {
-    const oppFact = policies[aiName] ?? policies.heuristic;
+    const oppFact = policies[aiName] ?? policies.lv3;
     const selfFact = spectate ? oppFact : undefined;
     void startOffline(loadDeck(), {
       opponentPolicy: oppFact,
@@ -79,30 +82,38 @@ export function Title() {
           Find Match (online)
         </button>
 
-        <div style={{ height: 14 }} />
-        <button style={deckBtn} onClick={() => setScreen("deck")}>
-          デッキ編集 ({deckSize}枚)
-        </button>
-        <div style={{ height: 8 }} />
-        <button style={deckBtn} onClick={async () => {
-          const r = await pickReplayFile();
-          if (r) { useStore.getState().setLoadedReplay(r); setScreen("replay"); }
-        }}>
-          リプレイを開く…
-        </button>
-        <div style={{ height: 8 }} />
-        <button style={deckBtn} onClick={() => setScreen("puzzle")}>
-          パズル — 閃の詰め将棋
-        </button>
-        <div style={{ height: 8 }} />
-        <button style={deckBtn} onClick={() => setScreen("lab")}>
-          AI 検証ラボ (headless 自己対戦)
-        </button>
+        {/* ひとりで遊ぶ・学ぶ */}
+        <div style={{ height: 16 }} />
+        <label style={{ ...sectionLabel, textAlign: "left" }}>ひとりで遊ぶ・学ぶ</label>
+        <div style={subRow}>
+          <button style={deckBtn} onClick={() => setScreen("puzzle")}>
+            パズル (詰め将棋)
+          </button>
+          <button style={deckBtn} onClick={() => setScreen("lab")}>
+            AI 検証ラボ
+          </button>
+        </div>
+
+        {/* 管理 */}
+        <div style={{ height: 10 }} />
+        <label style={{ ...sectionLabel, textAlign: "left" }}>デッキとリプレイ</label>
+        <div style={subRow}>
+          <button style={deckBtn} onClick={() => setScreen("deck")}>
+            デッキ編集 ({deckSize}枚)
+          </button>
+          <button style={deckBtn} onClick={async () => {
+            const r = await pickReplayFile();
+            if (r) { useStore.getState().setLoadedReplay(r); setScreen("replay"); }
+          }}>
+            リプレイを開く…
+          </button>
+        </div>
       </div>
     </div>
   );
 }
 
+const subRow: React.CSSProperties = { display: "flex", gap: 8 };
 const toggleRow: React.CSSProperties = { display: "flex", gap: 0, marginBottom: 4, justifyContent: "center" };
 const toggleBtn = (active: boolean): React.CSSProperties => ({
   background: active ? "#5a3a8a" : "#2a2a35",

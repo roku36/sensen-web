@@ -69,7 +69,7 @@ export function ReplayViewer({ replay, onExit }: Props) {
           onChange={(e) => setCursor(parseInt(e.target.value, 10))}
           style={slider}
         />
-        <span style={meta}>{seconds}s / {totalSeconds}s · frame {cursor}/{total}</span>
+        <span style={meta}>第{Math.floor(cursor / 180)}閃 · {seconds}s / {totalSeconds}s</span>
         <div style={speedGroup}>
           {[0.5, 1, 2, 4].map((s) => (
             <button key={s} style={s === speed ? speedBtnActive : speedBtn} onClick={() => setSpeed(s)}>{s}×</button>
