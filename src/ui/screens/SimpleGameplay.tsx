@@ -18,7 +18,7 @@
 //   │          │ Draw button (6-card width)             │
 //   └──────────┴────────────────────────────────────────┘
 
-import { useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import { aiLabel } from "../../ai/policy";
 import { CardEffect, CardType, getCardDef } from "../../sim/cards";
 import {
@@ -161,12 +161,34 @@ function PlayerInfoCard({
 }) {
   const hpPct = player.hp / player.hpMax;
   const handCount = countCards(player.hand);
+  // HP変化の数字ポップ。1閃未満の連続ドレイン (燃焼等) はノイズになる
+  // ので |Δ| ≥ 0.5 のみ。state は表示専用 — sim には一切触れない。
+  const [pops, setPops] = useState<{ id: number; text: string; color: string }[]>([]);
+  const prevHp = useRef(player.hp);
+  useEffect(() => {
+    const d = player.hp - prevHp.current;
+    prevHp.current = player.hp;
+    if (Math.abs(d) < 0.5) return;
+    const id = ++popSeq;
+    const text = d < 0 ? `${Math.round(d)}` : `+${Math.round(d)}`;
+    setPops((p) => [...p.slice(-3), { id, text, color: d < 0 ? "#ff6b5e" : "#7fe3a4" }]);
+    const t = setTimeout(() => setPops((p) => p.filter((x) => x.id !== id)), 900);
+    return () => clearTimeout(t);
+  }, [player.hp]);
   return (
-    <div style={infoCard}>
+    <div style={{ ...infoCard, position: "relative" }}>
       <div style={infoCardTitle}>{title}</div>
       <Bar pct={hpPct}
            color={hpPct > 0.4 ? "#34c759" : hpPct > 0.2 ? "#ffcc00" : "#ff3b30"}
            label={`HP ${Math.round(player.hp)} / ${player.hpMax}`} />
+      {pops.map((p, i) => (
+        <div key={p.id} className="dmg-pop" style={{
+          position: "absolute", top: 28, right: 14 + i * 34,
+          fontSize: 20, fontWeight: 900, color: p.color, zIndex: 10,
+          textShadow: "0 0 8px rgba(0,0,0,0.9), 0 1px 2px black",
+          fontFamily: "ui-monospace, monospace",
+        }}>{p.text}</div>
+      ))}
       <div style={pillRow}>
         {player.renzan >= 2 && (
           <span style={pill("#ffd166")}>
@@ -192,6 +214,8 @@ function PlayerInfoCard({
     </div>
   );
 }
+
+let popSeq = 0; // dmg-pop 一意ID (表示専用)
 
 function countCards(hand: (number | null)[]): number {
   let n = 0;
@@ -382,6 +406,7 @@ function SimpleCard({ cardId, idx, player, now }: { cardId: number; idx: number;
   return (
     <div style={{ position: "relative" }} onMouseEnter={() => setHover(true)} onMouseLeave={() => setHover(false)}>
       <button
+        className={`hand-card${reserved ? " reserved-card" : ""}`}
         onClick={onClick}
         onContextMenu={onContextMenu}
         disabled={!clickable}
@@ -389,8 +414,14 @@ function SimpleCard({ cardId, idx, player, now }: { cardId: number; idx: number;
           ...cardStyle,
           background: typeColor(def.cardType, clickable),
           cursor: clickable ? "pointer" : "not-allowed",
-          boxShadow: clickable ? "0 4px 12px rgba(0,0,0,0.4)" : "none",
-          outline: reserved ? "2px solid #ffe066" : def.exhausts ? "1px solid #ffaa55" : "none",
+          boxShadow: clickable
+            ? "0 6px 18px rgba(0,0,0,0.55), inset 0 1px 0 rgba(255,255,255,0.18), inset 0 -1px 0 rgba(0,0,0,0.4)"
+            : "inset 0 1px 0 rgba(255,255,255,0.05)",
+          border: reserved
+            ? "1px solid rgba(255,224,102,0.9)"
+            : `1px solid ${typeEdge(def.cardType, clickable)}`,
+          outline: def.exhausts && !reserved ? "1px solid rgba(255,170,85,0.5)" : "none",
+          outlineOffset: 2,
           opacity: clickable ? 1 : 0.55,
         }}
       >
@@ -438,14 +469,20 @@ function SimpleCard({ cardId, idx, player, now }: { cardId: number; idx: number;
             );
           })()
         )}
-        <div style={{ ...cardCostStyle, color: clickable ? "#ffe580" : "#cfd6e0" }}>
-          {unplayable ? "✗" : def.cost + "閃"}
-          {(def.prereqQueueTime ?? 0) > 0 && (
-            <span style={{ fontSize: 10, marginLeft: 4, color: prereqOk ? "#80ffa0" : "#ff9a40" }}>
-              要{def.prereqQueueTime}閃
-            </span>
-          )}
+        <div style={{ ...cardCostStyle, ...(unplayable ? { filter: "grayscale(1) brightness(0.7)" } : clickable ? {} : { filter: "saturate(0.4) brightness(0.75)" }) }}>
+          {unplayable ? "✗" : def.cost}<span style={{ fontSize: 9, fontWeight: 700, marginLeft: 1 }}>閃</span>
         </div>
+        {(def.prereqQueueTime ?? 0) > 0 && (
+          <div style={{
+            position: "absolute", top: 40, left: 6, zIndex: 2,
+            fontSize: 9, fontWeight: 700, padding: "1px 6px", borderRadius: 999,
+            background: prereqOk ? "rgba(40,120,70,0.85)" : "rgba(120,70,20,0.85)",
+            color: prereqOk ? "#a8ffc8" : "#ffc890",
+            border: `1px solid ${prereqOk ? "rgba(128,255,160,0.5)" : "rgba(255,154,64,0.5)"}`,
+          }}>
+            要{def.prereqQueueTime}閃
+          </div>
+        )}
         <div style={typeBadge}>
           {def.cardType === CardType.Attack ? "攻撃"
             : def.cardType === CardType.Skill ? "技"
@@ -641,13 +678,36 @@ function effectText(e: CardEffect): string {
   }
 }
 
+// Card face: layered gradient per type — a lit top edge, a deep diagonal
+// body, and a darker base so the frame reads as物. Inactive = desaturated.
 function typeColor(t: CardType, active: boolean): string {
-  const d = active ? 1 : 0.55;
+  const sheen = "linear-gradient(180deg, rgba(255,255,255,0.14) 0%, rgba(255,255,255,0.03) 26%, rgba(0,0,0,0) 45%)";
+  if (!active) {
+    const flat: Record<number, string> = {
+      [CardType.Attack]: "linear-gradient(160deg, #4a2326 0%, #321a1e 60%, #241318 100%)",
+      [CardType.Skill]:  "linear-gradient(160deg, #1f3450 0%, #182638 60%, #121c2a 100%)",
+      [CardType.Power]:  "linear-gradient(160deg, #3a2450 0%, #2a1a3c 60%, #1e1430 100%)",
+      [CardType.Status]: "linear-gradient(160deg, #333 0%, #222 100%)",
+    };
+    return `${sheen}, ${flat[t]}`;
+  }
+  const body: Record<number, string> = {
+    [CardType.Attack]: "linear-gradient(160deg, #d8403c 0%, #a02430 46%, #5e1622 100%)",
+    [CardType.Skill]:  "linear-gradient(160deg, #3d83d8 0%, #2456a0 46%, #16335e 100%)",
+    [CardType.Power]:  "linear-gradient(160deg, #a050d8 0%, #6e2ea0 46%, #401a5e 100%)",
+    [CardType.Status]: "linear-gradient(160deg, #555 0%, #3a3a3a 100%)",
+  };
+  return `${sheen}, ${body[t]}`;
+}
+
+// Card frame edge color per type (the thin lit border).
+function typeEdge(t: CardType, active: boolean): string {
+  if (!active) return "rgba(255,255,255,0.08)";
   switch (t) {
-    case CardType.Attack: return `rgba(${(193 * d) | 0}, ${(45 * d) | 0}, ${(45 * d) | 0}, 1)`;
-    case CardType.Skill:  return `rgba(${(45 * d) | 0}, ${(105 * d) | 0}, ${(193 * d) | 0}, 1)`;
-    case CardType.Power:  return `rgba(${(140 * d) | 0}, ${(60 * d) | 0}, ${(193 * d) | 0}, 1)`;
-    case CardType.Status: return "#444";
+    case CardType.Attack: return "rgba(255,140,120,0.55)";
+    case CardType.Skill:  return "rgba(120,180,255,0.55)";
+    case CardType.Power:  return "rgba(200,140,255,0.55)";
+    case CardType.Status: return "rgba(255,255,255,0.15)";
   }
 }
 
@@ -656,7 +716,13 @@ function typeColor(t: CardType, active: boolean): string {
 const page: React.CSSProperties = {
   position: "absolute", inset: 0, display: "flex", flexDirection: "column",
   padding: 14, gap: 10,
-  background: "linear-gradient(180deg, #14141c 0%, #0a0a12 100%)",
+  // 深い藍黒の場 + 上方からの閃光の名残 (静的レイヤーのみ — 再描画コスト0)
+  background: [
+    "radial-gradient(1200px 500px at 50% -10%, rgba(120, 90, 220, 0.10), rgba(0,0,0,0) 60%)",
+    "radial-gradient(900px 400px at 85% 110%, rgba(40, 120, 200, 0.07), rgba(0,0,0,0) 60%)",
+    "radial-gradient(700px 380px at 12% 105%, rgba(200, 150, 60, 0.05), rgba(0,0,0,0) 60%)",
+    "linear-gradient(180deg, #131320 0%, #0b0b13 55%, #08080e 100%)",
+  ].join(", "),
   fontFamily: "ui-sans-serif, system-ui, sans-serif",
 };
 const topBar: React.CSSProperties = { display: "flex", justifyContent: "space-between", alignItems: "center" };
@@ -743,19 +809,33 @@ const pendingSlotCountdown: React.CSSProperties = {
 };
 
 const cardStyle: React.CSSProperties = {
-  width: CARD_W, height: CARD_H, padding: 10, borderRadius: 8, border: "1px solid #00000040",
+  width: CARD_W, height: CARD_H, padding: 10, borderRadius: 11,
   display: "flex", flexDirection: "column", justifyContent: "space-between", color: "white",
   position: "relative", textAlign: "left", flexShrink: 0,
+  overflow: "hidden",
 };
+// 閃コストの宝玉 — 金のラジアルグラデーションの円形バッジ。
 const cardCostStyle: React.CSSProperties = {
-  position: "absolute", top: 6, left: 8, fontSize: 18, fontWeight: 700,
-  textShadow: "0 1px 2px black", zIndex: 2,
+  position: "absolute", top: 6, left: 6,
+  minWidth: 30, height: 30, padding: "0 6px",
+  display: "flex", alignItems: "center", justifyContent: "center",
+  borderRadius: 999,
+  background: "radial-gradient(circle at 32% 28%, #fff3c0 0%, #ffd84d 38%, #b8860b 100%)",
+  color: "#241a00", fontSize: 14, fontWeight: 800,
+  border: "1px solid rgba(255,235,160,0.9)",
+  boxShadow: "0 2px 6px rgba(0,0,0,0.55), inset 0 -2px 3px rgba(120,80,0,0.45)",
+  textShadow: "none", zIndex: 2,
 };
 const typeBadge: React.CSSProperties = {
-  position: "absolute", top: 8, right: 8, fontSize: 10, opacity: 0.92,
-  background: "rgba(0,0,0,0.45)", padding: "1px 6px", borderRadius: 4, zIndex: 2,
+  position: "absolute", top: 9, right: 8, fontSize: 10, fontWeight: 700, letterSpacing: 1,
+  background: "rgba(0,0,0,0.5)", padding: "2px 7px", borderRadius: 999, zIndex: 2,
+  border: "1px solid rgba(255,255,255,0.16)",
 };
-const cardHeader: React.CSSProperties = { fontWeight: 600, fontSize: 13, marginTop: 32, textShadow: "0 1px 2px black", zIndex: 2 };
+const cardHeader: React.CSSProperties = {
+  fontWeight: 700, fontSize: 14, marginTop: 34, letterSpacing: 1,
+  textShadow: "0 1px 3px rgba(0,0,0,0.9)", zIndex: 2,
+  borderBottom: "1px solid rgba(255,255,255,0.18)", paddingBottom: 4,
+};
 const cardEffect: React.CSSProperties = { fontSize: 11, opacity: 0.95, lineHeight: 1.3, marginTop: 4, zIndex: 2 };
 const cardKeyHint: React.CSSProperties = { position: "absolute", bottom: 6, right: 8, fontSize: 11, opacity: 0.6, fontFamily: "ui-monospace, monospace", zIndex: 2 };
 

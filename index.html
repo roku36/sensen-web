@@ -10,6 +10,61 @@
       /* Hide the native scrollbar on the timeline (still scrollable via wheel). */
       .no-scrollbar { scrollbar-width: none; -ms-overflow-style: none; }
       .no-scrollbar::-webkit-scrollbar { display: none; width: 0; height: 0; }
+
+      /* ── 閃 visual language ──
+         GPU-cheap animations only: opacity / box-shadow / filter /
+         background-position on SMALL elements. Large surfaces stay static. */
+
+      /* NOW line: breathing gold glow. */
+      @keyframes now-glow {
+        0%, 100% { box-shadow: 0 0 6px 1px rgba(255,224,102,.65), 0 0 22px 4px rgba(255,224,102,.18); }
+        50%      { box-shadow: 0 0 10px 2px rgba(255,224,102,.95), 0 0 36px 8px rgba(255,224,102,.33); }
+      }
+      .now-line { animation: now-glow 2.4s ease-in-out infinite; }
+
+      /* 烈閃 band: slow shimmer sweep. */
+      @keyframes retsu-shimmer {
+        0%   { background-position: -150% 0; }
+        100% { background-position: 250% 0; }
+      }
+      .retsu-band {
+        background-image: linear-gradient(100deg,
+          rgba(255,200,60,.05) 20%, rgba(255,224,120,.16) 50%, rgba(255,200,60,.05) 80%);
+        background-size: 200% 100%;
+        animation: retsu-shimmer 3.6s linear infinite;
+      }
+
+      /* Casting head chip: urgent pulse as it nears resolution. */
+      @keyframes head-pulse {
+        0%, 100% { filter: brightness(1); }
+        50%      { filter: brightness(1.22); }
+      }
+      .chip-head { animation: head-pulse 1.2s ease-in-out infinite; }
+
+      /* Reserved card badge ring. */
+      @keyframes reserve-ring {
+        0%, 100% { box-shadow: 0 0 0 0 rgba(255,224,102,.55); }
+        50%      { box-shadow: 0 0 0 5px rgba(255,224,102,0); }
+      }
+      .reserved-card { animation: reserve-ring 1.6s ease-out infinite; }
+
+      /* Hand cards: lift on hover. */
+      .hand-card { transition: transform .16s ease, box-shadow .16s ease, filter .16s ease; }
+      .hand-card:hover:not(:disabled) {
+        transform: translateY(-7px) scale(1.025);
+        filter: brightness(1.08);
+      }
+
+      /* HP変化の数字ポップ: 浮かび上がって消える。 */
+      @keyframes dmg-pop {
+        0%   { transform: translateY(0) scale(1); opacity: 0; }
+        12%  { transform: translateY(-3px) scale(1.25); opacity: 1; }
+        100% { transform: translateY(-30px) scale(1); opacity: 0; }
+      }
+      .dmg-pop {
+        animation: dmg-pop .9s ease-out forwards;
+        pointer-events: none;
+      }
     </style>
   </head>
   <body>

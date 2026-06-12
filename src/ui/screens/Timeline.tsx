@@ -246,21 +246,23 @@ export function BattleZone({ game, op, me, now }: { game: GameState; op: PlayerS
               const x = NOW_OFFSET + (abs * SEC_PER_SEN - now) * PX_PER_SEC;
               const past = abs < nowSen;
               bands.push(
-                <div key={`rs${abs}`} style={{
+                <div key={`rs${abs}`} className={past ? undefined : "retsu-band"} style={{
                   position: "absolute", top: 0, height: TIMELINE_HEIGHT,
                   left: 0, transform: `translate3d(${x}px, 0, 0)`,
                   width: SEC_PER_SEN * PX_PER_SEC,
-                  background: past ? "rgba(255, 200, 60, 0.04)" : "rgba(255, 200, 60, 0.10)",
-                  borderLeft: `1px solid rgba(255, 200, 60, ${past ? 0.15 : 0.45})`,
+                  ...(past ? { background: "rgba(255, 200, 60, 0.04)" } : {}),
+                  borderLeft: `1px solid rgba(255, 210, 80, ${past ? 0.15 : 0.55})`,
+                  borderRight: `1px solid rgba(255, 210, 80, ${past ? 0.08 : 0.25})`,
                   pointerEvents: "none",
                 }}>
                   <div style={{
-                    position: "absolute", top: 16, left: 3,
-                    fontSize: 9, fontWeight: 700,
-                    color: past ? "rgba(255,200,60,0.3)" : "#ffc83c",
+                    position: "absolute", top: 14, left: 4,
+                    fontSize: 9, fontWeight: 800, letterSpacing: 1,
+                    color: past ? "rgba(255,200,60,0.3)" : "#ffd966",
+                    textShadow: past ? "none" : "0 0 6px rgba(255,200,60,0.8)",
                     fontFamily: "ui-monospace, monospace",
                     whiteSpace: "nowrap",
-                  }}>烈閃 攻撃+4</div>
+                  }}>⚡ 烈閃 攻撃+4</div>
                 </div>,
               );
             }
@@ -288,6 +290,26 @@ export function BattleZone({ game, op, me, now }: { game: GameState; op: PlayerS
             width={innerWidth} height={SVG_HEIGHT}
             style={{ position: "absolute", left: 0, top: SVG_TOP, pointerEvents: "none", overflow: "visible" }}
           >
+            {/* 質感: ブロック領域は縦グラデーションで「エネルギーの溜まり」
+                として描く。軸に近いほど濃い。 */}
+            <defs>
+              <linearGradient id="blockOpp" x1="0" y1="0" x2="0" y2="1">
+                <stop offset="0%" stopColor="rgba(95,160,224,0.18)" />
+                <stop offset="100%" stopColor="rgba(120,190,255,0.6)" />
+              </linearGradient>
+              <linearGradient id="blockSelf" x1="0" y1="0" x2="0" y2="1">
+                <stop offset="0%" stopColor="rgba(110,230,160,0.6)" />
+                <stop offset="100%" stopColor="rgba(95,200,130,0.18)" />
+              </linearGradient>
+              <linearGradient id="poisonOpp" x1="0" y1="0" x2="0" y2="1">
+                <stop offset="0%" stopColor="rgba(95,200,110,0.65)" />
+                <stop offset="100%" stopColor="rgba(60,140,80,0.25)" />
+              </linearGradient>
+              <linearGradient id="poisonSelf" x1="0" y1="0" x2="0" y2="1">
+                <stop offset="0%" stopColor="rgba(60,140,80,0.25)" />
+                <stop offset="100%" stopColor="rgba(95,200,110,0.65)" />
+              </linearGradient>
+            </defs>
             <BlockArea history={op.blockHistory} future={opBlockPred} offset={predOffset} side="opp" nowSec={now} maxSec={maxSec} hidden={hideOppQueue} />
             <BlockArea history={me.blockHistory} future={meBlockPred} offset={predOffset} side="self" nowSec={now} maxSec={maxSec} />
             <PoisonArea currentPoison={op.poison} future={opPoisonPred} offset={predOffset} side="opp" maxSec={maxSec} hidden={hideOppQueue} />
@@ -300,7 +322,7 @@ export function BattleZone({ game, op, me, now }: { game: GameState; op: PlayerS
             <PoisonChangeLabels currentPoison={me.poison} future={mePoisonPred} offset={predOffset} side="self" maxSec={maxSec} />
           </svg>
           <div style={{ ...nowDivider, left: NOW_OFFSET - 18, top: BLOCK_CENTER - 8 }}>NOW</div>
-          <div style={{ ...nowLine, left: NOW_OFFSET, height: TIMELINE_HEIGHT }} />
+          <div className="now-line" style={{ ...nowLine, left: NOW_OFFSET, height: TIMELINE_HEIGHT }} />
           {/* Queue chips. Opp queue + history are hidden until the local
               second-player has committed something. */}
           {!hideOppQueue && opHist.map((b, i) => (
@@ -501,6 +523,10 @@ function QueueBox({ cardId, drawSlots, drawFilledCount, duration, startRel, endR
     : "#5fa0e0";
   // Resolved chips and ghost reservations both render dimmed.
   const color = resolved ? dim(baseColor, 0.45) : ghost ? dim(baseColor, 0.6) : baseColor;
+  // 実チップは縦グラデーション (上が明るい) で立体感を出す。
+  const bg = resolved || ghost
+    ? color
+    : `linear-gradient(180deg, ${lighten(baseColor, 0.25)} 0%, ${baseColor} 45%, ${dim(baseColor, 0.7)} 100%)`;
   const left = NOW_OFFSET + startRel * PX_PER_SEC;
   const w = duration * PX_PER_SEC;
   const glow = !resolved && !ghost && isHead && endRel < 0.4;
@@ -517,6 +543,7 @@ function QueueBox({ cardId, drawSlots, drawFilledCount, duration, startRel, endR
 
   return (
     <div
+      className={!resolved && !ghost && isHead ? "chip-head" : undefined}
       style={{
         position: "absolute",
         // transform (not left/top) so the per-frame ~0.6px slide is GPU-
@@ -526,17 +553,18 @@ function QueueBox({ cardId, drawSlots, drawFilledCount, duration, startRel, endR
         left: 0, top: 0,
         transform: `translate3d(${left}px, ${yTop}px, 0)`,
         width: w, height: BOX_HEIGHT,
-        background: color,
+        background: bg,
         // Ghost: dashed yellow-tinted border so it visually reads as
         // "reserved, not yet committed".
         border: ghost
           ? `2px dashed rgba(255, 224, 102, 0.85)`
-          : `2px solid ${glow ? "#fff" : color}`,
+          : glow ? "2px solid #fff" : `1px solid ${lighten(baseColor, resolved ? 0 : 0.3)}55`,
         boxSizing: "border-box",
         boxShadow: glow
           ? `0 0 ${10 + 20 * glowIntensity}px rgba(255,255,200,${0.4 + 0.5 * glowIntensity})`
-          : resolved || ghost ? "none" : "0 2px 6px rgba(0,0,0,0.4)",
-        borderRadius: 6,
+          : resolved || ghost ? "none"
+          : "0 3px 8px rgba(0,0,0,0.5), inset 0 1px 0 rgba(255,255,255,0.22)",
+        borderRadius: 7,
         padding: "3px 8px",
         color: ghost ? "rgba(255, 224, 102, 0.85)" : resolved ? "rgba(255,255,255,0.55)" : "white",
         overflow: "hidden",
@@ -566,6 +594,17 @@ function QueueBox({ cardId, drawSlots, drawFilledCount, duration, startRel, endR
       </div>
     </div>
   );
+}
+
+// hex → white 方向に k だけ寄せる (チップの上端ハイライト用)。
+function lighten(hex: string, k: number): string {
+  const m = /^#([0-9a-f]{2})([0-9a-f]{2})([0-9a-f]{2})$/i.exec(hex);
+  if (!m) return hex;
+  const f = (s: string) => {
+    const v = parseInt(s, 16);
+    return Math.round(v + (255 - v) * k);
+  };
+  return `rgb(${f(m[1])}, ${f(m[2])}, ${f(m[3])})`;
 }
 
 export function dim(hex: string, k: number): string {
@@ -614,12 +653,13 @@ function BlockArea({
   const futureSamples = future;
   if (futureSamples.length < 1 && history.length === 0) return null;
 
-  const color = side === "opp"
-    ? (hidden ? "rgba(95, 160, 224, 0.12)" : "rgba(95, 160, 224, 0.45)")
-    : (hidden ? "rgba(95, 200, 130, 0.12)" : "rgba(95, 200, 130, 0.45)");
+  // 通常時は <defs> の縦グラデーション (軸側ほど濃い) で塗る。
+  const color = hidden
+    ? (side === "opp" ? "rgba(95, 160, 224, 0.10)" : "rgba(95, 200, 130, 0.10)")
+    : (side === "opp" ? "url(#blockOpp)" : "url(#blockSelf)");
   const stroke = side === "opp"
-    ? (hidden ? "rgba(95, 160, 224, 0.25)" : "#5fa0e0")
-    : (hidden ? "rgba(95, 200, 130, 0.25)" : "#5fc882");
+    ? (hidden ? "rgba(95, 160, 224, 0.25)" : "#7cc0ff")
+    : (hidden ? "rgba(95, 200, 130, 0.25)" : "#7fe8a8");
   // Snap to integer pixels — without this, the polygon's X positions
   // drift sub-pixel each frame (PX_PER_SEC * 1/60 ≈ 0.58 px/frame), and
   // SVG anti-aliasing shimmers visibly along the edges. Block values are
@@ -707,9 +747,18 @@ function BlockArea({
         fill={color} stroke="none"
         shapeRendering="crispEdges"
       />
+      {/* 発光: 太い半透明ストローク + 細い実線の二重描き (SVGフィルタ不使用
+          で安価にグロー感を出す)。 */}
+      {!hidden && (
+        <polyline
+          points={points.slice(1, -1).join(" ")}
+          fill="none" stroke={stroke} strokeWidth={4} opacity={0.22}
+          shapeRendering="crispEdges"
+        />
+      )}
       <polyline
         points={points.slice(1, -1).join(" ")}
-        fill="none" stroke={stroke} strokeWidth={1.5} opacity={hidden ? 0.4 : 0.85}
+        fill="none" stroke={stroke} strokeWidth={1.5} opacity={hidden ? 0.4 : 0.95}
         shapeRendering="crispEdges"
       />
     </>
@@ -737,8 +786,8 @@ function PoisonArea({
   if (currentPoison <= 0 && future.every((s) => s.poison <= 0)) return null;
   const color = hidden
     ? "rgba(95, 200, 110, 0.18)"
-    : "rgba(95, 200, 110, 0.55)";
-  const stroke = hidden ? "rgba(95, 200, 110, 0.35)" : "#5fc870";
+    : side === "opp" ? "url(#poisonOpp)" : "url(#poisonSelf)";
+  const stroke = hidden ? "rgba(95, 200, 110, 0.35)" : "#6fe88a";
   const outerY = side === "opp" ? BLOCK_OUTER_Y_OPP : BLOCK_OUTER_Y_SELF;
   // Past portion: flat at currentPoison from history-left to NOW.
   const xForT = (t: number) =>
@@ -941,10 +990,11 @@ function PoisonChangeLabels({
 const battleZone: React.CSSProperties = {
   position: "relative",
   display: "flex", flexDirection: "column",
-  background: "rgba(40, 30, 60, 0.25)",
-  border: "1px solid rgba(110, 80, 170, 0.35)",
-  borderRadius: 10,
+  background: "linear-gradient(180deg, rgba(48, 36, 76, 0.35) 0%, rgba(24, 18, 40, 0.30) 100%)",
+  border: "1px solid rgba(140, 105, 220, 0.40)",
+  borderRadius: 12,
   padding: 8,
+  boxShadow: "0 8px 28px rgba(0,0,0,0.45), inset 0 1px 0 rgba(255,255,255,0.07)",
 };
 // Row ownership tag (相手/自分) pinned to the timeline's left edge.
 const rowTag: React.CSSProperties = {
