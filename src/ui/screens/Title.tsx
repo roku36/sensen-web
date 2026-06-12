@@ -35,8 +35,14 @@ export function Title() {
   return (
     <div style={overlay}>
       <div style={panel}>
-        <h1 style={{ fontSize: 56, margin: 0, letterSpacing: 8 }}>SENSEN</h1>
-        <p style={{ opacity: 0.6, margin: "0 0 12px" }}>web port — deterministic sim + p2p rollback</p>
+        <h1 style={{
+          fontSize: 64, margin: 0, letterSpacing: 16,
+          fontFamily: '"Hiragino Mincho ProN", "Yu Mincho", serif', fontWeight: 800,
+          color: "#e8e4da",
+        }}>閃戦</h1>
+        <p style={{ opacity: 0.5, margin: "2px 0 12px", fontSize: 11, letterSpacing: 6 }}>
+          SENSEN — deterministic sim + p2p rollback
+        </p>
         {streak > 0 && (
           <div style={streakChip}>
             🔥 連勝 {streak}
@@ -118,8 +124,8 @@ const checkboxRow: React.CSSProperties = { display: "flex", gap: 6, fontSize: 11
 
 const overlay: React.CSSProperties = { position: "absolute", inset: 0, display: "grid", placeItems: "center", pointerEvents: "auto" };
 const panel: React.CSSProperties = { background: "rgba(0,0,0,0.6)", padding: 32, borderRadius: 16, minWidth: 380, maxWidth: 460, textAlign: "center" };
-const btn: React.CSSProperties = { background: "#5a3a8a", color: "white", border: 0, borderRadius: 8, padding: "12px 24px", fontSize: 16, cursor: "pointer", width: "100%" };
+const btn: React.CSSProperties = { background: "#e8472b", color: "#e8e4da", border: 0, borderRadius: 2, padding: "12px 24px", fontSize: 15, fontWeight: 700, letterSpacing: 2, cursor: "pointer", width: "100%" };
 const input: React.CSSProperties = { background: "#1a1a22", color: "white", border: "1px solid #444", borderRadius: 8, padding: "10px 12px", fontSize: 14, marginBottom: 12, width: "calc(100% - 26px)" };
-const deckBtn: React.CSSProperties = { background: "transparent", color: "#aaa", border: "1px solid #444", borderRadius: 8, padding: "8px 16px", fontSize: 13, cursor: "pointer", width: "100%" };
-const streakChip: React.CSSProperties = { display: "inline-block", padding: "6px 14px", borderRadius: 999, background: "rgba(255,180,80,0.18)", color: "#ffd070", border: "1px solid rgba(255,180,80,0.45)", fontSize: 14, marginBottom: 14 };
+const deckBtn: React.CSSProperties = { background: "transparent", color: "#aaa", border: "1px solid #444", borderRadius: 2, padding: "8px 16px", fontSize: 13, cursor: "pointer", width: "100%" };
+const streakChip: React.CSSProperties = { display: "inline-block", padding: "5px 14px", background: "rgba(232,71,43,0.12)", color: "#e8472b", border: "1px solid rgba(232,71,43,0.5)", fontSize: 13, fontWeight: 700, marginBottom: 14 };
 const streakBucketHint: React.CSSProperties = { fontSize: 11, opacity: 0.7, marginLeft: 8 };

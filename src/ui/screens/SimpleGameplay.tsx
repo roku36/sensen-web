@@ -82,17 +82,17 @@ export function SimpleGameplay() {
     <div style={page}>
       <div style={topBar}>
         <button style={ghostBtn} onClick={() => setScreen("title")}>← タイトル</button>
-        <span style={{ opacity: 0.6, fontSize: 12, fontFamily: "ui-monospace, monospace" }}>
+        <span style={{ fontSize: 16, fontFamily: MINCHO, fontWeight: 800, letterSpacing: 3, color: "rgba(232,228,218,0.85)" }}>
           {(() => {
             const sen = Math.floor(game.frame / FRAMES_PER_SEN);
             const sd = sen >= SUDDEN_DEATH_START_SEN;
             const dmg = sd ? 1 + Math.floor((sen - SUDDEN_DEATH_START_SEN) / SUDDEN_DEATH_RAMP_SEN) : 0;
             return (
               <>
-                <span style={sd ? { color: "#ff6b5e", fontWeight: 700 } : undefined}>第{sen}閃</span>
-                {sd && <span style={{ color: "#ff6b5e", marginLeft: 8 }}>焦土 −{dmg}HP/閃</span>}
+                <span style={sd ? { color: SHU } : undefined}>第{sen}閃</span>
+                {sd && <span style={{ color: SHU, marginLeft: 10, fontSize: 12 }}>焦土 −{dmg}HP/閃</span>}
                 {!sd && sen >= SUDDEN_DEATH_START_SEN - 5 && (
-                  <span style={{ color: "#ffb347", marginLeft: 8 }}>焦土まで {SUDDEN_DEATH_START_SEN - sen}閃</span>
+                  <span style={{ color: SHU, opacity: 0.7, marginLeft: 10, fontSize: 12 }}>焦土まで {SUDDEN_DEATH_START_SEN - sen}閃</span>
                 )}
               </>
             );
@@ -191,7 +191,7 @@ function PlayerInfoCard({
       ))}
       <div style={pillRow}>
         {player.renzan >= 2 && (
-          <span style={pill("#ffd166")}>
+          <span style={pill("#e8e4da")}>
             連閃 ×{player.renzan}（攻撃+{Math.min(5, player.renzan - 1)}）
           </span>
         )}
@@ -270,7 +270,7 @@ function OpponentHand({ player, now }: { player: PlayerState; now: number }) {
           // anticipate the threat. Render a mini name+cost chip instead
           // of the generic face-down back.
           if (def && def.reveal) return <RevealedBack key={i} def={def} />;
-          return <div key={i} style={cardBack}><div style={cardBackSigil}>✦</div></div>;
+          return <div key={i} style={cardBack}><div style={cardBackSigil}>閃</div></div>;
         }
         if (pending !== null) {
           return <PendingBack key={i} info={pending} now={now} />;
@@ -336,7 +336,7 @@ function PendingSlot({ info, now }: { info: { startedAt: number; fillsAt: number
       <div style={{
         position: "absolute", left: 0, right: 0, bottom: 0,
         height: `${fillPct * 100}%`,
-        background: "linear-gradient(180deg, rgba(95,160,224,0.25) 0%, rgba(95,160,224,0.55) 100%)",
+        background: "rgba(51, 82, 110, 0.55)", // 藍鉄 flat
         // No transition: height is recomputed every frame already; a CSS
         // transition on top of that just lags behind and stutters.
         pointerEvents: "none",
@@ -357,12 +357,12 @@ function PendingBack({ info, now }: { info: { startedAt: number; fillsAt: number
       <div style={{
         position: "absolute", left: 0, right: 0, bottom: 0,
         height: `${fillPct * 100}%`,
-        background: "linear-gradient(180deg, rgba(122,93,184,0.35) 0%, rgba(122,93,184,0.55) 100%)",
+        background: "rgba(51, 82, 110, 0.55)", // 藍鉄 flat
         // No transition: height is recomputed every frame already; a CSS
         // transition on top of that just lags behind and stutters.
         pointerEvents: "none",
       }} />
-      <div style={{ fontSize: 11, fontWeight: 700, color: "#a899ff", textShadow: "0 1px 2px black", zIndex: 1 }}>
+      <div style={{ fontSize: 11, fontWeight: 700, color: "rgba(232,228,218,0.85)", textShadow: "0 1px 2px black", zIndex: 1 }}>
         {remainingSen.toFixed(1)}閃
       </div>
     </div>
@@ -406,7 +406,7 @@ function SimpleCard({ cardId, idx, player, now }: { cardId: number; idx: number;
   return (
     <div style={{ position: "relative" }} onMouseEnter={() => setHover(true)} onMouseLeave={() => setHover(false)}>
       <button
-        className={`hand-card${reserved ? " reserved-card" : ""}`}
+        className="hand-card"
         onClick={onClick}
         onContextMenu={onContextMenu}
         disabled={!clickable}
@@ -414,15 +414,13 @@ function SimpleCard({ cardId, idx, player, now }: { cardId: number; idx: number;
           ...cardStyle,
           background: typeColor(def.cardType, clickable),
           cursor: clickable ? "pointer" : "not-allowed",
-          boxShadow: clickable
-            ? "0 6px 18px rgba(0,0,0,0.55), inset 0 1px 0 rgba(255,255,255,0.18), inset 0 -1px 0 rgba(0,0,0,0.4)"
-            : "inset 0 1px 0 rgba(255,255,255,0.05)",
+          // 予約 = 朱の縁。それ以外は紙の hairline。影は使わない。
           border: reserved
-            ? "1px solid rgba(255,224,102,0.9)"
+            ? `2px solid ${SHU}`
             : `1px solid ${typeEdge(def.cardType, clickable)}`,
-          outline: def.exhausts && !reserved ? "1px solid rgba(255,170,85,0.5)" : "none",
+          outline: def.exhausts && !reserved ? "1px dashed rgba(232,228,218,0.25)" : "none",
           outlineOffset: 2,
-          opacity: clickable ? 1 : 0.55,
+          opacity: clickable ? 1 : 0.5,
         }}
       >
         {!clickable && (
@@ -430,11 +428,11 @@ function SimpleCard({ cardId, idx, player, now }: { cardId: number; idx: number;
         )}
         {reserved && (
           <div aria-hidden style={{
-            position: "absolute", top: -10, left: "50%", transform: "translateX(-50%)",
-            background: "#ffe066", color: "#1a1a22",
-            padding: "2px 8px", borderRadius: 999,
-            fontSize: 11, fontWeight: 700, letterSpacing: 1, zIndex: 3,
-            boxShadow: "0 0 6px rgba(255, 224, 102, 0.6)",
+            position: "absolute", top: -9, left: "50%", transform: "translateX(-50%)",
+            background: SHU, color: KAMI,
+            padding: "1px 8px",
+            fontSize: 11, fontWeight: 800, letterSpacing: 1, zIndex: 3,
+            fontFamily: MINCHO,
           }}>{reservationOrder}</div>
         )}
         {def.matureInto !== undefined && (def.matureSen ?? 0) > 0 && (
@@ -469,16 +467,16 @@ function SimpleCard({ cardId, idx, player, now }: { cardId: number; idx: number;
             );
           })()
         )}
-        <div style={{ ...cardCostStyle, ...(unplayable ? { filter: "grayscale(1) brightness(0.7)" } : clickable ? {} : { filter: "saturate(0.4) brightness(0.75)" }) }}>
-          {unplayable ? "✗" : def.cost}<span style={{ fontSize: 9, fontWeight: 700, marginLeft: 1 }}>閃</span>
+        <div style={{ ...cardCostStyle, opacity: clickable ? 1 : 0.45 }}>
+          {unplayable ? "✗" : def.cost}<span style={{ fontSize: 9, fontWeight: 800, marginLeft: 1 }}>閃</span>
         </div>
         {(def.prereqQueueTime ?? 0) > 0 && (
           <div style={{
-            position: "absolute", top: 40, left: 6, zIndex: 2,
-            fontSize: 9, fontWeight: 700, padding: "1px 6px", borderRadius: 999,
-            background: prereqOk ? "rgba(40,120,70,0.85)" : "rgba(120,70,20,0.85)",
-            color: prereqOk ? "#a8ffc8" : "#ffc890",
-            border: `1px solid ${prereqOk ? "rgba(128,255,160,0.5)" : "rgba(255,154,64,0.5)"}`,
+            position: "absolute", top: 36, left: 0, zIndex: 2,
+            fontSize: 9, fontWeight: 700, padding: "1px 6px", letterSpacing: 1,
+            // 充足 = 静かな紙。未満 = 朱 (まだ刃が届かない)。
+            background: prereqOk ? "rgba(232,228,218,0.14)" : SHU,
+            color: prereqOk ? "rgba(232,228,218,0.8)" : KAMI,
           }}>
             要{def.prereqQueueTime}閃
           </div>
@@ -540,19 +538,18 @@ function DrawButton({ player }: { player: PlayerState }) {
         // Clickability drives the look — a draw being mid-cast does NOT
         // disable the button (another draw can still be reserved), so it
         // must not LOOK disabled while enabled.
-        background: enabled ? "linear-gradient(180deg, #2c5b8e 0%, #1a3d6e 100%)" : "#1a1a22",
-        color: enabled ? "#fff" : "#666",
+        background: enabled ? "#33526e" : "#17171a",
+        color: enabled ? KAMI : "rgba(232,228,218,0.35)",
         cursor: enabled ? "pointer" : "not-allowed",
-        borderColor: isReservation ? "#ffe066" : enabled ? "#3a7fbf" : "#2a2a35",
-        outline: isReservation ? "2px solid #ffe066" : "none",
-        outlineOffset: -2,
+        borderColor: isReservation ? SHU : enabled ? "rgba(232,228,218,0.22)" : "rgba(232,228,218,0.08)",
+        outline: "none",
       }}
       title={enabled ? `${emptyCount}枚 / ${costSen}閃` : "空きなし"}
     >
       {isReservation && (
         <span style={{
-          background: "#ffe066", color: "#1a1a22", padding: "1px 6px",
-          borderRadius: 4, fontSize: 10, fontWeight: 700, letterSpacing: 1, marginRight: 8,
+          background: SHU, color: KAMI, padding: "1px 8px",
+          fontSize: 10, fontWeight: 800, letterSpacing: 1, marginRight: 8, fontFamily: MINCHO,
         }}>予約中</span>
       )}
       <span style={{ fontSize: 16, fontWeight: 700, letterSpacing: 2 }}>⇊ ドロー (D)</span>
@@ -586,7 +583,7 @@ function AdvanceButton() {
   return (
     <div style={{ display: "flex", gap: 8, justifyContent: "center", marginTop: 4 }}>
       <button onClick={onClickHalf} style={advanceBtnStyle}>+0.5 閃</button>
-      <button onClick={onClick} style={{ ...advanceBtnStyle, background: "#3a6c3a", borderColor: "#5a9c5a" }}>
+      <button onClick={onClick} style={{ ...advanceBtnStyle, background: SHU, borderColor: SHU, fontFamily: MINCHO, fontWeight: 800 }}>
         次の閃 (+1 閃)
       </button>
     </div>
@@ -678,51 +675,39 @@ function effectText(e: CardEffect): string {
   }
 }
 
-// Card face: layered gradient per type — a lit top edge, a deep diagonal
-// body, and a darker base so the frame reads as物. Inactive = desaturated.
+// 機能色 — flat 塗り。テーマ色ではなくゲームプレイ上の識別
+// (docs/design-language.md: 攻撃=弁柄 / 技=藍鉄 / パワー=紫紺)。
 function typeColor(t: CardType, active: boolean): string {
-  const sheen = "linear-gradient(180deg, rgba(255,255,255,0.14) 0%, rgba(255,255,255,0.03) 26%, rgba(0,0,0,0) 45%)";
-  if (!active) {
-    const flat: Record<number, string> = {
-      [CardType.Attack]: "linear-gradient(160deg, #4a2326 0%, #321a1e 60%, #241318 100%)",
-      [CardType.Skill]:  "linear-gradient(160deg, #1f3450 0%, #182638 60%, #121c2a 100%)",
-      [CardType.Power]:  "linear-gradient(160deg, #3a2450 0%, #2a1a3c 60%, #1e1430 100%)",
-      [CardType.Status]: "linear-gradient(160deg, #333 0%, #222 100%)",
-    };
-    return `${sheen}, ${flat[t]}`;
-  }
-  const body: Record<number, string> = {
-    [CardType.Attack]: "linear-gradient(160deg, #d8403c 0%, #a02430 46%, #5e1622 100%)",
-    [CardType.Skill]:  "linear-gradient(160deg, #3d83d8 0%, #2456a0 46%, #16335e 100%)",
-    [CardType.Power]:  "linear-gradient(160deg, #a050d8 0%, #6e2ea0 46%, #401a5e 100%)",
-    [CardType.Status]: "linear-gradient(160deg, #555 0%, #3a3a3a 100%)",
+  const on: Record<number, string> = {
+    [CardType.Attack]: "#8e3a30",
+    [CardType.Skill]:  "#33526e",
+    [CardType.Power]:  "#544668",
+    [CardType.Status]: "#3a3a3e",
   };
-  return `${sheen}, ${body[t]}`;
+  const off: Record<number, string> = {
+    [CardType.Attack]: "#46241f",
+    [CardType.Skill]:  "#1f2e3c",
+    [CardType.Power]:  "#2e2738",
+    [CardType.Status]: "#28282c",
+  };
+  return (active ? on : off)[t];
 }
 
-// Card frame edge color per type (the thin lit border).
-function typeEdge(t: CardType, active: boolean): string {
-  if (!active) return "rgba(255,255,255,0.08)";
-  switch (t) {
-    case CardType.Attack: return "rgba(255,140,120,0.55)";
-    case CardType.Skill:  return "rgba(120,180,255,0.55)";
-    case CardType.Power:  return "rgba(200,140,255,0.55)";
-    case CardType.Status: return "rgba(255,255,255,0.15)";
-  }
+// 縁は紙の hairline。タイプで変えない (色の氾濫を防ぐ)。
+function typeEdge(_t: CardType, active: boolean): string {
+  return active ? "rgba(232,228,218,0.22)" : "rgba(232,228,218,0.08)";
 }
 
 // ── styles ──
 
+const MINCHO = '"Hiragino Mincho ProN", "Yu Mincho", "Noto Serif JP", serif';
+const SHU = "#e8472b";
+const KAMI = "#e8e4da";
+
 const page: React.CSSProperties = {
   position: "absolute", inset: 0, display: "flex", flexDirection: "column",
   padding: 14, gap: 10,
-  // 深い藍黒の場 + 上方からの閃光の名残 (静的レイヤーのみ — 再描画コスト0)
-  background: [
-    "radial-gradient(1200px 500px at 50% -10%, rgba(120, 90, 220, 0.10), rgba(0,0,0,0) 60%)",
-    "radial-gradient(900px 400px at 85% 110%, rgba(40, 120, 200, 0.07), rgba(0,0,0,0) 60%)",
-    "radial-gradient(700px 380px at 12% 105%, rgba(200, 150, 60, 0.05), rgba(0,0,0,0) 60%)",
-    "linear-gradient(180deg, #131320 0%, #0b0b13 55%, #08080e 100%)",
-  ].join(", "),
+  background: "#0f0f11", // 墨。装飾しない
   fontFamily: "ui-sans-serif, system-ui, sans-serif",
 };
 const topBar: React.CSSProperties = { display: "flex", justifyContent: "space-between", alignItems: "center" };
@@ -736,7 +721,7 @@ const infoColumn: React.CSSProperties = {
   width: 260, flexShrink: 0,
 };
 const infoCard: React.CSSProperties = {
-  padding: 10, background: "#181822", border: "1px solid #2a2a35", borderRadius: 10,
+  padding: 10, background: "#17171a", border: "1px solid rgba(232,228,218,0.10)", borderRadius: 2,
   display: "flex", flexDirection: "column", gap: 6,
 };
 const infoCardTitle: React.CSSProperties = {
@@ -756,25 +741,27 @@ const oppHandRow: React.CSSProperties = {
   marginLeft: "auto", marginRight: "auto",
 };
 const cardBack: React.CSSProperties = {
-  width: BACK_W, height: BACK_H, borderRadius: 6,
-  background: "linear-gradient(135deg, #2a2438 0%, #15101e 100%)",
-  border: "1px solid #4a3d6a",
+  width: BACK_W, height: BACK_H, borderRadius: 2,
+  background: "#1c1c20",
+  border: "1px solid rgba(232,228,218,0.16)",
   display: "flex", alignItems: "center", justifyContent: "center",
-  boxShadow: "inset 0 0 8px rgba(160, 110, 255, 0.15), 0 2px 6px rgba(0,0,0,0.4)",
   flexShrink: 0,
 };
-const cardBackSigil: React.CSSProperties = { color: "#7a5db8", opacity: 0.55, fontSize: 22 };
+const cardBackSigil: React.CSSProperties = {
+  color: "rgba(232,228,218,0.30)", fontSize: 18,
+  fontFamily: MINCHO, fontWeight: 800,
+};
 const emptyBack: React.CSSProperties = {
-  width: BACK_W, height: BACK_H, borderRadius: 6,
-  background: "rgba(20, 20, 28, 0.4)",
-  border: "1px dashed rgba(122,93,184,0.18)",
+  width: BACK_W, height: BACK_H, borderRadius: 2,
+  background: "rgba(232,228,218,0.02)",
+  border: "1px dashed rgba(232,228,218,0.10)",
   flexShrink: 0,
 };
 const pendingBack: React.CSSProperties = {
   position: "relative", overflow: "hidden",
-  width: BACK_W, height: BACK_H, borderRadius: 6,
-  background: "rgba(30, 24, 44, 0.55)",
-  border: "1px dashed rgba(122,93,184,0.55)",
+  width: BACK_W, height: BACK_H, borderRadius: 2,
+  background: "#17171a",
+  border: "1px dashed rgba(232,228,218,0.30)",
   display: "flex", alignItems: "center", justifyContent: "center",
   flexShrink: 0,
 };
@@ -793,7 +780,7 @@ const pendingSlotFront: React.CSSProperties = {
   position: "relative", overflow: "hidden",
   width: CARD_W, height: CARD_H, borderRadius: 8,
   background: "rgba(20, 28, 40, 0.55)",
-  border: "1px dashed rgba(95,160,224,0.55)",
+  border: "1px dashed rgba(232,228,218,0.30)",
   display: "flex", flexDirection: "column", justifyContent: "flex-end",
   alignItems: "center", padding: "6px 4px", color: "#bdd6f0",
   flexShrink: 0,
@@ -809,39 +796,36 @@ const pendingSlotCountdown: React.CSSProperties = {
 };
 
 const cardStyle: React.CSSProperties = {
-  width: CARD_W, height: CARD_H, padding: 10, borderRadius: 11,
-  display: "flex", flexDirection: "column", justifyContent: "space-between", color: "white",
+  width: CARD_W, height: CARD_H, padding: 10, borderRadius: 2, // 刃 — 直角
+  display: "flex", flexDirection: "column", justifyContent: "space-between", color: KAMI,
   position: "relative", textAlign: "left", flexShrink: 0,
   overflow: "hidden",
 };
-// 閃コストの宝玉 — 金のラジアルグラデーションの円形バッジ。
+// 閃コスト札 — 紙地に墨文字、右下を45°で切り落とす (唯一のモチーフ:斜め切り)。
 const cardCostStyle: React.CSSProperties = {
-  position: "absolute", top: 6, left: 6,
-  minWidth: 30, height: 30, padding: "0 6px",
+  position: "absolute", top: 0, left: 0,
+  minWidth: 34, height: 30, padding: "0 8px 4px 6px",
   display: "flex", alignItems: "center", justifyContent: "center",
-  borderRadius: 999,
-  background: "radial-gradient(circle at 32% 28%, #fff3c0 0%, #ffd84d 38%, #b8860b 100%)",
-  color: "#241a00", fontSize: 14, fontWeight: 800,
-  border: "1px solid rgba(255,235,160,0.9)",
-  boxShadow: "0 2px 6px rgba(0,0,0,0.55), inset 0 -2px 3px rgba(120,80,0,0.45)",
-  textShadow: "none", zIndex: 2,
+  background: KAMI, color: "#16161a",
+  fontSize: 16, fontWeight: 800, fontFamily: MINCHO,
+  clipPath: "polygon(0 0, 100% 0, 100% 55%, 72% 100%, 0 100%)",
+  zIndex: 2,
 };
 const typeBadge: React.CSSProperties = {
-  position: "absolute", top: 9, right: 8, fontSize: 10, fontWeight: 700, letterSpacing: 1,
-  background: "rgba(0,0,0,0.5)", padding: "2px 7px", borderRadius: 999, zIndex: 2,
-  border: "1px solid rgba(255,255,255,0.16)",
+  position: "absolute", top: 8, right: 8, fontSize: 10, fontWeight: 700, letterSpacing: 2,
+  color: "rgba(232,228,218,0.75)", zIndex: 2,
 };
 const cardHeader: React.CSSProperties = {
-  fontWeight: 700, fontSize: 14, marginTop: 34, letterSpacing: 1,
-  textShadow: "0 1px 3px rgba(0,0,0,0.9)", zIndex: 2,
-  borderBottom: "1px solid rgba(255,255,255,0.18)", paddingBottom: 4,
+  fontWeight: 800, fontSize: 15, marginTop: 34, letterSpacing: 2,
+  fontFamily: MINCHO, zIndex: 2,
+  borderBottom: "1px solid rgba(232,228,218,0.22)", paddingBottom: 4,
 };
 const cardEffect: React.CSSProperties = { fontSize: 11, opacity: 0.95, lineHeight: 1.3, marginTop: 4, zIndex: 2 };
 const cardKeyHint: React.CSSProperties = { position: "absolute", bottom: 6, right: 8, fontSize: 11, opacity: 0.6, fontFamily: "ui-monospace, monospace", zIndex: 2 };
 
 const drawButtonStyle: React.CSSProperties = {
   marginLeft: "auto", marginRight: "auto",
-  height: 44, borderRadius: 8, border: "1px solid #3a7fbf",
+  height: 44, borderRadius: 2, border: "1px solid",
   display: "flex", alignItems: "center", justifyContent: "center",
   gap: 8, fontFamily: "ui-sans-serif, system-ui, sans-serif",
 };
@@ -850,9 +834,9 @@ const controlsHint: React.CSSProperties = {
   letterSpacing: 0.5,
 };
 const advanceBtnStyle: React.CSSProperties = {
-  padding: "6px 16px", borderRadius: 6,
-  background: "#2a4a2a", color: "white",
-  border: "1px solid #4a7c4a",
+  padding: "6px 16px", borderRadius: 2,
+  background: "#222226", color: KAMI,
+  border: "1px solid rgba(232,228,218,0.25)",
   fontSize: 13, fontWeight: 600, cursor: "pointer",
 };
 
