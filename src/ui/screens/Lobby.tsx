@@ -3,8 +3,7 @@
 // peer in room, dead WebRTC negotiation) can be recovered without a reload.
 
 import { useEffect, useState } from "react";
-import { createTestDeck } from "../../sim/cards";
-import { backToTitle, startOnline } from "../hooks";
+import { backToTitle, loadDeck, startOnline } from "../hooks";
 import { useStore } from "../store";
 
 const STUCK_AFTER_MS = 12_000;
@@ -31,7 +30,10 @@ export function Lobby() {
     return () => clearTimeout(id);
   }, []);
 
-  const retry = () => { setStuck(false); void startOnline(lastUrl, createTestDeck()); };
+  // 再接続も初回 (Title の Find Match) と同じく構築済みデッキで入室する。
+  // 以前は createTestDeck() を渡しており、スタック復帰時だけプレイヤーの
+  // デッキが黙って無視されていた (issue #6)。
+  const retry = () => { setStuck(false); void startOnline(lastUrl, loadDeck()); };
   const cancel = () => { void backToTitle(); };
 
   return (
