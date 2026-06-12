@@ -5,6 +5,7 @@
 // 凍結されるので、開始直後にオートパイロットが手を打ってしまうことは
 // なく、純粋な計画パズルになる。クリア判定は store の game を監視。
 
+import { useState } from "react";
 import { PuzzleDef, PUZZLES, setupPuzzle } from "../../puzzles/defs";
 import { OfflineSession } from "../../net/offline";
 import { FRAMES_PER_SEN } from "../../sim/rules";
@@ -12,32 +13,26 @@ import { backToTitle, getSession, startOffline } from "../hooks";
 import { useStore } from "../store";
 import { SimpleGameplay } from "./SimpleGameplay";
 
-// 選択中のパズル。startOffline は画面を一瞬 "gameplay" に切り替えるため
-// PuzzleScreen はアンマウント→再マウントされる — コンポーネントローカル
-// state では選択が消えるので、モジュール変数で保持する。
-let activePuzzle: PuzzleDef | null = null;
-
 export function PuzzleScreen() {
   const setScreen = useStore((s) => s.setScreen);
   const game = useStore((s) => s.game);
   useStore((s) => s.gameFrame);
-  const active = activePuzzle;
+  const [active, setActive] = useState<PuzzleDef | null>(null);
 
   const start = async (def: PuzzleDef) => {
-    activePuzzle = def;
-    // startOffline が固定シードの beginnerMode セッションを作る (画面が
-    // 一瞬 gameplay になるので puzzle に戻す)。デッキはダミー — 直後に
-    // setupPuzzle が盤面を上書きする。
-    await startOffline([1, 1, 1, 1, 1], { beginnerMode: true, matchSeed: def.matchSeed });
+    // targetScreen=null: 画面は "puzzle" のまま (フリップするとこの
+    // コンポーネントがアンマウントされ選択状態が消える)。デッキは
+    // ダミー — 直後に setupPuzzle が盤面を上書きする。
+    await startOffline([1, 1, 1, 1, 1], { beginnerMode: true, matchSeed: def.matchSeed }, null);
     const sess = getSession();
     if (sess instanceof OfflineSession) setupPuzzle(sess.state_(), def);
-    useStore.getState().setScreen("puzzle");
+    setActive(def);
   };
 
   const exit = async () => {
-    activePuzzle = null;
     await backToTitle();
     useStore.getState().setScreen("puzzle");
+    setActive(null);
   };
 
   // ── 一覧 ──

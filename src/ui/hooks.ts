@@ -64,7 +64,13 @@ async function stopActiveSession(): Promise<void> {
   useStore.setState({ game: null, gameFrame: 0, log: [], desyncFrame: null });
 }
 
-export async function startOffline(deck: CardId[], ai: AiOptions = {}) {
+/**
+ * Start an offline session. `targetScreen` defaults to the normal match
+ * screen; callers embedding the session in their OWN screen (puzzle mode)
+ * pass null so the current screen never flips — an unconditional flip here
+ * unmounted the caller's component mid-flow and lost its local state.
+ */
+export async function startOffline(deck: CardId[], ai: AiOptions = {}, targetScreen: "gameplay" | null = "gameplay") {
   await stopActiveSession();
   lastOfflineAi = ai;
   const s = new OfflineSession({
@@ -79,7 +85,7 @@ export async function startOffline(deck: CardId[], ai: AiOptions = {}) {
   activeMode = "offline";
   useStore.getState().setLocalPlayer(0);
   s.start();
-  useStore.getState().setScreen("gameplay");
+  if (targetScreen !== null) useStore.getState().setScreen(targetScreen);
 }
 
 export async function startOnline(signalUrlBase: string, deck: CardId[]) {
