@@ -600,39 +600,23 @@ function applyInput(s: GameState, idx: 0 | 1, flags: number, _bus: Bus) {
 
 // Auto-fire reservations. Walks the manual list head-first; fires when the
 // head's trigger condition is met (queue empty for non-prereq, queue
-// remaining == prereq for prereq cards). Falls back to "default" (Draw or
-// leftmost playable) only when the manual list is EMPTY.
+// remaining == prereq for prereq cards).
+//
+// 強制オートパイロットは廃止 (docs/game-design.md): 無操作なら時間だけが
+// 流れる。怠惰の自動補正はスキル差を圧縮し、「キューを空に保つ = 手の内を
+// 見せない」というブラフを構造的に不可能にしていた。膠着防止は焦土が担う。
 function tickReservation(s: GameState, now: number, bus: Bus) {
-  const predictMode = s.predictMode ?? false;
   for (const idx of [0, 1] as const) {
     const p = s.players[idx];
     // Loop: a fire may make the next reservation eligible (cascade through
     // same-frame fires). Bounded for safety.
     for (let safety = 0; safety < 8; safety++) {
-      if (!tickReservationOnce(p, now, bus, predictMode)) break;
+      if (!tickReservationOnce(p, now, bus)) break;
     }
   }
 }
 
-function tickReservationOnce(p: PlayerState, now: number, bus: Bus, predictMode: boolean): boolean {
-  // Forced default: never leave the player idle. When nothing is reserved
-  // AND the queue is empty:
-  //   - if there's an empty slot we can draw into → push a Draw
-  //   - else (hand full of cards) → push the leftmost playable card
-  // So the queue is always doing SOMETHING.
-  //
-  // SKIPPED in predict mode: the future graph would otherwise show cards
-  // the player never authored (auto-Draw, auto-leftmost-playable), and
-  // that drives the read of "what will happen" away from "what I planned".
-  // In predict mode the projection ends at the player's explicit plan.
-  if (!predictMode && p.reservations.length === 0 && p.queue.length === 0) {
-    if (hasEmptyOpenSlot(p)) {
-      p.reservations.push({ kind: "draw" });
-    } else {
-      const idx = leftmostPlayableSlot(p, now);
-      if (idx >= 0) p.reservations.push({ kind: "card", slotIndex: idx });
-    }
-  }
+function tickReservationOnce(p: PlayerState, now: number, bus: Bus): boolean {
   if (p.reservations.length === 0) return false;
 
   // ── Heavy-card scheduling ──
@@ -768,27 +752,6 @@ function tickReservationOnce(p: PlayerState, now: number, bus: Bus, predictMode:
   // Couldn't draw (no empty slots) — drop and try the next reservation.
   p.reservations.shift();
   return true;
-}
-
-function hasEmptyOpenSlot(p: PlayerState): boolean {
-  const reserved = reservedSlotSet(p);
-  for (let i = 0; i < p.hand.length; i++) {
-    if (p.hand[i] === null && !reserved.has(i)) return true;
-  }
-  return false;
-}
-
-function leftmostPlayableSlot(p: PlayerState, now: number): number {
-  for (let i = 0; i < p.hand.length; i++) {
-    const c = p.hand[i];
-    if (c === null || c === undefined) continue;
-    const def = getCardDef(c);
-    if (!def || def.cost >= 900) continue;
-    const prereqSen = def.prereqQueueTime ?? 0;
-    if (prereqSen > 0 && queueRemainingFrames(p, now) < prereqSen * FRAMES_PER_SEN) continue;
-    return i;
-  }
-  return -1;
 }
 
 // Lose condition: hand is full of UNPLAYABLE cards (no empties, no slot

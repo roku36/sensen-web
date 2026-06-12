@@ -216,21 +216,22 @@ describe("reducer determinism", () => {
   });
 
   it("Draw can be reserved while another Draw is casting in the queue", () => {
-    // Sim: a draw is already in the queue (forced default). The player
-    // pushes INPUT_DRAW — the new draw must NOT be silently rejected; it
-    // sits in reservations and fires once the queue's draw drains.
+    // A draw is casting in the queue (explicit press — オートパイロットは
+    // 廃止済み)。The player pushes INPUT_DRAW again — the new draw must NOT
+    // be silently rejected; it sits in reservations and fires once the
+    // queue's draw drains.
     const deck = Array(20).fill(CardId.Strike);
     const s = initGame({ matchSeed: 1n, hpMax: 80, deckP0: deck, deckP1: deck });
-    step(s, 0, 0); // let the forced default queue its auto-Draw
+    step(s, 1 /* INPUT_DRAW */, 0); // explicit draw → fires straight to queue
     const queueHasDraw = s.players[0].queue.some((q) => q.kind === "draw");
     expect(queueHasDraw).toBe(true);
 
-    // 1st draw click → goes to reservations.
-    step(s, 1 /* INPUT_DRAW */, 0);
+    // 2nd draw click → goes to reservations.
+    step(s, 1, 0);
     let drawsInRes = s.players[0].reservations.filter((r) => r.kind === "draw").length;
     expect(drawsInRes).toBe(1);
 
-    // 2nd draw click ALSO succeeds — consecutive draws are allowed (no-op
+    // 3rd draw click ALSO succeeds — consecutive draws are allowed (no-op
     // duplicates self-clean at fire time when they have nothing to draw).
     step(s, 1, 0);
     drawsInRes = s.players[0].reservations.filter((r) => r.kind === "draw").length;
@@ -362,8 +363,10 @@ describe("reducer determinism", () => {
     expect(s.players[0].renzan).toBe(3);
     expect(hp2 - s.players[1].hp).toBeGreaterThanOrEqual(8);
 
-    // Reservations now empty → forced default queues a Draw (3 slots are
-    // empty). When that draw RESOLVES the chain resets to 0.
+    // Explicit Draw press (オートパイロット廃止 — 無操作なら連閃は保持
+    // されたまま時間だけが流れる)。When that draw RESOLVES the chain
+    // resets to 0.
+    step(s, 1 /* INPUT_DRAW */, 0);
     let sawReset = false;
     for (let f = 0; f < 1000 && !sawReset; f++) {
       step(s, 0, 0);

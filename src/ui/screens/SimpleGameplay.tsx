@@ -116,6 +116,7 @@ export function SimpleGameplay() {
           <AdvanceButton />
           <div style={controlsHint}>
             左クリック: 予約（もう一度で取消） · 右クリック: そのカード以降を取消 · Space: 全取消 · D: ドロー · 1〜6: カード選択
+            　|　無操作なら時間だけが流れる — 引くのも撃つのも、すべてあなたの意思
           </div>
           <div style={controlsHint}>
             連閃: カードを連続発動するたび攻撃+1（最大+5）· ドローが発動するとリセット
@@ -513,10 +514,9 @@ function DrawButton({ player }: { player: PlayerState }) {
   // the reservation list and fires after the current draw drains.
   const enabled = emptyCount > 0;
   const costSen = emptyCount * DRAW_SEN_PER_CARD;
-  // Draw is the DEFAULT forced reservation — shown only when the manual
-  // reservation list is empty. Right-clicking the Draw button (or pressing
-  // Space) clears the manual list.
-  const isReservation = player.reservations.length === 0 && emptyCount > 0;
+  // 予約中バッジ = 実際にドロー予約が積まれているとき (オートパイロット
+  // 廃止後、ドローは常に明示的な意思)。
+  const isReservation = player.reservations.some((r) => r.kind === "draw");
 
   const onClick = () => {
     if (!enabled) return;

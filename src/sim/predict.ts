@@ -80,11 +80,8 @@ export interface PredictResult {
  */
 export function predictForward(from: GameState, horizonSec: number): PredictResult {
   const s = snapshot(from);
-  // Predict mode suppresses the sim's forced-default auto-Draw /
-  // auto-leftmost-playable. The graph reflects ONLY the player's explicit
-  // plan — auto-fired cards the player didn't author won't appear as
-  // upcoming block changes / poison gains / attacks landing.
-  s.predictMode = true;
+  // オートパイロット廃止後、シムと予測の意味論は完全に一致する:
+  // 無入力の未来 = プレイヤーの明示的なプランだけが進行する未来。
   const startFrame = s.frame;
   const startSec = startFrame * DT;
   const stopFrame = startFrame + Math.ceil(horizonSec / DT);

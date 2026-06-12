@@ -131,15 +131,6 @@ export interface GameState {
   matchSeed: bigint;
   players: [PlayerState, PlayerState];
   result: 0 | 1 | 2 | 3;
-  /**
-   * Transient (UI-only). Set by predictForward on its snapshot so the
-   * forced-default auto-Draw / auto-leftmost-playable is suppressed in
-   * the projection — the prediction graph then reflects only what the
-   * player has EXPLICITLY committed, not the sim's autopilot.
-   *
-   * NOT persisted, NOT included in checksum, NOT serialized over the wire.
-   */
-  predictMode?: boolean;
 }
 
 const DEFAULT_PLAYER = (
