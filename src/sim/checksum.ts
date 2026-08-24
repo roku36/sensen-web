@@ -22,67 +22,62 @@ const u64 = (b: bigint) => {
   for (let i = 0; i < 8; i++) { byte(Number(v & 0xffn)); v >>= 8n; }
 };
 
-// Fixed-point quantization for floats so tiny rounding doesn't trigger desync flags.
-// Granularity 1/1024 is finer than any meaningful HP/cost difference.
-const f = (x: number) => {
-  const q = Math.round(x * 1024);
-  // Two's complement encoding via bit cast.
-  const v = q < 0 ? (q + 0x100000000) : q;
-  u32(v >>> 0);
-};
+// 状態はすべて整数なので、量子化 (旧: 1/1024 固定小数) は不要になった。
+// 整数をそのまま符号込みで詰める — 「丸め誤差はデサンク扱いしない」という
+// 妥協が消え、1 の違いも確実に検出できる。
+const i32 = (n: number) => { u32((n | 0) >>> 0); };
 
 const opt = <T>(v: T | null, write: (v: T) => void) => { byte(v ? 1 : 0); if (v) write(v); };
 
 function hashPlayer(p: PlayerState) {
   u32(p.handle);
-  f(p.hp); f(p.hpMax);
-  // block is now an integer; encode directly. nextBlockDecayAt is fixed-pt.
-  u32(p.block | 0);
-  f(isFinite(p.nextBlockDecayAt) ? p.nextBlockDecayAt : 1e9);
+  i32(p.hp); i32(p.hpMax);
+  i32(p.block);
+  i32(p.nextBlockDecayFrame);
   u32(p.blockHistory.length);
-  for (const h of p.blockHistory) { f(h.t); u32(h.block | 0); }
-  u32(p.poison | 0);
-  f(isFinite(p.nextPoisonDecayAt) ? p.nextPoisonDecayAt : 1e9);
-  f(p.thorns);
-  u32(p.renzan | 0);
+  for (const h of p.blockHistory) { i32(h.frame); i32(h.block); }
+  i32(p.poison);
+  i32(p.nextPoisonDecayFrame);
+  i32(p.thorns);
+  i32(p.renzan);
   u32(p.queue.length);
   for (const q of p.queue) {
     if (q.kind === "card") {
-      byte(0); u32(q.cardId); f(q.duration); byte(q.blockApplied ? 1 : 0);
+      byte(0); u32(q.cardId); i32(q.durationFrames); byte(q.blockApplied ? 1 : 0);
     } else if (q.kind === "draw") {
-      byte(1); f(q.duration); u32(q.drawFilledCount);
+      byte(1); i32(q.durationFrames); u32(q.drawFilledCount);
       u32(q.drawSlots.length);
       for (const s of q.drawSlots) u32(s);
     } else {
-      byte(2); f(q.duration); // rest
+      byte(2); i32(q.durationFrames); // rest
     }
   }
-  f(p.castStartedAt);
+  i32(p.castStartedAtFrame);
   u32(p.resolvedCards.length);
-  for (const r of p.resolvedCards) { u32(r.cardId); f(r.duration); f(r.resolvedAt); }
+  for (const r of p.resolvedCards) { u32(r.cardId); i32(r.durationFrames); i32(r.resolvedAtFrame); }
   // Manual reservations: ordered list of typed entries (card | draw).
   u32(p.reservations.length);
   for (const r of p.reservations) {
     if (r.kind === "card") { byte(0); u32(r.slotIndex); }
     else { byte(1); }
   }
-  // openedAt — null is a sentinel ("hasn't acted yet").
-  byte(p.openedAt === null ? 0 : 1);
-  if (p.openedAt !== null) f(p.openedAt);
-  f(p.strength); f(p.vulnerableSecs); f(p.weakSecs);
-  opt(p.rage, (r) => { f(r.blockPerAttack); f(r.remaining); });
-  opt(p.metallicize, (m) => { f(m.blockPerSen); });
-  opt(p.demonForm, (d) => { f(d.strengthPerSen); });
+  // openedAtFrame — null is a sentinel ("hasn't acted yet").
+  byte(p.openedAtFrame === null ? 0 : 1);
+  if (p.openedAtFrame !== null) i32(p.openedAtFrame);
+  i32(p.strength); i32(p.vulnerableFrames); i32(p.weakFrames);
+  opt(p.rage, (r) => { i32(r.blockPerAttack); i32(r.remainingFrames); });
+  opt(p.metallicize, (m) => { i32(m.blockPerSen); });
+  opt(p.demonForm, (d) => { i32(d.strengthPerSen); });
   byte(p.barricade ? 1 : 0);
-  opt(p.juggernaut, (j) => { f(j.damageOnBlock); });
-  opt(p.combust, (c) => { f(c.selfPerSen); f(c.enemyPerSen); });
+  opt(p.juggernaut, (j) => { i32(j.damageOnBlock); });
+  opt(p.combust, (c) => { i32(c.selfPerSen); i32(c.enemyPerSen); });
   opt(p.darkEmbrace, (d) => { u32(d.drawOnExhaust); });
   opt(p.evolve, (e) => { u32(e.drawOnStatus); });
-  opt(p.feelNoPain, (f2) => { f(f2.blockOnExhaust); });
-  opt(p.fireBreathing, (f2) => { f(f2.damageOnStatusDraw); });
-  opt(p.rupture, (r) => { f(r.strengthOnSelfDmg); });
+  opt(p.feelNoPain, (f2) => { i32(f2.blockOnExhaust); });
+  opt(p.fireBreathing, (f2) => { i32(f2.damageOnStatusDraw); });
+  opt(p.rupture, (r) => { i32(r.strengthOnSelfDmg); });
   byte(p.corruption ? 1 : 0);
-  opt(p.brutality, (b) => { f(b.selfPerSen); u32(b.draw); });
+  opt(p.brutality, (b) => { i32(b.selfPerSen); u32(b.draw); });
   u32(p.deck.length); for (const c of p.deck) u32(c);
   // Hand is fixed length 6 with null = empty. Encode null as a sentinel.
   u32(p.hand.length);

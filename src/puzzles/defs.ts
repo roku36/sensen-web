@@ -7,6 +7,7 @@
 // 「想定解で予算内に勝てる」「オートパイロット放置では勝てない」を
 // 恒久的に保証する — パズルが将来のバランス変更で壊れたら即検知される。
 
+import { NEVER_FRAME } from "../sim/rules";
 import { CardId } from "../sim/cards";
 import { surgeSens } from "../sim/events";
 import { cardFlag } from "../sim/input";
@@ -45,8 +46,8 @@ export function setupPuzzle(s: GameState, def: PuzzleDef) {
   p1.hp = def.oppHp;
   p1.hpMax = def.oppHp;
   p1.block = 0;
-  p1.blockHistory = [{ t: 0, block: 0 }];
-  p1.nextBlockDecayAt = Infinity;
+  p1.blockHistory = [{ frame: 0, block: 0 }];
+  p1.nextBlockDecayFrame = NEVER_FRAME;
 }
 
 // シード選定: 烈閃スケジュールが条件を満たす最小シードを決定論的に走査。

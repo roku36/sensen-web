@@ -12,7 +12,14 @@ import { CardId, CardType, getCardDef } from "../../sim/cards";
 import { isSurgeSen } from "../../sim/events";
 import { predictForward } from "../../sim/predict";
 import { futureEmptyAtDrawPosition } from "../../sim/reducer";
-import { DRAW_SEN_PER_CARD, SEC_PER_SEN, secToSen, senToSec } from "../../sim/rules";
+import { DRAW_SEN_PER_CARD, framesToSec, SEC_PER_SEN } from "../../sim/rules";
+
+// ── 単位の境界 ──
+// シムの時刻・長さはすべて整数フレーム。タイムラインはピクセル座標を
+// 秒で組み立てるので、シムから受け取った値はこの層の入口で framesToSec を
+// 通して秒にする。逆方向 (秒→シム) は存在しない — 描画は状態を書かない。
+const senToSec = (sen: number) => sen * SEC_PER_SEN;
+const secToSen = (sec: number) => sec / SEC_PER_SEN;
 import { GameState, PlayerState, ResolvedEntry } from "../../sim/state";
 
 const PX_PER_SEC = 35;
@@ -82,9 +89,9 @@ function predictSignature(g: GameState): string {
   let sig = "";
   for (const p of g.players) {
     sig += p.hp + "," + p.block + "," + p.poison + "," + p.strength + ","
-      + p.thorns + "," + p.renzan + "," + p.castStartedAt + ";";
+      + p.thorns + "," + p.renzan + "," + p.castStartedAtFrame + ";";
     for (const q of p.queue) {
-      sig += q.kind === "card" ? "c" + q.cardId + ":" + q.duration
+      sig += q.kind === "card" ? "c" + q.cardId + ":" + q.durationFrames
         : q.kind === "draw" ? "d" + q.drawSlots.join(".") + ":" + q.drawFilledCount
         : "r";
       sig += "|";
@@ -107,16 +114,18 @@ function predictSignature(g: GameState): string {
 
 const ceilToSen = (sec: number) => Math.ceil(sec / SEC_PER_SEN) * SEC_PER_SEN;
 
-export function BattleZone({ game, op, me, now }: { game: GameState; op: PlayerState; me: PlayerState; now: number }) {
+export function BattleZone({ game, op, me, now: nowFrame }: { game: GameState; op: PlayerState; me: PlayerState; now: number }) {
+  // `now` はフレームで受け取り、この行より下は秒 (描画単位) で扱う。
+  const now = framesToSec(nowFrame);
   // Hide-opp-queue rule: second player (me.handle === 1) shouldn't see
   // first player's queue until they've themselves committed something.
   // Otherwise the 0.5閃 offset becomes pure reflex advantage.
-  const hideOppQueue = me.handle === 1 && me.openedAt === null;
+  const hideOppQueue = me.handle === 1 && me.openedAtFrame === null;
 
-  const opQueue = computeQueueLayout(op, now);
-  const meQueue = computeQueueLayout(me, now);
-  const opHist = computeHistoryBoxes(op.resolvedCards, now);
-  const meHist = computeHistoryBoxes(me.resolvedCards, now);
+  const opQueue = computeQueueLayout(op, nowFrame);
+  const meQueue = computeQueueLayout(me, nowFrame);
+  const opHist = computeHistoryBoxes(op.resolvedCards, nowFrame);
+  const meHist = computeHistoryBoxes(me.resolvedCards, nowFrame);
   // 予約はローカル情報 (design law: 相手には伝わらない). The opponent's
   // reservation list is NEVER rendered — no ghost chips for them, and the
   // prediction below runs with their reservations stripped so their plan
@@ -171,7 +180,10 @@ export function BattleZone({ game, op, me, now }: { game: GameState; op: PlayerS
   }, [sig, maxSec, hideOppQueue, op.handle]);
   // How far the (absolute-time) prediction has drifted behind NOW. All
   // future-sample `t`s are shifted by this before drawing. Always <= 0.
-  const predOffset = pred.baseSec - now;
+  const predOffset = framesToSec(pred.baseFrame) - now;
+  // blockHistory はシムのフレーム。描画用に秒へ畳んでから渡す。
+  const opBlockHist = op.blockHistory.map((h) => ({ t: framesToSec(h.frame), block: h.block }));
+  const meBlockHist = me.blockHistory.map((h) => ({ t: framesToSec(h.frame), block: h.block }));
   // Confirm (確定) markers: the predicted moment each of MY reservations
   // leaves the list and locks into the queue. Normal cards confirm exactly
   // where their ghost chip starts (marker would be redundant); a marker is
@@ -289,14 +301,14 @@ export function BattleZone({ game, op, me, now }: { game: GameState; op: PlayerS
             width={innerWidth} height={SVG_HEIGHT}
             style={{ position: "absolute", left: 0, top: SVG_TOP, pointerEvents: "none", overflow: "visible" }}
           >
-            <BlockArea history={op.blockHistory} future={opBlockPred} offset={predOffset} side="opp" nowSec={now} maxSec={maxSec} hidden={hideOppQueue} />
-            <BlockArea history={me.blockHistory} future={meBlockPred} offset={predOffset} side="self" nowSec={now} maxSec={maxSec} />
+            <BlockArea history={opBlockHist} future={opBlockPred} offset={predOffset} side="opp" nowSec={now} maxSec={maxSec} hidden={hideOppQueue} />
+            <BlockArea history={meBlockHist} future={meBlockPred} offset={predOffset} side="self" nowSec={now} maxSec={maxSec} />
             <PoisonArea currentPoison={op.poison} future={opPoisonPred} offset={predOffset} side="opp" maxSec={maxSec} hidden={hideOppQueue} />
             <PoisonArea currentPoison={me.poison} future={mePoisonPred} offset={predOffset} side="self" maxSec={maxSec} />
             {!hideOppQueue && <PierceMarks events={opPierces} offset={predOffset} side="opp" />}
             <PierceMarks events={mePierces} offset={predOffset} side="self" />
-            <BlockChangeLabels history={op.blockHistory} future={opBlockPred} offset={predOffset} side="opp" nowSec={now} maxSec={maxSec} hidden={hideOppQueue} />
-            <BlockChangeLabels history={me.blockHistory} future={meBlockPred} offset={predOffset} side="self" nowSec={now} maxSec={maxSec} />
+            <BlockChangeLabels history={opBlockHist} future={opBlockPred} offset={predOffset} side="opp" nowSec={now} maxSec={maxSec} hidden={hideOppQueue} />
+            <BlockChangeLabels history={meBlockHist} future={meBlockPred} offset={predOffset} side="self" nowSec={now} maxSec={maxSec} />
             <PoisonChangeLabels currentPoison={op.poison} future={opPoisonPred} offset={predOffset} side="opp" maxSec={maxSec} hidden={hideOppQueue} />
             <PoisonChangeLabels currentPoison={me.poison} future={mePoisonPred} offset={predOffset} side="self" maxSec={maxSec} />
           </svg>
@@ -382,19 +394,23 @@ interface QueueLayout {
   totalSec: number;
 }
 
-function computeQueueLayout(player: PlayerState, now: number): QueueLayout {
+/** nowFrame はシムのフレーム。返す座標は秒 (描画単位)。 */
+function computeQueueLayout(player: PlayerState, nowFrame: number): QueueLayout {
   if (player.queue.length === 0) return { boxes: [], totalSec: 0 };
-  let endRel = Math.max(0, player.queue[0].duration - (now - player.castStartedAt));
+  let endRel = framesToSec(
+    Math.max(0, player.queue[0].durationFrames - (nowFrame - player.castStartedAtFrame)),
+  );
   const boxes: BoxLayout[] = player.queue.map((q, i) => {
-    if (i > 0) endRel += q.duration;
+    const durationSec = framesToSec(q.durationFrames);
+    if (i > 0) endRel += durationSec;
     return {
       cardId: q.kind === "card" ? q.cardId : null,
       drawSlots: q.kind === "draw" ? q.drawSlots : null,
       drawFilledCount: q.kind === "draw" ? q.drawFilledCount : undefined,
       isRest: q.kind === "rest",
-      duration: q.duration,
+      duration: durationSec,
       endRel,
-      startRel: endRel - q.duration,
+      startRel: endRel - durationSec,
       isHead: i === 0,
     };
   });
@@ -451,14 +467,15 @@ function computeReservationGhosts(player: PlayerState, queueTotalSec: number): B
   return out;
 }
 
-function computeHistoryBoxes(resolved: ResolvedEntry[], now: number): BoxLayout[] {
+function computeHistoryBoxes(resolved: ResolvedEntry[], nowFrame: number): BoxLayout[] {
   const out: BoxLayout[] = [];
   for (const r of resolved) {
-    const endRel = r.resolvedAt - now;
-    const startRel = endRel - r.duration;
+    const durationSec = framesToSec(r.durationFrames);
+    const endRel = framesToSec(r.resolvedAtFrame - nowFrame);
+    const startRel = endRel - durationSec;
     if (endRel < -HISTORY_SEC) continue;
     out.push({
-      cardId: r.cardId, duration: r.duration,
+      cardId: r.cardId, duration: durationSec,
       startRel, endRel, isHead: false, resolved: true,
     });
   }

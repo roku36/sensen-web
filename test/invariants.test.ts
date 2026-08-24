@@ -17,7 +17,7 @@ import { allCards, CardId } from "../src/sim/cards";
 import { initGame } from "../src/sim/init";
 import { cardFlag, INPUT_DRAW, INPUT_RESET_RESERVATIONS } from "../src/sim/input";
 import { step } from "../src/sim/reducer";
-import { DT, FRAMES_PER_SEN } from "../src/sim/rules";
+import { FRAMES_PER_SEN } from "../src/sim/rules";
 
 const PLAYABLE: CardId[] = allCards().filter((c) => c.cost < 900).map((c) => c.id);
 
@@ -57,7 +57,7 @@ describe("盤面の不変条件 (ランダム入力ファズ)", () => {
         };
         step(s, input(), input());
 
-        const now = s.frame * DT;
+        const now = s.frame;
         for (let i = 0; i < 2; i++) {
           const p = s.players[i];
           const at = `seed=${seed} frame=${f} p${i}`;
@@ -76,8 +76,9 @@ describe("盤面の不変条件 (ランダム入力ファズ)", () => {
           expect(p.hp >= 0 && p.hp <= p.hpMax, `HP範囲外 ${at}: ${p.hp}`).toBe(true);
           expect(p.block, `blockが負 ${at}`).toBeGreaterThanOrEqual(0);
           expect(p.hand.length, `手札枠数 ${at}`).toBe(6);
-          // 過去は未来に追い越さない
-          expect(p.castStartedAt, `castStartedAtが未来 ${at}`).toBeLessThanOrEqual(now + 1e-9);
+          // 時刻はすべて整数フレーム。過去は未来を追い越さない。
+          expect(Number.isInteger(p.castStartedAtFrame), `castStartedAtFrameが非整数 ${at}`).toBe(true);
+          expect(p.castStartedAtFrame, `castStartedAtFrameが未来 ${at}`).toBeLessThanOrEqual(now);
           // 際限なく伸びる配列がないこと (メモリと予測コストの上限)
           expect(p.queue.length, `キュー暴走 ${at}`).toBeLessThan(64);
           expect(p.reservations.length, `予約暴走 ${at}`).toBeLessThan(64);
@@ -103,6 +104,46 @@ describe("盤面の不変条件 (ランダム入力ファズ)", () => {
       }
     }
   }, 120_000);
+
+  // シムの法: 状態に小数は存在しない。個別フィールドを列挙するのではなく
+  // GameState 全体を再帰的に走査して、数値が1つでも非整数なら落とす。
+  // 新しいフィールドや新しい効果を足したときも自動で守られる — 「秒 × dt を
+  // 整数に足す」という書き方そのものが、ここで必ず捕まる。
+  it("GameState のあらゆる数値が整数 — 小数はシムに存在しない", () => {
+    const offenders: string[] = [];
+    const walk = (v: unknown, path: string, depth = 0) => {
+      if (offenders.length > 8 || depth > 8) return;
+      if (typeof v === "number") {
+        if (!Number.isInteger(v)) offenders.push(`${path} = ${v}`);
+        return;
+      }
+      if (Array.isArray(v)) { v.forEach((x, i) => walk(x, `${path}[${i}]`, depth + 1)); return; }
+      if (v && typeof v === "object") {
+        for (const [k, x] of Object.entries(v)) walk(x, `${path}.${k}`, depth + 1);
+      }
+    };
+
+    for (let seed = 1; seed <= 8; seed++) {
+      const rnd = lcg(seed * 104729);
+      const s = initGame({
+        matchSeed: BigInt(seed), hpMax: 80,
+        deckP0: deckFor(seed), deckP1: deckFor(seed + 900),
+      });
+      for (let f = 0; f < 7000 && s.result === 0; f++) {
+        const input = () => {
+          const r = rnd();
+          if (r < 0.025) return cardFlag(Math.floor(rnd() * 6)) ?? 0;
+          if (r < 0.033) return INPUT_DRAW;
+          return 0;
+        };
+        step(s, input(), input());
+        if (f % 37 === 0) walk(s, `seed${seed}.f${f}`);
+        if (offenders.length > 0) break;
+      }
+      if (offenders.length > 0) break;
+    }
+    expect(offenders, `非整数の状態: ${offenders.join(", ")}`).toEqual([]);
+  }, 60_000);
 
   it("無操作の完全対称戦は必ず引き分けで終わる (焦土の終局保証)", () => {
     for (let seed = 1; seed <= 5; seed++) {

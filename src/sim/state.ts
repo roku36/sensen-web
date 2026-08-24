@@ -1,6 +1,6 @@
 import { CardId } from "./cards";
 import { Rng } from "./rng";
-import { MAX_HAND_SIZE } from "./rules";
+import { MAX_HAND_SIZE, NEVER_FRAME } from "./rules";
 
 // A queue entry. Either a card cast OR a Draw action — both consume queue
 // time the same way (head waits `duration` seconds before "resolving").
@@ -8,26 +8,28 @@ import { MAX_HAND_SIZE } from "./rules";
 //   kind="card": ordinary card cast. cardId set.
 //   kind="draw": refill action. drawSlots holds the snapshotted slot
 //     indices (LOCKED at press time — playing a card from another slot
-//     mid-cycle does not add that new empty to the targets). duration =
-//     drawSlots.length (1 sec per card). While this entry is the head,
-//     slots fill sequentially: drawSlots[k] is filled when the head's
-//     elapsed time crosses (k+1) seconds. drawFilledCount tracks progress.
+//     mid-cycle does not add that new empty to the targets). While this
+//     entry is the head, slots fill sequentially: drawSlots[k] is filled
+//     when the head's elapsed frames cross (k+1)閃. drawFilledCount
+//     tracks progress.
+//
+// durationFrames は整数フレーム。シムに秒は存在しない (rules.ts)。
 export type QueueEntry =
-  | { kind: "card"; cardId: CardId; duration: number; blockApplied: boolean }
-  | { kind: "draw"; drawSlots: number[]; drawFilledCount: number; duration: number }
+  | { kind: "card"; cardId: CardId; durationFrames: number; blockApplied: boolean }
+  | { kind: "draw"; drawSlots: number[]; drawFilledCount: number; durationFrames: number }
   // 休息 — キューと予約が空のとき、シムが自動で積む 1閃 の行動。
   // 解決時に HP+1、連閃リセット。キューを決して空白にしないことで
   // 時間グリッド (行動は閃境界からのみ始まる) を保証する。
   // docs/game-design.md の不変条件を参照。
-  | { kind: "rest"; duration: number };
+  | { kind: "rest"; durationFrames: number };
 
 // A card that recently resolved. Kept around so the timeline can show it as
 // a dimmed chip drifting off to the left of the NOW line ("just played").
 export interface ResolvedEntry {
   cardId: CardId;
-  duration: number;
-  // Sim seconds when this card finished casting. Always <= current `frame * DT`.
-  resolvedAt: number;
+  durationFrames: number;
+  // Frame on which this card finished casting. Always <= current frame.
+  resolvedAtFrame: number;
 }
 
 // Manual reservation list — an ORDERED queue of actions the player has
@@ -59,18 +61,18 @@ export interface PlayerState {
   hp: number;
   hpMax: number;
   block: number;
-  // Sim seconds at which block will tick down by 1 (if > 0). Reset to
-  // (now + 1 閃) whenever block changes by gain or hit.
-  nextBlockDecayAt: number;
+  // Frame at which block will tick down by 1 (if > 0). Reset to
+  // (now + 1閃) whenever block changes by gain or hit. NEVER_FRAME = 停止。
+  nextBlockDecayFrame: number;
   // Historical (time, block) samples for the UI's past visualization. Only
   // recorded on actual block changes; between samples block is step-constant.
   // Bounded to the last BLOCK_HISTORY_SEC of activity.
-  blockHistory: { t: number; block: number }[];
+  blockHistory: { frame: number; block: number }[];
   // Poison: integer count. Each 閃 it ticks 1 HP per current poison value
   // and decrements by 1. Heal cures it. Visualized as a green band that
   // extends OUTWARD from the block band's outer edge.
   poison: number;
-  nextPoisonDecayAt: number;
+  nextPoisonDecayFrame: number;
   thorns: number;
   // 連閃 (combo chain): number of CARD casts resolved consecutively without
   // a Draw resolving in between. Each card beyond the first adds +1 attack
@@ -83,25 +85,25 @@ export interface PlayerState {
   // Cast queue — head [0] is currently casting. Both peers see each other's
   // queue (it's part of GameState, so reproducible from inputs + seed).
   queue: QueueEntry[];
-  // Sim seconds when the current head started casting. Advances by exactly
-  // `duration` each time the head resolves (so any carry-over time rolls
+  // Frame on which the current head started casting. Advances by exactly
+  // `durationFrames` each time the head resolves (so any carry-over rolls
   // forward into the next entry instead of being lost).
-  castStartedAt: number;
+  castStartedAtFrame: number;
   // Bounded history of recently-resolved cards (head pops). Newest at the END.
   resolvedCards: ResolvedEntry[];
   // Ordered list of manually-reserved actions. See doc above.
   reservations: ReservationEntry[];
-  // Sim seconds at which this player first committed an action (queued a
-  // card OR pressed Draw OR set a manual reservation). null until they act.
+  // Frame on which this player first committed an action (queued a card
+  // OR pressed Draw OR set a manual reservation). null until they act.
   // Used by the UI to hide the opponent's queue from a player who hasn't
   // shown their hand yet — prevents the reflex-game problem.
-  openedAt: number | null;
-  // Status durations (seconds remaining)
+  openedAtFrame: number | null;
+  // Status durations — 残りフレーム数 (整数)。
   strength: number;
-  vulnerableSecs: number;
-  weakSecs: number;
+  vulnerableFrames: number;
+  weakFrames: number;
   // Persistent powers
-  rage: { blockPerAttack: number; remaining: number } | null;
+  rage: { blockPerAttack: number; remainingFrames: number } | null;
   // 常在型パワー: すべて閃境界ごとに整数量が効く (毒・焦土と同じ刻み)。
   metallicize: { blockPerSen: number } | null;
   demonForm: { strengthPerSen: number } | null;
@@ -149,20 +151,20 @@ const DEFAULT_PLAYER = (
   hp: hpMax,
   hpMax,
   block: 0,
-  nextBlockDecayAt: Infinity,
-  blockHistory: [{ t: 0, block: 0 }],
+  nextBlockDecayFrame: NEVER_FRAME,
+  blockHistory: [{ frame: 0, block: 0 }],
   poison: 0,
-  nextPoisonDecayAt: Infinity,
+  nextPoisonDecayFrame: NEVER_FRAME,
   thorns: 0,
   renzan: 0,
   queue: [],
-  castStartedAt: 0,
+  castStartedAtFrame: 0,
   resolvedCards: [],
   reservations: [],
-  openedAt: null,
+  openedAtFrame: null,
   strength: 0,
-  vulnerableSecs: 0,
-  weakSecs: 0,
+  vulnerableFrames: 0,
+  weakFrames: 0,
   rage: null,
   metallicize: null,
   demonForm: null,

@@ -15,13 +15,20 @@ export const INITIAL_HP = 80;
 export const MAX_HAND_SIZE = 6;
 export const INITIAL_HAND = 5;
 
-// ── 閃 (sen) unit ──
-// 1 閃 = SEC_PER_SEN seconds. All card costs, prereqs and the block decay
-// rate are expressed in INTEGER 閃 in card defs; the sim internally still
-// uses seconds (because frame DT = 1/60 sec). Convert with senToSec.
+// ── 閃 (sen) unit / 時間の単位 ──
+//
+// **シムに小数は存在しない。** 時刻も長さもすべて FRAME (整数) で表す。
+// 1閃 = FRAMES_PER_SEN フレーム、カード定義の cost・prereq・持続はすべて
+// 整数の閃。秒はUIが人間に見せるためだけの単位であり、描画境界
+// (framesToSec) でのみ使う — シムの内部・状態・チェックサムには
+// 一切入れない。
+//
+// 経緯: 以前は「シムは秒 (frame×1/60)、ただし厳密な比較だけフレーム」
+// という二重表現だった。単位が混ざると必ず片方が漏れる — 実際、常在型
+// パワーの「毎秒レート×dt」が整数のHP/ブロックを小数にし、金属化は
+// 端数が毎フレーム丸め捨てられて完全に無効化していた。単位を一つに
+// 畳めば、この種のバグは書けなくなる。
 export const SEC_PER_SEN = 3;
-export const senToSec = (sen: number) => sen * SEC_PER_SEN;
-export const secToSen = (sec: number) => sec / SEC_PER_SEN;
 
 // ── Block ──
 // Block decays in DISCRETE 1-unit steps, one tick per 閃 (= SEC_PER_SEN sec).
@@ -55,10 +62,10 @@ export const DRAW_SEN_PER_CARD = 1;
 // Bounded history of recently-resolved cards.
 export const RESOLVED_HISTORY_MAX = 8;
 
-// How far back (in seconds) to keep per-player block samples for the UI's
-// past visualization. Anything older gets pruned. Matches the timeline's
+// How far back to keep per-player block samples for the UI's past
+// visualization. Anything older gets pruned. Matches the timeline's
 // visible HISTORY budget so the past area always has data to draw.
-export const BLOCK_HISTORY_SEC = 18;
+export const BLOCK_HISTORY_SEN = 6;
 
 // 完全対称 (perfect symmetry): both players share the SAME 閃 grid with no
 // offset. There is no first/second player — identical decks + identical
@@ -87,12 +94,18 @@ export const SUDDEN_DEATH_RAMP_SEN = 10;
 export const PLAYED_TO_DISCARD = true;
 
 // ── Sim cadence ──
+// SIM_HZ is the frame rate; the frame is the sim's ONLY clock. Every time
+// value in GameState is a frame count or a frame duration — integers.
 export const SIM_HZ = 60;
-export const DT = 1 / SIM_HZ;
-// 1 閃 in frames — the sim's TRUE integer clock. Frame counts are exact
-// integers (no FP drift), so exact-timing comparisons (heavy-card prereq
-// crossings etc.) are done in frames, never in float seconds.
 export const FRAMES_PER_SEN = SEC_PER_SEN * SIM_HZ;
+export const senToFrames = (sen: number) => sen * FRAMES_PER_SEN;
+
+// 「決して起きない」時刻の番兵。Infinity は小数 (非整数) なので使わない
+// — 整数のまま比較・チェックサム・シリアライズできる値にする。
+export const NEVER_FRAME = 0x7fffffff;
+
+// 描画境界でだけ使う変換。シムの中では絶対に呼ばない。
+export const framesToSec = (frames: number) => frames / SIM_HZ;
 
 // ── Rollback ──
 export const INPUT_DELAY = 6;

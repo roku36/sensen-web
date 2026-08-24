@@ -311,10 +311,10 @@ describe("reducer determinism", () => {
     expect(fireFrame).toBeGreaterThan(0);
     const p = s.players[0];
     // Time-ahead-of-B2 at the fire frame: head remaining + middle durations.
-    const fireSec = fireFrame * (1 / 60);
-    let ahead = p.queue[0].duration - (fireSec - p.castStartedAt);
-    for (let i = 1; i < p.queue.length - 1; i++) ahead += p.queue[i].duration;
-    expect(ahead).toBeCloseTo(6.0, 3);
+    // すべて整数フレーム — 近似比較 (toBeCloseTo) は不要になった。
+    let ahead = p.queue[0].durationFrames - (fireFrame - p.castStartedAtFrame);
+    for (let i = 1; i < p.queue.length - 1; i++) ahead += p.queue[i].durationFrames;
+    expect(ahead).toBe(2 * FRAMES_PER_SEN);
   });
 
   it("heavy reservation is rejected when the real remaining chain is below its prereq", () => {
@@ -398,9 +398,9 @@ describe("reducer determinism", () => {
       const idx = p.queue.findIndex((q) => q.kind === "card" && q.cardId === CardId.Bludgeon);
       if (idx < 0) continue;
       // 重撃より前にあるキュー時間 = 相手に見えている予告の長さ
-      const total = queueRemainingFrames(p, s.frame * (1 / 60));
+      const total = queueRemainingFrames(p, s.frame);
       const selfAndAfter = p.queue.slice(idx)
-        .reduce((a, q) => a + Math.round(q.duration * 60), 0);
+        .reduce((a, q) => a + q.durationFrames, 0);
       aheadFrames = total - selfAndAfter;
     }
     expect(aheadFrames).toBeGreaterThanOrEqual(0);
@@ -515,7 +515,7 @@ describe("reducer determinism", () => {
     const deck = Array(20).fill(CardId.Strike);
     const s = initGame({ matchSeed: 1n, hpMax: 1000, deckP0: deck, deckP1: deck });
     s.players[1].block = 0;
-    s.players[1].vulnerableSecs = 60; // 脆弱のみ
+    s.players[1].vulnerableFrames = 60 * FRAMES_PER_SEN; // 脆弱のみ
     const hp0 = s.players[1].hp;
     queueAnyStrike(s, 0);
     for (let f = 0; f < 185; f++) step(s, 0, 0);
@@ -524,8 +524,8 @@ describe("reducer determinism", () => {
 
     const s2 = initGame({ matchSeed: 1n, hpMax: 1000, deckP0: deck, deckP1: deck });
     s2.players[1].block = 0;
-    s2.players[1].vulnerableSecs = 60;
-    s2.players[1].weakSecs = 60; // 弱体+脆弱
+    s2.players[1].vulnerableFrames = 60 * FRAMES_PER_SEN;
+    s2.players[1].weakFrames = 60 * FRAMES_PER_SEN; // 弱体+脆弱
     const hp1 = s2.players[1].hp;
     queueAnyStrike(s2, 0);
     for (let f = 0; f < 185; f++) step(s2, 0, 0);
@@ -645,14 +645,14 @@ describe("reducer determinism", () => {
     // Empty deck so the auto-Draw can't refill, and clear the hand so the
     // leftmost-playable reservation can't queue anything. The only thing
     // affecting block over the next few 閃 is the decay timer.
-    const { senToSec } = await import("../src/sim/rules");
+    const { senToFrames } = await import("../src/sim/rules");
     const s = initGame({ matchSeed: 1n, hpMax: 80, deckP0: [], deckP1: [] });
     for (let i = 0; i < 6; i++) s.players[0].hand[i] = null;
     s.players[0].deck = [];
     s.players[0].discard = [];
     s.players[0].block = 5;
-    s.players[0].nextBlockDecayAt = senToSec(1); // first decay at t=1閃
-    s.players[0].blockHistory = [{ t: 0, block: 5 }];
+    s.players[0].nextBlockDecayFrame = senToFrames(1); // first decay at 1閃
+    s.players[0].blockHistory = [{ frame: 0, block: 5 }];
 
     for (let f = 0; f < 185; f++) step(s, 0, 0);
     expect(s.players[0].block).toBe(4);
@@ -695,7 +695,7 @@ describe("完全対称 (perfect symmetry)", () => {
   it("ミラー入力は全フレームで鏡像状態を保ち、同時致死で引き分けになる", () => {
     const s = initGame(mirrorInit());
     expect(s.players[0].block).toBe(s.players[1].block);
-    expect(s.players[0].castStartedAt).toBe(s.players[1].castStartedAt);
+    expect(s.players[0].castStartedAtFrame).toBe(s.players[1].castStartedAtFrame);
     for (let f = 0; f < 36000 && s.result === 0; f++) {
       // Both sides press slot 1 every 2 閃 — same flag, same frame.
       const flag = f % 360 === 0 ? cardFlag(0)! : 0;

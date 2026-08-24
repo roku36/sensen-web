@@ -20,9 +20,8 @@ import {
   INPUT_RESET_RESERVATIONS,
 } from "./input";
 import {
-  BLOCK_HISTORY_SEC,
+  BLOCK_HISTORY_SEN,
   DRAW_SEN_PER_CARD,
-  DT,
   FRAMES_PER_SEN,
   MAX_HAND_SIZE,
   PLAYED_TO_DISCARD,
@@ -30,9 +29,9 @@ import {
   RENZAN_MAX_BONUS,
   REST_HEAL,
   RESOLVED_HISTORY_MAX,
+  NEVER_FRAME,
   RETSU_SEN_BONUS,
-  SEC_PER_SEN,
-  senToSec,
+  senToFrames,
   SUDDEN_DEATH_RAMP_SEN,
   SUDDEN_DEATH_START_SEN,
 } from "./rules";
@@ -43,7 +42,7 @@ import type { GameState, PlayerState, QueueEntry } from "./state";
 const enum DamageKind { Attack = 0, Power = 1, Thorns = 2 }
 
 interface DamageMsg {
-  target: 0 | 1; amount: number; source: 0 | 1 | null; kind: DamageKind; pierce?: number;
+  target: 0 | 1; amount: number; source: 0 | 1 | null; kind: DamageKind; piercePct?: number;
   // Effects applied ONLY IF some damage reached HP (Vuln/Weak/etc. that ride
   // along with an attack — if the hit was fully absorbed by block, they
   // don't apply). Filled by applyEffect when an Attack Combo is processed.
@@ -55,8 +54,8 @@ interface BlockMsg { target: 0 | 1; amount: number }
 interface ThornsMsg { target: 0 | 1; amount: number }
 interface PoisonMsg { target: 0 | 1; amount: number }
 interface StrMsg { target: 0 | 1; amount: number }
-interface VulnMsg { target: 0 | 1; duration: number }
-interface WeakMsg { target: 0 | 1; duration: number }
+interface VulnMsg { target: 0 | 1; frames: number }
+interface WeakMsg { target: 0 | 1; frames: number }
 interface AddStatusMsg { target: 0 | 1; cardId: CardId }
 
 interface Bus {
@@ -84,10 +83,10 @@ const opp = (i: 0 | 1): 0 | 1 => (i === 0 ? 1 : 0);
 
 // ── Time-based ticks: statuses, persistent powers, block decay ──
 
-function tickStatus(p: PlayerState, dt: number) {
-  if (p.vulnerableSecs > 0) p.vulnerableSecs = Math.max(0, p.vulnerableSecs - dt);
-  if (p.weakSecs > 0) p.weakSecs = Math.max(0, p.weakSecs - dt);
-  if (p.rage && p.rage.remaining > 0) p.rage.remaining = Math.max(0, p.rage.remaining - dt);
+function tickStatus(p: PlayerState) {
+  if (p.vulnerableFrames > 0) p.vulnerableFrames--;
+  if (p.weakFrames > 0) p.weakFrames--;
+  if (p.rage && p.rage.remainingFrames > 0) p.rage.remainingFrames--;
 }
 
 // 常在型パワーの閃ティック。毒・焦土と同じく閃境界でだけ、整数量が効く。
@@ -139,15 +138,15 @@ function tickPowers(s: GameState, bus: Bus) {
 // the timer is paused (set to Infinity) until a gain re-arms it.
 function tickBlockDecay(p: PlayerState, now: number) {
   if (p.barricade) return;
-  while (p.block > 0 && now >= p.nextBlockDecayAt) {
+  while (p.block > 0 && now >= p.nextBlockDecayFrame) {
     p.block -= 1;
-    p.nextBlockDecayAt += SEC_PER_SEN;
+    p.nextBlockDecayFrame += FRAMES_PER_SEN;
     // Record at FRAME time (not the scheduled time) so all blockHistory
     // entries share a single grid — consistent left-shift per render
     // instead of timestamps drifting against the queue's own time axis.
     recordBlockChange(p, now);
   }
-  if (p.block <= 0) p.nextBlockDecayAt = Infinity;
+  if (p.block <= 0) p.nextBlockDecayFrame = NEVER_FRAME;
 }
 
 // Append (now, current block) to the per-player blockHistory ring. Used by
@@ -156,17 +155,17 @@ function tickBlockDecay(p: PlayerState, now: number) {
 // every time block changed (the bug we're fixing).
 function recordBlockChange(p: PlayerState, now: number) {
   const last = p.blockHistory[p.blockHistory.length - 1];
-  if (last && last.t === now) {
+  if (last && last.frame === now) {
     // Same-frame change: overwrite, don't stack duplicates.
     last.block = p.block;
     return;
   }
   if (last && last.block === p.block) return; // no-op write
-  p.blockHistory.push({ t: now, block: p.block });
-  const cutoff = now - BLOCK_HISTORY_SEC;
+  p.blockHistory.push({ frame: now, block: p.block });
+  const cutoff = now - BLOCK_HISTORY_SEN * FRAMES_PER_SEN;
   // Always keep at least one anchor entry that's <= cutoff (so the area
   // from cutoff-to-NOW can be drawn from a known starting block).
-  while (p.blockHistory.length > 2 && p.blockHistory[1].t < cutoff) {
+  while (p.blockHistory.length > 2 && p.blockHistory[1].frame < cutoff) {
     p.blockHistory.shift();
   }
 }
@@ -175,9 +174,9 @@ function recordBlockChange(p: PlayerState, now: number) {
 // processBlockGains for gains and from processDamage when block is reduced
 // but not zeroed.
 function armBlockDecay(p: PlayerState, now: number) {
-  if (p.block <= 0) { p.nextBlockDecayAt = Infinity; return; }
-  if (!isFinite(p.nextBlockDecayAt) || p.nextBlockDecayAt <= now) {
-    p.nextBlockDecayAt = now + SEC_PER_SEN;
+  if (p.block <= 0) { p.nextBlockDecayFrame = NEVER_FRAME; return; }
+  if (p.nextBlockDecayFrame === NEVER_FRAME || p.nextBlockDecayFrame <= now) {
+    p.nextBlockDecayFrame = now + FRAMES_PER_SEN;
   }
 }
 
@@ -220,18 +219,18 @@ function tickMaturing(p: PlayerState) {
 // Poison ticks once per 閃: deal (poison) HP damage IGNORING block,
 // decrement poison by 1.
 function tickPoison(p: PlayerState, now: number) {
-  while (p.poison > 0 && now >= p.nextPoisonDecayAt) {
+  while (p.poison > 0 && now >= p.nextPoisonDecayFrame) {
     p.hp = Math.max(0, p.hp - p.poison);
     p.poison -= 1;
-    p.nextPoisonDecayAt += SEC_PER_SEN * POISON_DECAY_SEN_PER_STEP;
+    p.nextPoisonDecayFrame += FRAMES_PER_SEN * POISON_DECAY_SEN_PER_STEP;
   }
-  if (p.poison <= 0) p.nextPoisonDecayAt = Infinity;
+  if (p.poison <= 0) p.nextPoisonDecayFrame = NEVER_FRAME;
 }
 
 function armPoisonDecay(p: PlayerState, now: number) {
-  if (p.poison <= 0) { p.nextPoisonDecayAt = Infinity; return; }
-  if (!isFinite(p.nextPoisonDecayAt) || p.nextPoisonDecayAt <= now) {
-    p.nextPoisonDecayAt = now + SEC_PER_SEN * POISON_DECAY_SEN_PER_STEP;
+  if (p.poison <= 0) { p.nextPoisonDecayFrame = NEVER_FRAME; return; }
+  if (p.nextPoisonDecayFrame === NEVER_FRAME || p.nextPoisonDecayFrame <= now) {
+    p.nextPoisonDecayFrame = now + FRAMES_PER_SEN * POISON_DECAY_SEN_PER_STEP;
   }
 }
 
@@ -245,9 +244,9 @@ function tickCasting(s: GameState, now: number, bus: Bus) {
       // Mid-cast slot fills for an active draw entry: each second of the
       // cast lets the next reserved slot pop a card from the deck.
       if (entry.kind === "draw") {
-        const elapsed = now - p.castStartedAt;
-        // Each slot fills 1 閃 after the previous: slot k at (k+1)*SEC_PER_SEN.
-        const targetFilled = Math.min(entry.drawSlots.length, Math.floor(elapsed / SEC_PER_SEN));
+        const elapsed = now - p.castStartedAtFrame;
+        // Each slot fills 1閃 after the previous: slot k at (k+1)閃.
+        const targetFilled = Math.min(entry.drawSlots.length, Math.floor(elapsed / FRAMES_PER_SEN));
         while (entry.drawFilledCount < targetFilled) {
           const slot = entry.drawSlots[entry.drawFilledCount];
           const c = drawOneFromDeck(p);
@@ -287,11 +286,11 @@ function tickCasting(s: GameState, now: number, bus: Bus) {
       }
 
       // Has this entry's duration fully elapsed? If not, stop draining.
-      if (now - p.castStartedAt < entry.duration) break;
+      if (now - p.castStartedAtFrame < entry.durationFrames) break;
       p.queue.shift();
-      // Advance by exactly the consumed duration so carry-over time rolls
-      // into the next entry.
-      p.castStartedAt += entry.duration;
+      // Advance by exactly the consumed duration so carry-over rolls into
+      // the next entry. Integer frames — no drift to accumulate.
+      p.castStartedAtFrame += entry.durationFrames;
 
       if (entry.kind === "card") {
         // 連閃: one more card resolved without a draw in between. The
@@ -301,8 +300,8 @@ function tickCasting(s: GameState, now: number, bus: Bus) {
         // Stamp it as resolved for the UI history.
         p.resolvedCards.push({
           cardId: entry.cardId,
-          duration: entry.duration,
-          resolvedAt: p.castStartedAt,
+          durationFrames: entry.durationFrames,
+          resolvedAtFrame: p.castStartedAtFrame,
         });
         if (p.resolvedCards.length > RESOLVED_HISTORY_MAX) {
           p.resolvedCards.splice(0, p.resolvedCards.length - RESOLVED_HISTORY_MAX);
@@ -365,12 +364,12 @@ function applyDrawAction(p: PlayerState, now: number): boolean {
     if (p.hand[i] === null && !reserved.has(i)) { slot = i; break; }
   }
   if (slot < 0) return false;
-  if (p.queue.length === 0) p.castStartedAt = Math.max(p.castStartedAt, now);
+  if (p.queue.length === 0) p.castStartedAtFrame = Math.max(p.castStartedAtFrame, now);
   p.queue.push({
     kind: "draw",
     drawSlots: [slot],
     drawFilledCount: 0,
-    duration: senToSec(DRAW_SEN_PER_CARD),
+    durationFrames: senToFrames(DRAW_SEN_PER_CARD),
   });
   return true;
 }
@@ -420,20 +419,18 @@ export function reservedSlotSet(p: PlayerState): Set<number> {
 // mechanic: visible commitment they can read and respond to.
 
 // ── Exact-timing helpers (integer frames; 1閃 = FRAMES_PER_SEN frames) ──
-// Card costs / prereqs are authored in WHOLE 閃, and the sim's true integer
-// clock is the FRAME. Durations and castStartedAt are all frame-aligned
-// seconds, so dividing by DT and rounding recovers exact integers — no FP
-// drift, no DT/2 tolerance hacks, and no ceil-to-閃 inflation (a head with
-// 5.0s left is 300 frames, NOT "2閃": ceil'ing made the gate accept heavies
-// that could never get their full prereq, so they confirmed instantly with
-// a short chain instead of exactly prereq閃 before their cast).
+// Card costs / prereqs are authored in WHOLE 閃 and every clock in the sim
+// is an integer frame count, so these are plain integer subtractions — no
+// unit conversion, no rounding, no tolerance hacks. (閃 単位に切り上げて
+// 比較していた頃は、5.0秒残り=300フレームを「2閃」と見なして、要件を
+// 満たせない重カードを受理してしまう不具合があった。)
 
 /** Remaining cast chain in FRAMES. Decrements by exactly 1 per frame. */
 export function queueRemainingFrames(p: PlayerState, now: number): number {
   if (p.queue.length === 0) return 0;
   let total = 0;
-  for (const q of p.queue) total += Math.round(q.duration / DT);
-  const elapsed = Math.max(0, Math.round((now - p.castStartedAt) / DT));
+  for (const q of p.queue) total += q.durationFrames;
+  const elapsed = Math.max(0, now - p.castStartedAtFrame);
   return Math.max(0, total - elapsed);
 }
 
@@ -499,12 +496,12 @@ function queueCardImmediate(p: PlayerState, slotIndex: number, now: number, bus:
   const def = getCardDef(cardId);
   if (!def) return false;
   if (def.cost >= 900) return false;
-  let duration = senToSec(def.cost);
-  if (p.corruption && def.cardType === CardType.Skill) duration = 0;
+  let durationFrames = senToFrames(def.cost);
+  if (p.corruption && def.cardType === CardType.Skill) durationFrames = 0;
   p.hand[slotIndex] = null;
   const wasEmpty = p.queue.length === 0;
-  if (wasEmpty) p.castStartedAt = Math.max(p.castStartedAt, now);
-  const entry: QueueEntry = { kind: "card", cardId, duration, blockApplied: false };
+  if (wasEmpty) p.castStartedAtFrame = Math.max(p.castStartedAtFrame, now);
+  const entry: QueueEntry = { kind: "card", cardId, durationFrames, blockApplied: false };
   p.queue.push(entry);
   // Block-on-cast-start: if THIS card is now the head (queue was empty
   // before push), apply its Block effects immediately.
@@ -565,7 +562,7 @@ function applyInput(s: GameState, idx: 0 | 1, flags: number, _bus: Bus) {
   void _bus;
   if (flags === 0) return;
   const p = s.players[idx];
-  const now = s.frame * DT;
+  const now = s.frame;
   let opened = false;
 
   // openedAt は「このプレイヤーが手の内を見せたか」であり、相手に自分の
@@ -605,7 +602,7 @@ function applyInput(s: GameState, idx: 0 | 1, flags: number, _bus: Bus) {
     break;
   }
 
-  if (opened && p.openedAt === null) p.openedAt = now;
+  if (opened && p.openedAtFrame === null) p.openedAtFrame = now;
 }
 
 // Auto-fire reservations. Walks the manual list head-first; fires when the
@@ -642,8 +639,8 @@ function tickReservation(s: GameState, now: number, bus: Bus) {
 // 重カードの積み不足を埋める詰め物としても使う (tickReservationOnce)。
 function pushDefaultAction(p: PlayerState, now: number) {
   if ((p.deck.length + p.discard.length) > 0 && applyDrawAction(p, now)) return;
-  if (p.queue.length === 0) p.castStartedAt = Math.max(p.castStartedAt, now);
-  p.queue.push({ kind: "rest", duration: SEC_PER_SEN });
+  if (p.queue.length === 0) p.castStartedAtFrame = Math.max(p.castStartedAtFrame, now);
+  p.queue.push({ kind: "rest", durationFrames: FRAMES_PER_SEN });
 }
 
 function tickReservationOnce(p: PlayerState, now: number, bus: Bus): boolean {
@@ -889,8 +886,8 @@ function drawCards(s: GameState, idx: 0 | 1, count: number, bus: Bus) {
 function attackDamage(base: number, attacker: PlayerState, defender: PlayerState | null): number {
   const renzanBonus = Math.min(RENZAN_MAX_BONUS, Math.max(0, attacker.renzan - 1));
   let dmg = base + attacker.strength + renzanBonus;
-  if (defender && defender.weakSecs > 0) dmg *= 2;
-  if (defender && defender.vulnerableSecs > 0) dmg += Math.floor(dmg / 2);
+  if (defender && defender.weakFrames > 0) dmg *= 2;
+  if (defender && defender.vulnerableFrames > 0) dmg += Math.floor(dmg / 2);
   return Math.max(0, dmg);
 }
 
@@ -906,12 +903,12 @@ function applyEffect(
   const o = s.players[opp(idx)];
   switch (effect.kind) {
     case "Damage":
-      bus.damage.push({ target: opp(idx), amount: attackDamage(effect.amount, p, o), source: idx, kind: DamageKind.Attack, pierce: effect.pierceBlock ?? 0 });
+      bus.damage.push({ target: opp(idx), amount: attackDamage(effect.amount, p, o), source: idx, kind: DamageKind.Attack, piercePct: effect.pierceBlockPct ?? 0 });
       break;
     case "MultiHit": {
       const each = attackDamage(effect.damage, p, o);
       for (let i = 0; i < effect.hits; i++) {
-        bus.damage.push({ target: opp(idx), amount: each, source: idx, kind: DamageKind.Attack, pierce: effect.pierceBlock ?? 0 });
+        bus.damage.push({ target: opp(idx), amount: each, source: idx, kind: DamageKind.Attack, piercePct: effect.pierceBlockPct ?? 0 });
       }
       break;
     }
@@ -938,13 +935,13 @@ function applyEffect(
       bus.strength.push({ target: idx, amount: effect.amount });
       break;
     case "Vulnerable":
-      bus.vuln.push({ target: opp(idx), duration: effect.duration });
+      bus.vuln.push({ target: opp(idx), frames: senToFrames(effect.sen) });
       break;
     case "SelfVulnerable":
-      bus.vuln.push({ target: idx, duration: effect.duration });
+      bus.vuln.push({ target: idx, frames: senToFrames(effect.sen) });
       break;
     case "Weak":
-      bus.weak.push({ target: opp(idx), duration: effect.duration });
+      bus.weak.push({ target: opp(idx), frames: senToFrames(effect.sen) });
       break;
     case "BodySlam":
       bus.damage.push({ target: opp(idx), amount: attackDamage(p.block, p, o), source: idx, kind: DamageKind.Attack });
@@ -963,7 +960,7 @@ function applyEffect(
       bus.strength.push({ target: idx, amount: p.strength });
       break;
     case "Rage":
-      p.rage = { blockPerAttack: effect.blockPerAttack, remaining: 10 };
+      p.rage = { blockPerAttack: effect.blockPerAttack, remainingFrames: senToFrames(effect.sen) };
       break;
     case "Metallicize":
       p.metallicize = { blockPerSen: effect.blockPerSen };
@@ -1065,7 +1062,7 @@ function processCardPlayed(s: GameState, bus: Bus) {
       }
       if (def.cardType === CardType.Attack) {
         const p = s.players[ev.player];
-        if (p.rage && p.rage.remaining > 0) {
+        if (p.rage && p.rage.remainingFrames > 0) {
           bus.block.push({ target: ev.player, amount: p.rage.blockPerAttack });
         }
       }
@@ -1083,7 +1080,7 @@ function processCardPlayed(s: GameState, bus: Bus) {
 }
 
 function processBlockGains(s: GameState, bus: Bus) {
-  const now = s.frame * DT;
+  const now = s.frame;
   while (bus.block.length > 0) {
     const m = bus.block.shift()!;
     const p = s.players[m.target];
@@ -1106,17 +1103,16 @@ function processBlockGains(s: GameState, bus: Bus) {
 }
 
 function processDamage(s: GameState, bus: Bus) {
-  const now = s.frame * DT;
+  const now = s.frame;
   while (bus.damage.length > 0) {
     const m = bus.damage.shift()!;
     const target = s.players[m.target];
     const total = Math.max(0, m.amount);
-    const pierce = Math.max(0, Math.min(1, m.pierce ?? 0));
-    // 貫通は整数で分割する。pierce 0.5 の一撃 (鬼火・破城) は連閃や烈閃の
-    // 加算で合計が奇数になりうるので、素直に total*pierce とすると HP が
-    // 0.5 刻みになった。floor で貫通分を決め、残りを被ブロック分にすれば
-    // 合計は必ず保存され、盤面は整数のままになる。
-    const directHp = Math.floor(total * pierce);
+    // 貫通率は整数パーセント。50% の一撃 (鬼火・破城) は連閃や烈閃の加算で
+    // 合計が奇数になりうるので、貫通分を floor で決めて残りを被ブロック分に
+    // 回す。合計は必ず保存され、盤面に小数は現れない。
+    const piercePct = Math.max(0, Math.min(100, m.piercePct ?? 0));
+    const directHp = Math.floor(total * piercePct / 100);
     let blockable = total - directHp;
     const absorbed = Math.min(blockable, target.block);
     const beforeBlock = target.block;
@@ -1170,7 +1166,7 @@ function hasCounterEffect(e: CardEffect): boolean {
 }
 
 function processPoison(s: GameState, bus: Bus) {
-  const now = s.frame * DT;
+  const now = s.frame;
   while (bus.poison.length > 0) {
     const m = bus.poison.shift()!;
     const t = s.players[m.target];
@@ -1188,7 +1184,7 @@ function processHeal(s: GameState, bus: Bus) {
     // 「治療系のカードによってなくすことができる」.
     if (p.poison > 0 && m.amount > 0) {
       p.poison = Math.max(0, p.poison - m.amount);
-      if (p.poison <= 0) p.nextPoisonDecayAt = Infinity;
+      if (p.poison <= 0) p.nextPoisonDecayFrame = NEVER_FRAME;
     }
   }
 }
@@ -1200,11 +1196,11 @@ function processStatusBus(s: GameState, bus: Bus) {
   }
   while (bus.vuln.length > 0) {
     const m = bus.vuln.shift()!;
-    s.players[m.target].vulnerableSecs = Math.max(0, s.players[m.target].vulnerableSecs + m.duration);
+    s.players[m.target].vulnerableFrames = Math.max(0, s.players[m.target].vulnerableFrames + m.frames);
   }
   while (bus.weak.length > 0) {
     const m = bus.weak.shift()!;
-    s.players[m.target].weakSecs = Math.max(0, s.players[m.target].weakSecs + m.duration);
+    s.players[m.target].weakFrames = Math.max(0, s.players[m.target].weakFrames + m.frames);
   }
   while (bus.addStatus.length > 0) {
     const m = bus.addStatus.shift()!;
@@ -1221,16 +1217,16 @@ function processDraw(s: GameState, bus: Bus) {
 
 // ── The frame step. Mutates `s` in place. ──
 
-export function step(s: GameState, p0Input: number, p1Input: number, dt: number = DT): GameState {
+export function step(s: GameState, p0Input: number, p1Input: number): GameState {
   if (s.result !== 0) {
     s.frame++;
     return s;
   }
-  const now = s.frame * DT;
+  const now = s.frame;
   const bus = newBus();
 
   // 1. Time-based ticks.
-  for (const p of s.players) tickStatus(p, dt);
+  for (const p of s.players) tickStatus(p);
   tickPowers(s, bus);
   for (const p of s.players) tickBlockDecay(p, now);
   for (const p of s.players) tickPoison(p, now);

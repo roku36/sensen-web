@@ -26,8 +26,8 @@ import {
 } from "../../sim/input";
 import { canReserveCard, futureEmptyAtDrawPosition } from "../../sim/reducer";
 import {
-  DRAW_SEN_PER_CARD, DT, FRAMES_PER_SEN, MAX_HAND_SIZE, SEC_PER_SEN,
-  secToSen, SUDDEN_DEATH_RAMP_SEN, SUDDEN_DEATH_START_SEN,
+  DRAW_SEN_PER_CARD, FRAMES_PER_SEN, MAX_HAND_SIZE,
+  SUDDEN_DEATH_RAMP_SEN, SUDDEN_DEATH_START_SEN,
 } from "../../sim/rules";
 import { PlayerState } from "../../sim/state";
 
@@ -76,7 +76,7 @@ export function SimpleGameplay() {
   const me = game.players[localPlayer];
   const op = game.players[(localPlayer ^ 1) as 0 | 1];
   const opSide = (localPlayer ^ 1) as 0 | 1;
-  const now = game.frame * DT;
+  const now = game.frame; // フレーム — シムと同じ単位で扱う
 
   return (
     <div style={page}>
@@ -200,8 +200,8 @@ function PlayerInfoCard({
         {player.thorns > 0 && <span style={pill("#ff9f43")}>棘 {Math.round(player.thorns)}</span>}
         {player.poison > 0 && <span style={pill("#5fc870")}>毒 {player.poison}</span>}
         {player.strength !== 0 && <span style={pill("#ff6961")}>筋力 {player.strength > 0 ? "+" : ""}{player.strength}</span>}
-        {player.vulnerableSecs > 0 && <span style={pill("#ff8a00")}>脆弱 {player.vulnerableSecs.toFixed(1)}秒</span>}
-        {player.weakSecs > 0 && <span style={pill("#a899ff")}>弱体 {player.weakSecs.toFixed(1)}秒</span>}
+        {player.vulnerableFrames > 0 && <span style={pill("#ff8a00")}>脆弱 あと{Math.ceil(player.vulnerableFrames / FRAMES_PER_SEN)}閃</span>}
+        {player.weakFrames > 0 && <span style={pill("#a899ff")}>弱体 あと{Math.ceil(player.weakFrames / FRAMES_PER_SEN)}閃</span>}
         {player.metallicize && <span style={pill("#9bb")}>金属化 +{player.metallicize.blockPerSen}/閃</span>}
         {player.combust && <span style={pill("#ff5757")}>燃焼 {player.combust.enemyPerSen}/閃</span>}
         {player.demonForm && <span style={pill("#c050ff")}>悪魔の姿 +{player.demonForm.strengthPerSen}筋力/閃</span>}
@@ -238,11 +238,11 @@ function slotPendingInfo(player: PlayerState, slotIndex: number, now: number):
   if (head.kind === "draw") {
     const pos = head.drawSlots.indexOf(slotIndex);
     if (pos >= 0 && pos >= head.drawFilledCount) {
-      const startedAt = player.castStartedAt;
-      return { startedAt, fillsAt: startedAt + (pos + 1) * SEC_PER_SEN };
+      const startedAt = player.castStartedAtFrame;
+      return { startedAt, fillsAt: startedAt + (pos + 1) * FRAMES_PER_SEN };
     }
   }
-  let tailStartAbs = player.castStartedAt + head.duration;
+  let tailStartAbs = player.castStartedAtFrame + head.durationFrames;
   for (let i = 1; i < player.queue.length; i++) {
     const ent = player.queue[i];
     if (ent.kind === "draw") {
@@ -250,11 +250,11 @@ function slotPendingInfo(player: PlayerState, slotIndex: number, now: number):
       if (pos >= 0) {
         return {
           startedAt: tailStartAbs,
-          fillsAt: tailStartAbs + (pos + 1) * SEC_PER_SEN,
+          fillsAt: tailStartAbs + (pos + 1) * FRAMES_PER_SEN,
         };
       }
     }
-    tailStartAbs += ent.duration;
+    tailStartAbs += ent.durationFrames;
   }
   void now;
   return null;
@@ -329,10 +329,10 @@ function SelfHand({ player, now }: { player: PlayerState; now: number }) {
 }
 
 function PendingSlot({ info, now }: { info: { startedAt: number; fillsAt: number }; now: number }) {
-  const total = Math.max(0.001, info.fillsAt - info.startedAt);
+  const total = Math.max(1, info.fillsAt - info.startedAt);
   const elapsed = Math.max(0, now - info.startedAt);
   const fillPct = Math.max(0, Math.min(1, elapsed / total));
-  const remainingSen = Math.max(0, secToSen(info.fillsAt - now));
+  const remainingSen = Math.max(0, (info.fillsAt - now) / FRAMES_PER_SEN);
   return (
     <div style={pendingSlotFront}>
       <div style={{
@@ -350,10 +350,10 @@ function PendingSlot({ info, now }: { info: { startedAt: number; fillsAt: number
 }
 
 function PendingBack({ info, now }: { info: { startedAt: number; fillsAt: number }; now: number }) {
-  const total = Math.max(0.001, info.fillsAt - info.startedAt);
+  const total = Math.max(1, info.fillsAt - info.startedAt);
   const elapsed = Math.max(0, now - info.startedAt);
   const fillPct = Math.max(0, Math.min(1, elapsed / total));
-  const remainingSen = Math.max(0, secToSen(info.fillsAt - now));
+  const remainingSen = Math.max(0, (info.fillsAt - now) / FRAMES_PER_SEN);
   return (
     <div style={pendingBack}>
       <div style={{
@@ -561,7 +561,7 @@ function DrawButton({ player }: { player: PlayerState }) {
 
 // Beginner-mode "次の閃" button. Only renders when the active session is
 // an OfflineSession with beginnerMode = true. Each click advances the sim
-// by exactly 1 閃 (= SEC_PER_SEN seconds = SEC_PER_SEN/DT frames).
+// by exactly 1 閃 (= FRAMES_PER_SEN frames).
 //
 // Source of truth is the SESSION's option, not the title-screen checkbox
 // in the store — puzzle mode creates beginner sessions directly without
@@ -572,10 +572,10 @@ function AdvanceButton() {
   const beginner = sess instanceof OfflineSession && !!sess.opts.beginnerMode;
   if (!beginner || getActiveMode() !== "offline") return null;
   const onClick = () => {
-    advanceFrames(Math.round(SEC_PER_SEN / DT));
+    advanceFrames(FRAMES_PER_SEN);
   };
   const onClickHalf = () => {
-    advanceFrames(Math.round((SEC_PER_SEN / 2) / DT));
+    advanceFrames(FRAMES_PER_SEN / 2);
   };
   return (
     <div style={{ display: "flex", gap: 8, justifyContent: "center", marginTop: 4 }}>
@@ -637,21 +637,21 @@ function Pile({ label, n, color, onClick }: { label: string; n: number; color: s
 
 function effectText(e: CardEffect): string {
   switch (e.kind) {
-    case "Damage": return `${e.amount}ダメージ${e.pierceBlock ? `(貫通${(e.pierceBlock * 100) | 0}%)` : ""}`;
-    case "MultiHit": return `${e.damage}ダメージ×${e.hits}${e.pierceBlock ? `(貫通${(e.pierceBlock * 100) | 0}%)` : ""}`;
+    case "Damage": return `${e.amount}ダメージ${e.pierceBlockPct ? `(貫通${e.pierceBlockPct}%)` : ""}`;
+    case "MultiHit": return `${e.damage}ダメージ×${e.hits}${e.pierceBlockPct ? `(貫通${e.pierceBlockPct}%)` : ""}`;
     case "Heal": return `${e.amount}回復`;
     case "Draw": return `${e.count}枚追加ドロー`;
     case "Block": return `ブロック+${e.amount}`;
     case "Thorns": return `棘+${e.amount}`;
     case "Strength": return `筋力+${e.amount}`;
-    case "Vulnerable": return `相手に脆弱${e.duration}秒`;
-    case "SelfVulnerable": return `自分に脆弱${e.duration}秒`;
-    case "Weak": return `相手に弱体${e.duration}秒`;
+    case "Vulnerable": return `相手に脆弱${e.sen}閃`;
+    case "SelfVulnerable": return `自分に脆弱${e.sen}閃`;
+    case "Weak": return `相手に弱体${e.sen}閃`;
     case "BodySlam": return `現在のブロックと同じダメージ`;
     case "Bloodletting": return e.amount < 0 ? `自分が${-e.amount}ダメージ` : `${e.amount}回復`;
     case "DoubleBlock": return `現在のブロックを2倍`;
     case "DoubleStrength": return `現在の筋力を2倍`;
-    case "Rage": return `攻撃ごとブロック+${e.blockPerAttack}を10秒`;
+    case "Rage": return `攻撃ごとブロック+${e.blockPerAttack}を${e.sen}閃`;
     case "Metallicize": return `毎閃ブロック+${e.blockPerSen}`;
     case "Combust": return `毎閃、自分${e.selfDmgPerSen}・相手${e.enemyDmgPerSen}ダメージ`;
     case "DemonForm": return `毎閃筋力+${e.strengthPerSen}`;
@@ -662,7 +662,7 @@ function effectText(e: CardEffect): string {
     case "FeelNoPain": return `除外時ブロック+${e.block}`;
     case "FireBreathing": return `状態カード引き時${e.damage}ダメージ`;
     case "Rupture": return `自傷時筋力+${e.strength}`;
-    case "Corruption": return `スキルが0秒キャスト・除外`;
+    case "Corruption": return `スキルが即時キャスト・除外`;
     case "Brutality": return `毎閃、自分${e.selfDmgPerSen}ダメージ・${e.draw}枚ドロー`;
     case "Exhaust": return `効果なし(除外)`;
     case "AddStatus": return `状態カードを追加`;

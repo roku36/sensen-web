@@ -33,7 +33,7 @@ import { CardEffect, getCardDef } from "../sim/cards";
 import { isSurgeSen } from "../sim/events";
 import { cardFlag, INPUT_DRAW, INPUT_RESET_RESERVATIONS } from "../sim/input";
 import { canReserveCard, queueRemainingFrames, reservationSetupSen, step } from "../sim/reducer";
-import { DT, FRAMES_PER_SEN, RENZAN_MAX_BONUS, RETSU_SEN_BONUS, SEC_PER_SEN } from "../sim/rules";
+import { FRAMES_PER_SEN, RENZAN_MAX_BONUS, RETSU_SEN_BONUS } from "../sim/rules";
 import { GameState, PlayerState, snapshot } from "../sim/state";
 
 export type Policy = (state: GameState, side: 0 | 1) => number;
@@ -117,8 +117,8 @@ const slotDef = (p: PlayerState, i: number) => {
 function simDamage(base: number, p: PlayerState, o: PlayerState): number {
   const renzanBonus = Math.min(RENZAN_MAX_BONUS, Math.max(0, p.renzan - 1));
   let dmg = base + p.strength + renzanBonus;
-  if (o.weakSecs > 0) dmg *= 2;
-  if (o.vulnerableSecs > 0) dmg += Math.floor(dmg / 2); // 脆弱: 整数+50%
+  if (o.weakFrames > 0) dmg *= 2;
+  if (o.vulnerableFrames > 0) dmg += Math.floor(dmg / 2); // 脆弱: 整数+50%
   return Math.max(0, dmg);
 }
 
@@ -145,8 +145,8 @@ function utilityOf(e: CardEffect): number {
   switch (e.kind) {
     case "Draw": return 2 * e.count;
     case "Strength": return 4 * e.amount;
-    case "Vulnerable": return 3 * e.duration;
-    case "Weak": return 2 * e.duration;
+    case "Vulnerable": return 3 * e.sen;
+    case "Weak": return 2 * e.sen;
     case "Poison": return 1.2 * e.amount;
     case "Heal": return 0.5 * e.amount;
     case "Thorns": return 0.5 * e.amount;
@@ -158,13 +158,14 @@ function utilityOf(e: CardEffect): number {
 // ── threat model (Lv3+): the opponent's PUBLIC queue tells us exactly
 //    when their attacks land. Reservations are local — not read. ──
 
+/** t は「今から何フレーム後に着弾するか」 (整数)。 */
 interface Threat { t: number; dmg: number }
 
 function incomingAttacks(o: PlayerState, me: PlayerState, now: number): Threat[] {
   const out: Threat[] = [];
-  let end = o.castStartedAt;
+  let end = o.castStartedAtFrame;
   for (const q of o.queue) {
-    end += q.duration;
+    end += q.durationFrames;
     if (q.kind !== "card") continue;
     const def = getCardDef(q.cardId);
     if (!def) continue;
@@ -185,7 +186,7 @@ export const lv1Random: PolicyFactory = (seed = 1) => {
   return (state, side) => {
     const p = state.players[side];
     if (committedCount(p) >= 2) return 0;
-    const opts = playableIndices(p, state.frame * DT);
+    const opts = playableIndices(p, state.frame);
     if (shouldDraw(p, opts.length)) return INPUT_DRAW;
     if (opts.length === 0) return 0;
     return cardFlag(opts[Math.floor(r() * opts.length)]) ?? 0;
@@ -199,7 +200,7 @@ export const lv2Tempo: PolicyFactory = (seed = 1) => {
   return (state, side) => {
     const p = state.players[side], o = state.players[(side ^ 1) as 0 | 1];
     if (committedCount(p) >= 2) return 0;
-    const opts = playableIndices(p, state.frame * DT);
+    const opts = playableIndices(p, state.frame);
     if (shouldDraw(p, opts.length)) return INPUT_DRAW;
     if (opts.length === 0) return 0;
     let bestI = opts[0], bestS = -Infinity;
@@ -231,7 +232,7 @@ export const lv3Tactical: (seed?: number, holdMaturing?: boolean) => Policy = (s
     // the setup is already in place and no threat is incoming.
     const committed = committedCount(p);
     if (committed >= 3) return 0;
-    const now = state.frame * DT;
+    const now = state.frame;
     const opts = playableIndices(p, now);
 
     // ① Lethal: if a single card finishes them through block, take it.
@@ -247,11 +248,11 @@ export const lv3Tactical: (seed?: number, holdMaturing?: boolean) => Policy = (s
     // through my block AFTER decay (block loses 1/閃)? Only worry about
     // hits inside a ~3閃 planning window past my own chain.
     const threats = incomingAttacks(o, p, now);
-    const applySec = queueRemainingFrames(p, now) * DT; // when my next card's block goes up
+    const applyAt = queueRemainingFrames(p, now); // 自分の次のブロックが立つまでのフレーム数
     let unblocked = 0;
     for (const th of threats) {
-      if (th.t > applySec + 3 * SEC_PER_SEN) continue;
-      const myBlockThen = Math.max(0, p.block - Math.floor(th.t / SEC_PER_SEN));
+      if (th.t > applyAt + 3 * FRAMES_PER_SEN) continue;
+      const myBlockThen = Math.max(0, p.block - Math.floor(th.t / FRAMES_PER_SEN));
       unblocked += Math.max(0, th.dmg - myBlockThen);
     }
     if (unblocked > 0) {
@@ -264,8 +265,8 @@ export const lv3Tactical: (seed?: number, holdMaturing?: boolean) => Policy = (s
         if (b <= 0) continue;
         let v = 0;
         for (const th of threats) {
-          if (th.t < applySec) continue; // lands before my block is up
-          const decayed = Math.max(0, b - Math.floor((th.t - applySec) / SEC_PER_SEN));
+          if (th.t < applyAt) continue; // lands before my block is up
+          const decayed = Math.max(0, b - Math.floor((th.t - applyAt) / FRAMES_PER_SEN));
           v += Math.min(th.dmg, decayed);
         }
         if (v > bv) { bv = v; bi = i; }
@@ -371,8 +372,8 @@ export const lv3Tactical: (seed?: number, holdMaturing?: boolean) => Policy = (s
 // 8閃 horizon: long enough for a heavy play (2閃 setup + 2-3閃 cast) to
 // actually RESOLVE inside the evaluation window — at 5閃 the planner kept
 // paying for setups whose payoff it never saw.
-const ROLLOUT_FRAMES = 8 * SEC_PER_SEN * 60;
-const THINK_INTERVAL = 90;                   // re-plan at most every 1.5s
+const ROLLOUT_FRAMES = 8 * FRAMES_PER_SEN;
+const THINK_INTERVAL = FRAMES_PER_SEN / 2;   // 半閃ごとに再計画
 // A branch must beat the Lv3 baseline by this margin (≈HP) to override
 // it — the eval is an approximation, and deviating on noise-level
 // differences traded confirmed-good moves for speculative ones.
@@ -407,7 +408,7 @@ export const lv4Planner: PolicyFactory = (seed = 1) => {
     const baseline = brain(state, side);
     if (state.frame < nextThink && baseline === 0) return 0;
     nextThink = state.frame + THINK_INTERVAL;
-    const now = state.frame * DT;
+    const now = state.frame;
 
     // Branch candidates: baseline first (ties keep it), then the biggest
     // block, the biggest heavy, draw, and wait — only ones the sim gate

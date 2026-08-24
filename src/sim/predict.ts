@@ -17,11 +17,12 @@
 // instead of being snapped to an artificial grid.
 
 import { step } from "./reducer";
-import { DT } from "./rules";
+import { FRAMES_PER_SEN } from "./rules";
 import { snapshot, GameState } from "./state";
 
+// 予測が返す時刻もすべて整数フレーム。秒への変換は描画側の仕事。
 export interface BlockSample {
-  /** Sim seconds RELATIVE to `from.frame * DT` (i.e., 0 = now). */
+  /** スナップショット時点からの相対フレーム数 (0 = 予測開始時)。 */
   t: number;
   block: number;
 }
@@ -32,7 +33,7 @@ export interface PoisonSample {
 }
 
 export interface PierceEvent {
-  /** Sim seconds RELATIVE to now (>= 0). */
+  /** スナップショット時点からの相対フレーム数 (>= 0)。 */
   t: number;
   /** HP lost on this frame (after block absorbed what it could). */
   hpLost: number;
@@ -40,14 +41,12 @@ export interface PierceEvent {
 
 export interface PredictResult {
   /**
-   * Absolute sim seconds of the snapshot this prediction was computed from.
-   * Sample `t`s are relative to THIS time, not to "now". The sim is
-   * deterministic and autonomous (zero inputs), so a trajectory computed at
-   * baseSec stays valid until the underlying state actually changes — the
-   * UI converts with `rel = (baseSec + t) - now` each render instead of
-   * re-simulating every frame.
+   * 予測を計算したスナップショットの絶対フレーム。サンプルの `t` は「今」
+   * ではなくこのフレームからの相対値。シムは決定的かつ自律的 (無入力) な
+   * ので、baseFrame で計算した軌道は状態が実際に変わるまで有効 — UI は
+   * 毎フレーム再シミュレートせず `rel = (baseFrame + t) - now` で読み替える。
    */
-  baseSec: number;
+  baseFrame: number;
   p0Block: BlockSample[];
   p1Block: BlockSample[];
   p0Poison: PoisonSample[];
@@ -56,8 +55,8 @@ export interface PredictResult {
   p0Pierces: PierceEvent[];
   p1Pierces: PierceEvent[];
   /**
-   * Per-reservation CONFIRM times: p0ResFires[i] is the sim time (relative
-   * to baseSec) at which reservations[i] (index at snapshot time) leaves
+   * Per-reservation CONFIRM times: p0ResFires[i] is the relative FRAME
+   * (from baseFrame) at which reservations[i] (index at snapshot time) leaves
    * the list — fired into the queue or self-dropped. Reservations only
    * shrink head-first under zero inputs, so the k-th removal IS index k.
    * Used by the UI to mark when a ghost chip will lock in (確定).
@@ -69,7 +68,7 @@ export interface PredictResult {
 }
 
 /**
- * Snapshot `from` and run the reducer forward up to `horizonSec` seconds.
+ * Snapshot `from` and run the reducer forward `horizonSen` 閃.
  * Collects sparse block-change samples per player + HP-drop events (used
  * by the UI to draw "this attack landed and HURT" marks outside the block
  * band).
@@ -78,16 +77,15 @@ export interface PredictResult {
  * also dropped to 0 OR was already 0 on that frame; otherwise we attribute
  * to passive damage (poison, combust, brutality) and skip the pierce mark.
  */
-export function predictForward(from: GameState, horizonSec: number): PredictResult {
+export function predictForward(from: GameState, horizonSen: number): PredictResult {
   const s = snapshot(from);
   // オートパイロット廃止後、シムと予測の意味論は完全に一致する:
   // 無入力の未来 = プレイヤーの明示的なプランだけが進行する未来。
   const startFrame = s.frame;
-  const startSec = startFrame * DT;
-  const stopFrame = startFrame + Math.ceil(horizonSec / DT);
+  const stopFrame = startFrame + horizonSen * FRAMES_PER_SEN;
 
   const out: PredictResult = {
-    baseSec: startSec,
+    baseFrame: startFrame,
     p0Block: [{ t: 0, block: s.players[0].block }],
     p1Block: [{ t: 0, block: s.players[1].block }],
     p0Poison: [{ t: 0, poison: s.players[0].poison }],
@@ -116,11 +114,10 @@ export function predictForward(from: GameState, horizonSec: number): PredictResu
     step(s, 0, 0);
     if (wasPlaying && s.result !== 0) out.endsAtFrame = s.frame;
     // Event-precise sampling: emit a sample only when the value changed.
-    // sample.t = (s.frame * DT - startSec) is the RELATIVE time from the
-    // snapshot. As the caller re-runs predict each frame with a fresh
-    // snapshot, these relative times shift smoothly with `now`, so the
-    // polygon scrolls left in lockstep with the queue chips.
-    const t = s.frame * DT - startSec;
+    // t はスナップショットからの相対フレーム。呼び出し側が毎フレーム新しい
+    // スナップショットで再計算するので、この相対値が `now` に合わせて滑らかに
+    // ずれ、ポリゴンがキューのチップと同期して左へ流れる。
+    const t = s.frame - startFrame;
     // Reservation confirms: each head-removal this frame fires at `t`.
     for (let k = s.players[0].reservations.length; k < beforeRes0; k++) out.p0ResFires.push(t);
     for (let k = s.players[1].reservations.length; k < beforeRes1; k++) out.p1ResFires.push(t);
@@ -145,7 +142,7 @@ export function predictForward(from: GameState, horizonSec: number): PredictResu
     }
   }
   // Horizon cap so the UI can extend a flat tail to the right edge.
-  const finalT = (s.frame - startFrame) * DT;
+  const finalT = s.frame - startFrame;
   if (out.p0Block[out.p0Block.length - 1].t < finalT) out.p0Block.push({ t: finalT, block: last0 });
   if (out.p1Block[out.p1Block.length - 1].t < finalT) out.p1Block.push({ t: finalT, block: last1 });
   if (out.p0Poison[out.p0Poison.length - 1].t < finalT) out.p0Poison.push({ t: finalT, poison: lastPo0 });
