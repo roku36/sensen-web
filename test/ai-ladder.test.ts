@@ -54,20 +54,26 @@ const SEEDS = [1n, 2n, 3n, 4n, 5n];
 const SEEDS_BIG = Array.from({ length: 15 }, (_, i) => BigInt(i + 1));
 
 describe("AI ladder strength ordering", () => {
-  // TODO(#7): 1枚ドロー経済への移行で lv2/lv3 のヒューリスティクスが
-  // 旧経済向けのまま — 再調整までこの2段の序列検証は skip (隠さず明示)。
-  // lv4 の2テストは新経済でも通っており、計画スキルの優位は健在。
+  // TODO(#7): lv2 (テンポ型) だけがまだ lv1 (ランダム) に勝てない。
+  // 両者の違いはカード選択だけ (それ以外の行動は完全に同一) なので、
+  // 「閃あたりの価値効率」という評価関数が無作為より悪いということ —
+  // 局面 (相手の着弾・自分の残HP) を一切見ないため防御を選べないのが主因。
+  // utilityOf が常在型パワーを一律 0 と評価する穴も同根。再調整まで skip。
   it.skip("Lv2 (テンポ型) beats Lv1 (ランダム) — #7 で再調整中", () => {
     const r = series("lv2", "lv1", SEEDS);
     console.log(`lv2 vs lv1: ${r.points}/${r.games}  [${r.detail}]`);
     expect(r.points).toBeGreaterThan(r.games / 2);
   });
 
-  it.skip("Lv3 (読み型) beats Lv2 (テンポ型) — #7 で再調整中", () => {
-    const r = series("lv3", "lv2", SEEDS);
+  // 予約デッドロックの修正で復活した段。旧コードでは重カードの積み不足で
+  // プレイヤーが永久凍結し、lv3 の方が重カードを多用するぶん自滅しやすく、
+  // 序列が逆転して 1/10 まで落ちていた (それが #7 起票の直接の原因)。
+  // 凍結がなくなった今は 23.5/30 で、読みの優位が正しく出る。
+  it("Lv3 (読み型) beats Lv2 (テンポ型)", () => {
+    const r = series("lv3", "lv2", SEEDS_BIG);
     console.log(`lv3 vs lv2: ${r.points}/${r.games}  [${r.detail}]`);
     expect(r.points).toBeGreaterThan(r.games / 2);
-  });
+  }, 240_000);
 
   it("Lv4 (先読み型) beats Lv3 (読み型)", () => {
     const r = series("lv4", "lv3", SEEDS_BIG);
