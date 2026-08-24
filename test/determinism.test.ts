@@ -2,10 +2,10 @@ import { describe, expect, it } from "vitest";
 import { CardId, createTestDeck } from "../src/sim/cards";
 import { checksum } from "../src/sim/checksum";
 import { initGame } from "../src/sim/init";
-import { cardFlag } from "../src/sim/input";
+import { cardFlag, INPUT_DRAW } from "../src/sim/input";
 import { step } from "../src/sim/reducer";
 import { matchSeedFromPeers } from "../src/sim/rng";
-import { INPUT_DELAY } from "../src/sim/rules";
+import { FRAMES_PER_SEN, INPUT_DELAY } from "../src/sim/rules";
 import { snapshot } from "../src/sim/state";
 import { RollbackEngine } from "../src/net/rollback";
 
@@ -334,6 +334,44 @@ describe("reducer determinism", () => {
     expect(s.players[0].reservations.length).toBe(0);
     expect(cardCount(s, 0)).toBe(cardsBefore);
     expect(s.players[0].hand.indexOf(CardId.Bludgeon)).toBe(b2); // still in hand
+  });
+
+  it("積みが要件を下回っても重カードは必ず発動する (予約は失敗しない)", () => {
+    // スケジューラの契約テスト。
+    //
+    // 重カードのゲートは「予約時点の積み」を見るが、その積みは後から縮む
+    // ことがある — 予約済みドローは手札に空きがある間は1閃だが、空きが
+    // 埋まると0閃の no-op になり、手札から消えたカードの予約も0閃になる。
+    // 旧実装はこの「積み < 要件」を "would only happen if the gate let
+    // through a non-fireable plan" として return false しており、到達すると
+    // 予約もキューも永久に凍結した (ランダム入力ファズで実際に発生 —
+    // test/invariants.test.ts)。
+    //
+    // ここでは到達経路を再現するのではなく、その状態を直接組んで
+    // 「必ず発動する」という契約だけを固定する。積み不足は既定行動で
+    // 埋められ、重カードは要件どおりの積みを持って発動しなければならない。
+    const s = initGame({
+      matchSeed: 2n, hpMax: 1000,
+      deckP0: Array(20).fill(CardId.Defend), deckP1: Array(20).fill(CardId.Defend),
+    });
+    const p = s.players[0];
+    step(s, 0, 0);
+    // 手札: slot0 = 安いカード, slot1 = 重撃 (積み2閃)。手札は満杯。
+    p.hand[0] = CardId.Defend;
+    p.hand[1] = CardId.Bludgeon;
+    for (let i = 2; i < 6; i++) p.hand[i] = CardId.Defend;
+    // 積み1閃 (防御) しかないのに、その後ろに積み2閃の重撃が並んだ状態。
+    p.reservations.length = 0;
+    p.reservations.push({ kind: "card", slotIndex: 0 });
+    p.reservations.push({ kind: "card", slotIndex: 1 });
+
+    let resolved = false;
+    for (let f = 0; f < 60 * FRAMES_PER_SEN && !resolved; f++) {
+      step(s, 0, 0);
+      resolved = p.resolvedCards.some((r) => r.cardId === CardId.Bludgeon);
+    }
+    expect(resolved, "重撃が永久に発動しない (予約デッドロック)").toBe(true);
+    expect(p.reservations.length).toBe(0);
   });
 
   it("連閃: consecutive card resolves build the chain; a draw resolve resets it", () => {

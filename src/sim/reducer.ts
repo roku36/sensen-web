@@ -88,51 +88,48 @@ function tickStatus(p: PlayerState, dt: number) {
   if (p.vulnerableSecs > 0) p.vulnerableSecs = Math.max(0, p.vulnerableSecs - dt);
   if (p.weakSecs > 0) p.weakSecs = Math.max(0, p.weakSecs - dt);
   if (p.rage && p.rage.remaining > 0) p.rage.remaining = Math.max(0, p.rage.remaining - dt);
-  if (p.demonForm) {
-    p.demonForm.accumulated += p.demonForm.strengthPerSec * dt;
-    if (p.demonForm.accumulated >= 1) {
-      const gain = Math.floor(p.demonForm.accumulated);
-      p.strength += gain;
-      p.demonForm.accumulated -= gain;
-    }
-  }
 }
 
-function tickPowers(s: GameState, dt: number, bus: Bus) {
+// 常在型パワーの閃ティック。毒・焦土と同じく閃境界でだけ、整数量が効く。
+//
+// 旧実装は「毎秒レート × dt」を毎フレーム適用していた (StS 移植の名残)。
+// これは整数状態に端数を足す設計で、二つの実害があった:
+//   - 金属化が完全に無効: block は整数に丸められるため +0.05/frame は
+//     毎フレーム捨てられ、30閃経ってもブロックは 0 のままだった
+//   - HP が小数化: 燃焼/残虐で hp が 193.50000000001 のようになり、
+//     UI 側が Math.round と「|Δ|<0.5 は無視」で誤魔化していた。丸め表示の
+//     ため「HP 0 と表示されているのに生存している」状態も作れた
+// 閃刻みの整数ティックはこの二つを同時に根絶し、盤面を読める数値
+// (「次の閃に7食らう」) にする。
+function tickPowers(s: GameState, bus: Bus) {
+  if (s.frame % FRAMES_PER_SEN !== 0) return;
   for (const idx of [0, 1] as const) {
     const p = s.players[idx];
-    if (p.metallicize && p.metallicize.blockPerSec > 0) {
-      bus.block.push({ target: idx, amount: p.metallicize.blockPerSec * dt });
+    if (p.demonForm && p.demonForm.strengthPerSen > 0) {
+      p.strength += p.demonForm.strengthPerSen;
+    }
+    if (p.metallicize && p.metallicize.blockPerSen > 0) {
+      bus.block.push({ target: idx, amount: p.metallicize.blockPerSen });
     }
     if (p.combust) {
-      if (p.combust.selfPerSec > 0) {
-        p.hp = Math.max(0, p.hp - p.combust.selfPerSec * dt);
+      if (p.combust.selfPerSen > 0) {
+        bus.damage.push({
+          target: idx, amount: p.combust.selfPerSen, source: idx, kind: DamageKind.Power,
+        });
       }
-      if (p.combust.enemyPerSec > 0) {
-        const o = s.players[opp(idx)];
-        let rem = p.combust.enemyPerSec * dt;
-        // Block is integer — only absorb whole units. Fractional remainder
-        // bleeds into HP without flickering the block bar.
-        const absorbedInt = Math.min(Math.floor(rem), o.block);
-        if (absorbedInt > 0) {
-          o.block -= absorbedInt;
-          recordBlockChange(o, s.frame * DT);
-        }
-        rem -= absorbedInt;
-        if (rem > 0) o.hp = Math.max(0, o.hp - rem);
+      if (p.combust.enemyPerSen > 0) {
+        bus.damage.push({
+          target: opp(idx), amount: p.combust.enemyPerSen, source: idx, kind: DamageKind.Power,
+        });
       }
     }
     if (p.brutality) {
-      if (p.brutality.selfPerSec > 0) {
-        p.hp = Math.max(0, p.hp - p.brutality.selfPerSec * dt);
+      if (p.brutality.selfPerSen > 0) {
+        bus.damage.push({
+          target: idx, amount: p.brutality.selfPerSen, source: idx, kind: DamageKind.Power,
+        });
       }
-      if (p.brutality.draw > 0 && p.brutality.interval > 0) {
-        p.brutality.timer += dt;
-        while (p.brutality.timer >= p.brutality.interval) {
-          p.brutality.timer -= p.brutality.interval;
-          drawCards(s, idx, p.brutality.draw, bus);
-        }
-      }
+      if (p.brutality.draw > 0) drawCards(s, idx, p.brutality.draw, bus);
     }
   }
 }
@@ -571,18 +568,26 @@ function applyInput(s: GameState, idx: 0 | 1, flags: number, _bus: Bus) {
   const now = s.frame * DT;
   let opened = false;
 
+  // openedAt は「このプレイヤーが手の内を見せたか」であり、相手に自分の
+  // キューを開示する条件そのもの。空振りの入力 (予約ゼロで SPACE、未予約
+  // カードの右クリック) では立ててはならない — 何も約束していないのに
+  // 情報だけ渡すことになる。以下、実際に予約が動いたときだけ opened。
+
   // Space key OR right-click on Draw → clear all manual reservations.
   if ((flags & INPUT_RESET_RESERVATIONS) !== 0 || (flags & INPUT_RESERVE_DRAW) !== 0) {
-    p.reservations.length = 0;
-    opened = true;
+    if (p.reservations.length > 0) {
+      p.reservations.length = 0;
+      opened = true;
+    }
   }
 
   // Right-click on a card → cascade-release (same as toggling an
   // already-reserved card: drop that entry AND everything after it).
   for (let i = 0; i < 6; i++) {
     if ((flags & RESERVE_FLAGS[i]) !== 0) {
+      const before = p.reservations.length;
       cascadeReleaseCard(p, i);
-      opened = true;
+      if (p.reservations.length !== before) opened = true;
     }
   }
 
@@ -622,16 +627,23 @@ function tickReservation(s: GameState, now: number, bus: Bus) {
     for (let safety = 0; safety < 8; safety++) {
       if (!tickReservationOnce(p, now, bus)) break;
     }
-    // 既定行動の自動補充 — このフレームで何も積まれなければ:
-    // 手札に空きがあれば「1枚ドロー」、満杯 (or 引く山がない) なら「休息」。
-    if (p.queue.length === 0 && p.reservations.length === 0) {
-      const drew = (p.deck.length + p.discard.length) > 0 && applyDrawAction(p, now);
-      if (!drew) {
-        p.castStartedAt = Math.max(p.castStartedAt, now);
-        p.queue.push({ kind: "rest", duration: SEC_PER_SEN });
-      }
-    }
+    // 不変条件の実装点: このフレームの終わりにキューが空であってはならない。
+    // 予約が残っていても埋める — 上の安全カウンタ (8回) で打ち切られた
+    // 場合、no-op ドローを大量に積むと予約が残ったままキューが空く 1閃が
+    // 生まれ、そこだけ行動開始点が入力フレームになってしまう。
+    // 条件を「予約も空なら」ではなく「キューが空なら」にすることで、
+    // 時間グリッドは予約の状態と無関係に保証される。
+    if (p.queue.length === 0) pushDefaultAction(p, now);
   }
+}
+
+// 既定行動を 1つキューに積む: 手札に空きがあれば「1枚ドロー」、満杯
+// (or 引く山がない) なら「休息」。時間グリッド不変条件の実装本体であり、
+// 重カードの積み不足を埋める詰め物としても使う (tickReservationOnce)。
+function pushDefaultAction(p: PlayerState, now: number) {
+  if ((p.deck.length + p.discard.length) > 0 && applyDrawAction(p, now)) return;
+  if (p.queue.length === 0) p.castStartedAt = Math.max(p.castStartedAt, now);
+  p.queue.push({ kind: "rest", duration: SEC_PER_SEN });
 }
 
 function tickReservationOnce(p: PlayerState, now: number, bus: Bus): boolean {
@@ -740,26 +752,33 @@ function tickReservationOnce(p: PlayerState, now: number, bus: Bus): boolean {
       }
       return false;
     }
-    if (setupSen === heavyPrereq) {
-      // Exact match — atomic fire everything up to and including the heavy.
-      for (let i = 0; i < heavyIdx; i++) {
-        const r = p.reservations[i];
-        if (r.kind === "card") {
-          queueCardImmediate(p, r.slotIndex, now, bus);
-        } else {
-          applyDrawAction(p, now);
-        }
+    // setupSen <= heavyPrereq — atomic fire everything up to and including
+    // the heavy, in order, this frame.
+    //
+    // setupSen < heavyPrereq means the accepted plan's setup SHRANK after
+    // the gate approved it: a reserved draw is worth 1閃 while a slot is
+    // free but becomes a 0閃 no-op once the hand fills, so a plan that
+    // passed the gate can lose 閃 before it fires. That used to dead-end
+    // here (queue empty + reservations frozen forever = both 「予約は
+    // 失敗しない」 and the time-grid invariant broken). The shortfall is
+    // paid with default actions instead: the heavy always gets its full
+    // prereq閃 telegraph, and the player spends exactly the time their
+    // plan already committed to.
+    for (let pad = setupSen; pad < heavyPrereq; pad++) pushDefaultAction(p, now);
+    for (let i = 0; i < heavyIdx; i++) {
+      const r = p.reservations[i];
+      if (r.kind === "card") {
+        queueCardImmediate(p, r.slotIndex, now, bus);
+      } else {
+        applyDrawAction(p, now);
       }
-      const heavyRes = p.reservations[heavyIdx];
-      if (heavyRes.kind === "card") {
-        queueCardImmediate(p, heavyRes.slotIndex, now, bus);
-      }
-      p.reservations.splice(0, heavyIdx + 1);
-      return true;
     }
-    // setupSen < heavyPrereq: stuck (would only happen if the gate let
-    // through a non-fireable plan). Bail out so we don't loop.
-    return false;
+    const heavyRes = p.reservations[heavyIdx];
+    if (heavyRes.kind === "card") {
+      queueCardImmediate(p, heavyRes.slotIndex, now, bus);
+    }
+    p.reservations.splice(0, heavyIdx + 1);
+    return true;
   }
   // head.kind === "draw"
   if (p.queue.length !== 0) return false;
@@ -769,21 +788,6 @@ function tickReservationOnce(p: PlayerState, now: number, bus: Bus): boolean {
   }
   // Couldn't draw (no empty slots) — drop and try the next reservation.
   p.reservations.shift();
-  return true;
-}
-
-// Lose condition: hand is full of UNPLAYABLE cards (no empties, no slot
-// holds a card that could ever be played given current state). When this
-// happens we forfeit the match for that player.
-function isStuck(p: PlayerState): boolean {
-  if (p.queue.length > 0) return false; // queue still resolving
-  for (let i = 0; i < p.hand.length; i++) {
-    const c = p.hand[i];
-    if (c === null) return false; // empty slot → can Draw
-    const def = getCardDef(c);
-    if (!def) continue;
-    if (def.cost < 900) return false; // a playable card exists
-  }
   return true;
 }
 
@@ -955,13 +959,13 @@ function applyEffect(
       p.rage = { blockPerAttack: effect.blockPerAttack, remaining: 10 };
       break;
     case "Metallicize":
-      p.metallicize = { blockPerSec: effect.blockPerSecond };
+      p.metallicize = { blockPerSen: effect.blockPerSen };
       break;
     case "Combust":
-      p.combust = { selfPerSec: effect.selfDmgPerSec, enemyPerSec: effect.enemyDmgPerSec };
+      p.combust = { selfPerSen: effect.selfDmgPerSen, enemyPerSen: effect.enemyDmgPerSen };
       break;
     case "DemonForm":
-      p.demonForm = { strengthPerSec: effect.strengthPerSecond, accumulated: 0 };
+      p.demonForm = { strengthPerSen: effect.strengthPerSen };
       break;
     case "Barricade":
       p.barricade = true;
@@ -988,7 +992,7 @@ function applyEffect(
       p.corruption = true;
       break;
     case "Brutality":
-      p.brutality = { selfPerSec: effect.selfDmgPerSec, draw: effect.draw, interval: effect.drawInterval, timer: 0 };
+      p.brutality = { selfPerSen: effect.selfDmgPerSen, draw: effect.draw };
       break;
     case "Exhaust":
       // Card vanishes (handled by disposition logic in tickCasting).
@@ -1101,11 +1105,15 @@ function processDamage(s: GameState, bus: Bus) {
     const target = s.players[m.target];
     const total = Math.max(0, m.amount);
     const pierce = Math.max(0, Math.min(1, m.pierce ?? 0));
-    const directHp = total * pierce;
-    let blockable = total * (1 - pierce);
+    // 貫通は整数で分割する。pierce 0.5 の一撃 (鬼火・破城) は連閃や烈閃の
+    // 加算で合計が奇数になりうるので、素直に total*pierce とすると HP が
+    // 0.5 刻みになった。floor で貫通分を決め、残りを被ブロック分にすれば
+    // 合計は必ず保存され、盤面は整数のままになる。
+    const directHp = Math.floor(total * pierce);
+    let blockable = total - directHp;
     const absorbed = Math.min(blockable, target.block);
     const beforeBlock = target.block;
-    target.block = Math.max(0, Math.round(target.block - absorbed));
+    target.block = Math.max(0, target.block - absorbed);
     if (target.block !== beforeBlock) recordBlockChange(target, now);
     blockable -= absorbed;
     const remaining = blockable + directHp;
@@ -1216,7 +1224,7 @@ export function step(s: GameState, p0Input: number, p1Input: number, dt: number 
 
   // 1. Time-based ticks.
   for (const p of s.players) tickStatus(p, dt);
-  tickPowers(s, dt, bus);
+  tickPowers(s, bus);
   for (const p of s.players) tickBlockDecay(p, now);
   for (const p of s.players) tickPoison(p, now);
   for (const p of s.players) tickMaturing(p);
@@ -1268,13 +1276,13 @@ export function step(s: GameState, p0Input: number, p1Input: number, dt: number 
   for (const p of s.players) armBlockDecay(p, now);
   for (const p of s.players) armPoisonDecay(p, now);
 
-  // 6. Game over? HP zero OR hand stuck with no playable card and no empties.
-  const p0Stuck = isStuck(s.players[0]);
-  const p1Stuck = isStuck(s.players[1]);
-  if (p0Stuck && p1Stuck) s.result = 3;
-  else if (p0Stuck) s.result = 2;
-  else if (p1Stuck) s.result = 1;
-  else if (s.players[0].hp <= 0 && s.players[1].hp <= 0) s.result = 3;
+  // 6. Game over? HP zero — 同時到達は引き分け (完全対称)。
+  //
+  // 旧「手詰まり負け」(playable card も空き枠もない) は削除した。キューが
+  // 決して空にならなくなった時点で判定条件 (queue.length === 0) に到達
+  // 不能となり、実際には一度も発火しない死んだルールだったため。手札が
+  // 使えない札で埋まったプレイヤーは休息を積み続け、焦土で決着する。
+  if (s.players[0].hp <= 0 && s.players[1].hp <= 0) s.result = 3;
   else if (s.players[0].hp <= 0) s.result = 2;
   else if (s.players[1].hp <= 0) s.result = 1;
 

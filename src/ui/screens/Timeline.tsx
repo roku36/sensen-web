@@ -74,14 +74,14 @@ function blockUnitHeight(b: number): number {
 // per 閃, not 60×/sec, so keying the prediction on this string instead of
 // `game.frame` removes a full 30s re-simulation from every render frame.
 //
-// Continuously-decaying values (vulnerableSecs, weakSecs, rage.remaining,
-// demonForm.accumulated) are deliberately EXCLUDED: their decay is itself
-// part of the predicted trajectory and never invalidates it. Including
-// them would force a re-simulation every frame and defeat the cache.
+// Continuously-decaying values (vulnerableSecs, weakSecs, rage.remaining)
+// are deliberately EXCLUDED: their decay is itself part of the predicted
+// trajectory and never invalidates it. Including them would force a
+// re-simulation every frame and defeat the cache.
 function predictSignature(g: GameState): string {
   let sig = "";
   for (const p of g.players) {
-    sig += Math.ceil(p.hp) + "," + p.block + "," + p.poison + "," + p.strength + ","
+    sig += p.hp + "," + p.block + "," + p.poison + "," + p.strength + ","
       + p.thorns + "," + p.renzan + "," + p.castStartedAt + ";";
     for (const q of p.queue) {
       sig += q.kind === "card" ? "c" + q.cardId + ":" + q.duration
@@ -93,10 +93,10 @@ function predictSignature(g: GameState): string {
     for (const r of p.reservations) sig += r.kind === "card" ? r.slotIndex + "|" : "D|";
     sig += ";";
     for (const c of p.hand) sig += (c === null ? "_" : c) + ".";
-    sig += ";" + (p.metallicize?.blockPerSec ?? "")
-      + "," + (p.combust ? p.combust.selfPerSec + ":" + p.combust.enemyPerSec : "")
+    sig += ";" + (p.metallicize?.blockPerSen ?? "")
+      + "," + (p.combust ? p.combust.selfPerSen + ":" + p.combust.enemyPerSen : "")
       + "," + (p.barricade ? 1 : 0)
-      + "," + (p.demonForm?.strengthPerSec ?? "")
+      + "," + (p.demonForm?.strengthPerSen ?? "")
       + "," + (p.brutality ? 1 : 0)
       + "," + (p.juggernaut?.damageOnBlock ?? "")
       + "," + (p.rage ? p.rage.blockPerAttack : "")

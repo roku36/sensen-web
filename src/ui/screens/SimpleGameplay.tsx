@@ -162,16 +162,17 @@ function PlayerInfoCard({
 }) {
   const hpPct = player.hp / player.hpMax;
   const handCount = countCards(player.hand);
-  // HP変化の数字ポップ。1閃未満の連続ドレイン (燃焼等) はノイズになる
-  // ので |Δ| ≥ 0.5 のみ。state は表示専用 — sim には一切触れない。
+  // HP変化の数字ポップ。HP は常に整数 (常在型パワーも閃刻みの整数ティック)
+  // なので、閾値や丸めで誤魔化す必要はない。state は表示専用 — sim には
+  // 一切触れない。
   const [pops, setPops] = useState<{ id: number; text: string; color: string }[]>([]);
   const prevHp = useRef(player.hp);
   useEffect(() => {
     const d = player.hp - prevHp.current;
     prevHp.current = player.hp;
-    if (Math.abs(d) < 0.5) return;
+    if (d === 0) return;
     const id = ++popSeq;
-    const text = d < 0 ? `${Math.round(d)}` : `+${Math.round(d)}`;
+    const text = d < 0 ? `${d}` : `+${d}`;
     setPops((p) => [...p.slice(-3), { id, text, color: d < 0 ? "#ff6b5e" : "#7fe3a4" }]);
     const t = setTimeout(() => setPops((p) => p.filter((x) => x.id !== id)), 900);
     return () => clearTimeout(t);
@@ -181,7 +182,7 @@ function PlayerInfoCard({
       <div style={infoCardTitle}>{title}</div>
       <Bar pct={hpPct}
            color={hpPct > 0.4 ? "#34c759" : hpPct > 0.2 ? "#ffcc00" : "#ff3b30"}
-           label={`HP ${Math.round(player.hp)} / ${player.hpMax}`} />
+           label={`HP ${player.hp} / ${player.hpMax}`} />
       {pops.map((p, i) => (
         <div key={p.id} className="dmg-pop" style={{
           position: "absolute", top: 28, right: 14 + i * 34,
@@ -201,9 +202,9 @@ function PlayerInfoCard({
         {player.strength !== 0 && <span style={pill("#ff6961")}>筋力 {player.strength > 0 ? "+" : ""}{player.strength}</span>}
         {player.vulnerableSecs > 0 && <span style={pill("#ff8a00")}>脆弱 {player.vulnerableSecs.toFixed(1)}秒</span>}
         {player.weakSecs > 0 && <span style={pill("#a899ff")}>弱体 {player.weakSecs.toFixed(1)}秒</span>}
-        {player.metallicize && <span style={pill("#9bb")}>金属化 +{player.metallicize.blockPerSec}/秒</span>}
-        {player.combust && <span style={pill("#ff5757")}>燃焼 {player.combust.enemyPerSec}/秒</span>}
-        {player.demonForm && <span style={pill("#c050ff")}>悪魔の姿 +{player.demonForm.strengthPerSec}筋力/秒</span>}
+        {player.metallicize && <span style={pill("#9bb")}>金属化 +{player.metallicize.blockPerSen}/閃</span>}
+        {player.combust && <span style={pill("#ff5757")}>燃焼 {player.combust.enemyPerSen}/閃</span>}
+        {player.demonForm && <span style={pill("#c050ff")}>悪魔の姿 +{player.demonForm.strengthPerSen}筋力/閃</span>}
         {player.barricade && <span style={pill("#80ffe0")}>防壁</span>}
         {player.corruption && <span style={pill("#aa6688")}>腐敗</span>}
       </div>
@@ -651,9 +652,9 @@ function effectText(e: CardEffect): string {
     case "DoubleBlock": return `現在のブロックを2倍`;
     case "DoubleStrength": return `現在の筋力を2倍`;
     case "Rage": return `攻撃ごとブロック+${e.blockPerAttack}を10秒`;
-    case "Metallicize": return `毎秒ブロック+${e.blockPerSecond}`;
-    case "Combust": return `毎秒、自分${e.selfDmgPerSec}・相手${e.enemyDmgPerSec}ダメージ`;
-    case "DemonForm": return `毎秒筋力+${e.strengthPerSecond}`;
+    case "Metallicize": return `毎閃ブロック+${e.blockPerSen}`;
+    case "Combust": return `毎閃、自分${e.selfDmgPerSen}・相手${e.enemyDmgPerSen}ダメージ`;
+    case "DemonForm": return `毎閃筋力+${e.strengthPerSen}`;
     case "Barricade": return `ブロックが減らなくなる`;
     case "Juggernaut": return `ブロック獲得時に${e.damageOnBlock}ダメージ`;
     case "DarkEmbrace": return `除外時${e.draw}枚ドロー`;
@@ -662,7 +663,7 @@ function effectText(e: CardEffect): string {
     case "FireBreathing": return `状態カード引き時${e.damage}ダメージ`;
     case "Rupture": return `自傷時筋力+${e.strength}`;
     case "Corruption": return `スキルが0秒キャスト・除外`;
-    case "Brutality": return `毎秒自分${e.selfDmgPerSec}+${e.drawInterval}秒ごと${e.draw}枚`;
+    case "Brutality": return `毎閃、自分${e.selfDmgPerSen}ダメージ・${e.draw}枚ドロー`;
     case "Exhaust": return `効果なし(除外)`;
     case "AddStatus": return `状態カードを追加`;
     case "Poison": return `相手に毒${e.amount}`;

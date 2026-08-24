@@ -102,18 +102,19 @@ export interface PlayerState {
   weakSecs: number;
   // Persistent powers
   rage: { blockPerAttack: number; remaining: number } | null;
-  metallicize: { blockPerSec: number } | null;
-  demonForm: { strengthPerSec: number; accumulated: number } | null;
+  // 常在型パワー: すべて閃境界ごとに整数量が効く (毒・焦土と同じ刻み)。
+  metallicize: { blockPerSen: number } | null;
+  demonForm: { strengthPerSen: number } | null;
   barricade: boolean;
   juggernaut: { damageOnBlock: number } | null;
-  combust: { selfPerSec: number; enemyPerSec: number } | null;
+  combust: { selfPerSen: number; enemyPerSen: number } | null;
   darkEmbrace: { drawOnExhaust: number } | null;
   evolve: { drawOnStatus: number } | null;
   feelNoPain: { blockOnExhaust: number } | null;
   fireBreathing: { damageOnStatusDraw: number } | null;
   rupture: { strengthOnSelfDmg: number } | null;
   corruption: boolean;
-  brutality: { selfPerSec: number; draw: number; interval: number; timer: number } | null;
+  brutality: { selfPerSen: number; draw: number } | null;
   // Cards
   deck: CardId[];
   // Fixed-size 6-slot board (MAX_HAND_SIZE). null = empty (or reserved by a

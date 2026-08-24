@@ -71,18 +71,18 @@ function hashPlayer(p: PlayerState) {
   if (p.openedAt !== null) f(p.openedAt);
   f(p.strength); f(p.vulnerableSecs); f(p.weakSecs);
   opt(p.rage, (r) => { f(r.blockPerAttack); f(r.remaining); });
-  opt(p.metallicize, (m) => { f(m.blockPerSec); });
-  opt(p.demonForm, (d) => { f(d.strengthPerSec); f(d.accumulated); });
+  opt(p.metallicize, (m) => { f(m.blockPerSen); });
+  opt(p.demonForm, (d) => { f(d.strengthPerSen); });
   byte(p.barricade ? 1 : 0);
   opt(p.juggernaut, (j) => { f(j.damageOnBlock); });
-  opt(p.combust, (c) => { f(c.selfPerSec); f(c.enemyPerSec); });
+  opt(p.combust, (c) => { f(c.selfPerSen); f(c.enemyPerSen); });
   opt(p.darkEmbrace, (d) => { u32(d.drawOnExhaust); });
   opt(p.evolve, (e) => { u32(e.drawOnStatus); });
   opt(p.feelNoPain, (f2) => { f(f2.blockOnExhaust); });
   opt(p.fireBreathing, (f2) => { f(f2.damageOnStatusDraw); });
   opt(p.rupture, (r) => { f(r.strengthOnSelfDmg); });
   byte(p.corruption ? 1 : 0);
-  opt(p.brutality, (b) => { f(b.selfPerSec); u32(b.draw); f(b.interval); f(b.timer); });
+  opt(p.brutality, (b) => { f(b.selfPerSen); u32(b.draw); });
   u32(p.deck.length); for (const c of p.deck) u32(c);
   // Hand is fixed length 6 with null = empty. Encode null as a sentinel.
   u32(p.hand.length);
