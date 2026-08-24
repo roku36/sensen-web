@@ -3,7 +3,7 @@ import { CardId, createTestDeck } from "../src/sim/cards";
 import { checksum } from "../src/sim/checksum";
 import { initGame } from "../src/sim/init";
 import { cardFlag, INPUT_DRAW } from "../src/sim/input";
-import { step } from "../src/sim/reducer";
+import { queueRemainingFrames, step } from "../src/sim/reducer";
 import { matchSeedFromPeers } from "../src/sim/rng";
 import { FRAMES_PER_SEN, INPUT_DELAY } from "../src/sim/rules";
 import { snapshot } from "../src/sim/state";
@@ -372,6 +372,42 @@ describe("reducer determinism", () => {
     }
     expect(resolved, "重撃が永久に発動しない (予約デッドロック)").toBe(true);
     expect(p.reservations.length).toBe(0);
+  });
+
+  it("重カードは予告なしでは撃てない — 積みが0でも要件ぶん埋めてから発動", () => {
+    // デッドロックの裏返しの穴。予約 [ドロー, 重撃(積み2閃)] で手札が満杯だと
+    // ドローは no-op として落とされ、重撃が積み0のまま頭に立つ。旧コードの
+    // 発動条件は「残り積み <= 要件」なので 0 <= 2閃 が素通りし、重撃が
+    // 予告ゼロで即発動していた。積み要件は相手が読んで対処するための予告
+    // そのものなので、要件を割ったまま撃たせてはならない。
+    const s = initGame({
+      matchSeed: 2n, hpMax: 1000,
+      deckP0: Array(20).fill(CardId.Defend), deckP1: Array(20).fill(CardId.Defend),
+    });
+    const p = s.players[0];
+    step(s, 0, 0);
+    for (let i = 0; i < 6; i++) p.hand[i] = CardId.Defend;
+    p.hand[1] = CardId.Bludgeon; // 積み2閃
+    p.reservations.length = 0;
+    p.reservations.push({ kind: "draw" });          // 手札満杯なので no-op
+    p.reservations.push({ kind: "card", slotIndex: 1 });
+
+    let aheadFrames = -1;
+    for (let f = 0; f < 40 * FRAMES_PER_SEN && aheadFrames < 0; f++) {
+      step(s, 0, 0);
+      const idx = p.queue.findIndex((q) => q.kind === "card" && q.cardId === CardId.Bludgeon);
+      if (idx < 0) continue;
+      // 重撃より前にあるキュー時間 = 相手に見えている予告の長さ
+      const total = queueRemainingFrames(p, s.frame * (1 / 60));
+      const selfAndAfter = p.queue.slice(idx)
+        .reduce((a, q) => a + Math.round(q.duration * 60), 0);
+      aheadFrames = total - selfAndAfter;
+    }
+    expect(aheadFrames).toBeGreaterThanOrEqual(0);
+    // 2閃 = 360フレーム。発動フレーム自身のぶん1フレームの誤差を許容。
+    expect(aheadFrames, "重撃が予告なしで発動した").toBeGreaterThanOrEqual(
+      2 * FRAMES_PER_SEN - 1,
+    );
   });
 
   it("連閃: consecutive card resolves build the chain; a draw resolve resets it", () => {

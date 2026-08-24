@@ -701,7 +701,14 @@ function tickReservationOnce(p: PlayerState, now: number, bus: Bus): boolean {
       // by exactly 1 per frame, so the == crossing always exists; <= also
       // catches any rollback-replay edge so an accepted reservation can
       // never strand.
-      if (queueRemainingFrames(p, now) <= prereqSen * FRAMES_PER_SEN) {
+      const needFrames = prereqSen * FRAMES_PER_SEN;
+      if (queueRemainingFrames(p, now) <= needFrames) {
+        // 積みが要件に満たない場合は既定行動で埋めてから発動する。
+        // 前置のドロー予約が no-op として落とされると、重カードが積み0で
+        // 頭に立ち、この <= が素通りして「予告なしの重撃」になっていた —
+        // 積み要件は相手が読んで対処するための予告そのものなので、要件を
+        // 割ったまま撃たせてはならない。(2) 側の積み不足と同じ扱い。
+        while (queueRemainingFrames(p, now) < needFrames) pushDefaultAction(p, now);
         if (queueCardImmediate(p, head.slotIndex, now, bus)) {
           p.reservations.shift();
           return true;
